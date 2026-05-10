@@ -19,7 +19,7 @@ config = {
 # 根路由（测试服务）
 @app.route('/')
 def index():
-    return "✅ 服务启动成功！终于搞定啦！"
+    return "✅ 服务启动成功！pgb终于搞定啦！"
 
 # 数据库查询接口
 @app.route('/api/query', methods=['GET'])
