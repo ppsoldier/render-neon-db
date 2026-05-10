@@ -6,7 +6,7 @@ import os
 app = Flask(__name__)
 CORS(app)
 
-# 数据库连接配置
+# 数据库连接
 def get_db_connection():
     conn = psycopg2.connect(
         host=os.environ.get('DB_HOST'),
@@ -18,115 +18,49 @@ def get_db_connection():
     )
     return conn
 
-# ===================== 接口列表 =====================
-
 # 1. 测试接口
 @app.route('/')
 def home():
     return "✅ 后端服务运行成功！"
 
-# 2. 测试数据库连接
-@app.route('/api/query')
-def test_db():
+# 2. 查询腾讯招聘岗位列表
+@app.route('/api/jobs', methods=['GET'])
+def get_jobs():
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute("SELECT version();")
-        version = cur.fetchone()
+        # 查询所有岗位数据
+        cur.execute("SELECT id, work_name, work_site, work_year, work_require FROM tenxun_zhaoping;")
+        jobs = cur.fetchall()
         cur.close()
         conn.close()
         return jsonify({
             "code": 200,
-            "msg": "数据库连接成功",
-            "data": version
+            "msg": "获取岗位列表成功",
+            "data": jobs
         })
     except Exception as e:
-        return jsonify({"code":500,"msg":"数据库错误","error":str(e)})
+        return jsonify({"code": 500, "msg": "获取失败", "error": str(e)})
 
-# 3. 创建表（只需调用一次）
-@app.route('/api/create_table')
-def create_table():
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                id SERIAL PRIMARY KEY,
-                name VARCHAR(50) NOT NULL,
-                age INT,
-                phone VARCHAR(20)
-            );
-        ''')
-        conn.commit()
-        cur.close()
-        conn.close()
-        return jsonify({"code":200,"msg":"表创建成功"})
-    except Exception as e:
-        return jsonify({"code":500,"msg":"创建失败","error":str(e)})
-
-# 4. 添加用户
-@app.route('/api/add', methods=['POST'])
-def add_user():
+# 3. 新增岗位（可选）
+@app.route('/api/jobs/add', methods=['POST'])
+def add_job():
     data = request.json
-    name = data.get('name')
-    age = data.get('age')
-    phone = data.get('phone')
+    work_name = data.get('work_name')
+    work_site = data.get('work_site')
+    work_year = data.get('work_year')
+    work_require = data.get('work_require')
 
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO users (name, age, phone) VALUES (%s, %s, %s)",
-        (name, age, phone)
+        "INSERT INTO tenxun_zhaoping (work_name, work_site, work_year, work_require) VALUES (%s, %s, %s, %s)",
+        (work_name, work_site, work_year, work_require)
     )
     conn.commit()
     cur.close()
     conn.close()
-    return jsonify({"code":200,"msg":"添加成功"})
-
-# 5. 查询所有用户
-@app.route('/api/list')
-def get_list():
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM users;")
-    users = cur.fetchall()
-    cur.close()
-    conn.close()
-    return jsonify({"code":200,"data":users})
-
-# 6. 修改用户
-@app.route('/api/update', methods=['POST'])
-def update_user():
-    data = request.json
-    id = data.get('id')
-    name = data.get('name')
-    age = data.get('age')
-    phone = data.get('phone')
-
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute(
-        "UPDATE users SET name=%s, age=%s, phone=%s WHERE id=%s",
-        (name, age, phone, id)
-    )
-    conn.commit()
-    cur.close()
-    conn.close()
-    return jsonify({"code":200,"msg":"修改成功"})
-
-# 7. 删除用户
-@app.route('/api/delete', methods=['POST'])
-def delete_user():
-    data = request.json
-    id = data.get('id')
-
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute("DELETE FROM users WHERE id=%s", (id,))
-    conn.commit()
-    cur.close()
-    conn.close()
-    return jsonify({"code":200,"msg":"删除成功"})
+    return jsonify({"code": 200, "msg": "岗位新增成功"})
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080)
