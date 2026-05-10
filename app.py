@@ -6,22 +6,24 @@ import os
 app = Flask(__name__)
 CORS(app)
 
-# 从 Render 环境变量读取，不要硬编码密码！
 config = {
     'host': os.environ.get('DB_HOST'),
     'user': os.environ.get('DB_USER'),
     'password': os.environ.get('DB_PASSWORD'),
     'database': os.environ.get('DB_NAME'),
     'port': 5432,
-    'sslmode': 'require'  # Neon 必须
+    'sslmode': 'require'
 }
+
+@app.route('/')
+def index():
+    return "✅ Railway + Flask 服务运行正常！"
 
 @app.route('/api/query', methods=['GET'])
 def query():
     try:
         conn = psycopg2.connect(**config)
         cur = conn.cursor()
-        # 先测试一条简单 SQL，能跑通再改你的表
         cur.execute("SELECT version();")
         data = cur.fetchall()
         cur.close()
