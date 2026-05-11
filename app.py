@@ -331,69 +331,38 @@ def student_delete():
     except Exception as e:
         return jsonify({"code": 500, "msg": f"删除失败: {str(e)}"}), 500
 
-# ==================== 教师管理模块 ====================
-@app.route("/api/teacher/list")
-def teacher_list():
-    """获取教师列表"""
+# ==================== 教师管理模块 - 添加详情接口 ====================
+
+@app.route("/api/teacher/detail/<int:teacher_id>", methods=["GET"])
+def teacher_detail(teacher_id):
+    """获取教师详情"""
     try:
         db = get_db()
         cur = db.cursor()
-        cur.execute("SELECT id, name, phone, subject, class_fee FROM teacher WHERE status='active' ORDER BY id")
-        data = cur.fetchall()
+        cur.execute("""
+            SELECT id, name, phone, subject, class_fee, status, hire_date 
+            FROM teacher WHERE id=%s
+        """, (teacher_id,))
+        data = cur.fetchone()
         cur.close()
         db.close()
-        result = [{"id": r[0], "name": r[1], "phone": r[2], "subject": r[3], 
-                   "class_fee": float(r[4]) if r[4] else 0} for r in data]
-        return jsonify({"code": 200, "data": result})
+        
+        if data:
+            return jsonify({
+                "code": 200,
+                "data": {
+                    "id": data[0],
+                    "name": data[1] or '',
+                    "phone": data[2] or '',
+                    "subject": data[3] or '',
+                    "class_fee": float(data[4]) if data[4] else 0,
+                    "status": data[5] or 'active',
+                    "hire_date": str(data[6]) if data[6] else None
+                }
+            })
+        return jsonify({"code": 404, "msg": "教师不存在"})
     except Exception as e:
         return jsonify({"code": 500, "msg": str(e)}), 500
-
-@app.route("/api/teacher/add", methods=["POST"])
-def teacher_add():
-    """添加教师"""
-    try:
-        d = request.json
-        db = get_db()
-        cur = db.cursor()
-        cur.execute("INSERT INTO teacher (name, phone, subject, class_fee) VALUES (%s, %s, %s, %s)",
-                    (d['name'], d.get('phone', ''), d.get('subject', ''), d.get('class_fee', 0)))
-        db.commit()
-        cur.close()
-        db.close()
-        return jsonify({"code": 200, "msg": "添加成功"})
-    except Exception as e:
-        return jsonify({"code": 500, "msg": f"添加失败: {str(e)}"}), 500
-
-@app.route("/api/teacher/update", methods=["POST"])
-def teacher_update():
-    """更新教师信息"""
-    try:
-        d = request.json
-        db = get_db()
-        cur = db.cursor()
-        cur.execute("UPDATE teacher SET name=%s, phone=%s, subject=%s, class_fee=%s WHERE id=%s",
-                    (d['name'], d.get('phone', ''), d.get('subject', ''), d.get('class_fee', 0), d['id']))
-        db.commit()
-        cur.close()
-        db.close()
-        return jsonify({"code": 200, "msg": "更新成功"})
-    except Exception as e:
-        return jsonify({"code": 500, "msg": f"更新失败: {str(e)}"}), 500
-
-@app.route("/api/teacher/delete", methods=["POST"])
-def teacher_delete():
-    """删除教师"""
-    try:
-        id = request.json.get('id')
-        db = get_db()
-        cur = db.cursor()
-        cur.execute("DELETE FROM teacher WHERE id=%s", (id,))
-        db.commit()
-        cur.close()
-        db.close()
-        return jsonify({"code": 200, "msg": "删除成功"})
-    except Exception as e:
-        return jsonify({"code": 500, "msg": f"删除失败: {str(e)}"}), 500
 
 # ==================== 课时管理模块 ====================
 @app.route("/api/course/list")
