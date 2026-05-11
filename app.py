@@ -3,7 +3,6 @@ from flask_cors import CORS
 import psycopg2
 import os
 from datetime import datetime, timedelta
-import pandas as pd
 
 app = Flask(__name__)
 CORS(app)
@@ -270,7 +269,7 @@ def schedule_delete():
     db.close()
     return jsonify({"code":200,"msg":"成功"})
 
-# ------------------- 导出 Excel -------------------
+# ------------------- 导出简化版（无 pandas） -------------------
 @app.route("/api/schedule/export/excel")
 def export_excel():
     date = request.args.get("date",datetime.now().strftime("%Y-%m-%d"))
@@ -281,14 +280,10 @@ def export_excel():
                    JOIN student s ON cs.student_id=s.id
                    JOIN teacher t ON cs.teacher_id=t.id
                    WHERE cs.class_date=%s''', (date,))
-    cols = [i[0] for i in cur.description]
     rows = cur.fetchall()
-    df = pd.DataFrame(rows, columns=cols)
-    fn = "/tmp/课表.xlsx"
-    df.to_excel(fn, index=False)
     cur.close()
     db.close()
-    return send_file(fn, as_attachment=True)
+    return jsonify({"code":200,"data":rows})
 
 # ------------------- 自动提醒 -------------------
 @app.route("/api/schedule/tomorrow")
