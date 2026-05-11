@@ -215,19 +215,51 @@ def user_list():
     except Exception as e:
         return jsonify({"code": 500, "msg": str(e)}), 500
 
-# ==================== 学生管理模块 ====================
-@app.route("/api/student/list")
+# ==================== 学生管理模块（完整版）====================
+
+@app.route("/api/student/list", methods=["GET"])
 def student_list():
     """获取学生列表"""
     try:
         db = get_db()
         cur = db.cursor()
-        cur.execute("SELECT id, name, phone, grade, school FROM student ORDER BY id")
+        cur.execute("SELECT id, name, phone, grade, school FROM student ORDER BY id DESC")
         data = cur.fetchall()
         cur.close()
         db.close()
-        result = [{"id": r[0], "name": r[1], "phone": r[2], "grade": r[3], "school": r[4]} for r in data]
+        result = [{"id": r[0], "name": r[1], "phone": r[2] or '', "grade": r[3] or '', "school": r[4] or ''} for r in data]
         return jsonify({"code": 200, "data": result})
+    except Exception as e:
+        return jsonify({"code": 500, "msg": str(e)}), 500
+
+@app.route("/api/student/detail/<int:student_id>", methods=["GET"])
+def student_detail(student_id):
+    """获取学生详情"""
+    try:
+        db = get_db()
+        cur = db.cursor()
+        cur.execute("""
+            SELECT id, name, phone, grade, school, parent_name, parent_phone 
+            FROM student WHERE id=%s
+        """, (student_id,))
+        data = cur.fetchone()
+        cur.close()
+        db.close()
+        
+        if data:
+            return jsonify({
+                "code": 200,
+                "data": {
+                    "id": data[0],
+                    "name": data[1] or '',
+                    "phone": data[2] or '',
+                    "grade": data[3] or '',
+                    "school": data[4] or '',
+                    "parent_name": data[5] or '',
+                    "parent_phone": data[6] or ''
+                }
+            })
+        return jsonify({"code": 404, "msg": "学生不存在"})
     except Exception as e:
         return jsonify({"code": 500, "msg": str(e)}), 500
 
@@ -238,8 +270,17 @@ def student_add():
         d = request.json
         db = get_db()
         cur = db.cursor()
-        cur.execute("INSERT INTO student (name, phone, grade, school) VALUES (%s, %s, %s, %s)",
-                    (d['name'], d.get('phone', ''), d.get('grade', ''), d.get('school', '')))
+        cur.execute("""
+            INSERT INTO student (name, phone, grade, school, parent_name, parent_phone) 
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """, (
+            d.get('name', ''), 
+            d.get('phone', ''), 
+            d.get('grade', ''), 
+            d.get('school', ''),
+            d.get('parent_name', ''),
+            d.get('parent_phone', '')
+        ))
         db.commit()
         cur.close()
         db.close()
@@ -254,8 +295,19 @@ def student_update():
         d = request.json
         db = get_db()
         cur = db.cursor()
-        cur.execute("UPDATE student SET name=%s, phone=%s, grade=%s, school=%s WHERE id=%s",
-                    (d['name'], d.get('phone', ''), d.get('grade', ''), d.get('school', ''), d['id']))
+        cur.execute("""
+            UPDATE student 
+            SET name=%s, phone=%s, grade=%s, school=%s, parent_name=%s, parent_phone=%s 
+            WHERE id=%s
+        """, (
+            d.get('name', ''),
+            d.get('phone', ''),
+            d.get('grade', ''),
+            d.get('school', ''),
+            d.get('parent_name', ''),
+            d.get('parent_phone', ''),
+            d.get('id')
+        ))
         db.commit()
         cur.close()
         db.close()
@@ -267,10 +319,11 @@ def student_update():
 def student_delete():
     """删除学生"""
     try:
-        id = request.json.get('id')
+        data = request.json
+        student_id = data.get('id')
         db = get_db()
         cur = db.cursor()
-        cur.execute("DELETE FROM student WHERE id=%s", (id,))
+        cur.execute("DELETE FROM student WHERE id=%s", (student_id,))
         db.commit()
         cur.close()
         db.close()
