@@ -17,15 +17,19 @@ DB_CONFIG = {
 }
 
 def get_db():
-    """获取数据库连接"""
+    """获取数据库连接 - 修复 SSL 参数"""
     try:
+        # pg8000 使用 ssl_context，不是 ssl
+        import ssl
+        ssl_context = ssl.create_default_context()
+        
         conn = pg8000.connect(
             host=DB_CONFIG['host'],
             user=DB_CONFIG['user'],
             password=DB_CONFIG['password'],
             database=DB_CONFIG['database'],
             port=DB_CONFIG['port'],
-            ssl=True  # Neon 需要 SSL
+            ssl_context=ssl_context  # 修复：使用 ssl_context 而不是 ssl
         )
         return conn
     except Exception as e:
@@ -56,7 +60,7 @@ def test_db():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 # ------------------- 初始化数据库表 -------------------
-@app.route("/api/init-db", methods=["POST"])
+@app.route("/api/init-db", methods=["GET", "POST"])
 def init_db():
     """初始化数据库表结构"""
     try:
@@ -133,7 +137,7 @@ def init_db():
             )
         """)
         
-        # 插入测试数据
+        # 插入测试数据 - 用户
         cur.execute("SELECT COUNT(*) FROM \"user\"")
         user_count = cur.fetchone()[0]
         if user_count == 0:
@@ -142,6 +146,7 @@ def init_db():
                 VALUES ('13800138000', '123456', '管理员', 'admin')
             """)
         
+        # 插入测试数据 - 教师
         cur.execute("SELECT COUNT(*) FROM teacher")
         teacher_count = cur.fetchone()[0]
         if teacher_count == 0:
@@ -150,6 +155,7 @@ def init_db():
                 VALUES ('李老师', '13700137000', '数学', 150)
             """)
         
+        # 插入测试数据 - 学生
         cur.execute("SELECT COUNT(*) FROM student")
         student_count = cur.fetchone()[0]
         if student_count == 0:
@@ -514,7 +520,7 @@ def schedule_tomorrow():
 
 @app.route("/api/schedule/export/excel")
 def export_excel():
-    """导出课表（简化版）"""
+    """导出课表"""
     return jsonify({"code": 200, "msg": "导出功能开发中", "data": []})
 
 # ==================== 仪表盘数据 ====================
