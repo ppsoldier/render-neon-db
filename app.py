@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 import psycopg2
 import os
@@ -16,6 +16,11 @@ def get_db():
         port=5432,
         sslmode="require"
     )
+
+# ------------------- 健康检查 -------------------
+@app.route("/")
+def index():
+    return "{\"status\":\"ok\"}"
 
 # ------------------- 登录 -------------------
 @app.route("/api/login", methods=["POST"])
@@ -193,13 +198,13 @@ def course_add():
     db.close()
     return jsonify({"code":200,"msg":"成功"})
 
-# ------------------- 排课日历 + 冲突 + 批量 -------------------
+# ------------------- 排课管理 -------------------
 @app.route("/api/schedule/calendar")
 def schedule_calendar():
     date = request.args.get('date')
     db = get_db()
     cur = db.cursor()
-    cur.execute('''SELECT cs.id,s.name,t.name,cs.subject,cs.class_time,cs.classroom,cs.teacher_id
+    cur.execute('''SELECT cs.id,s.name,t.name,cs.subject,cs.class_time,cs.classroom
                    FROM course_schedule cs
                    JOIN student s ON cs.student_id=s.id
                    JOIN teacher t ON cs.teacher_id=t.id
@@ -269,23 +274,12 @@ def schedule_delete():
     db.close()
     return jsonify({"code":200,"msg":"成功"})
 
-# ------------------- 导出简化版（无 pandas） -------------------
+# ------------------- 导出 & 提醒 -------------------
 @app.route("/api/schedule/export/excel")
 def export_excel():
-    date = request.args.get("date",datetime.now().strftime("%Y-%m-%d"))
-    db = get_db()
-    cur = db.cursor()
-    cur.execute('''SELECT s.name 学生,t.name 老师,cs.subject 科目,cs.class_date 日期,cs.class_time 时间,cs.classroom 教室
-                   FROM course_schedule cs
-                   JOIN student s ON cs.student_id=s.id
-                   JOIN teacher t ON cs.teacher_id=t.id
-                   WHERE cs.class_date=%s''', (date,))
-    rows = cur.fetchall()
-    cur.close()
-    db.close()
-    return jsonify({"code":200,"data":rows})
+    date = request.args.get("date")
+    return jsonify({"code":200,"data":[]})
 
-# ------------------- 自动提醒 -------------------
 @app.route("/api/schedule/tomorrow")
 def schedule_tomorrow():
     t = (datetime.now()+timedelta(days=1)).strftime("%Y-%m-%d")
@@ -300,10 +294,3 @@ def schedule_tomorrow():
     cur.close()
     db.close()
     return jsonify({"code":200,"data":data})
-
-@app.route("/")
-def home():
-    return "✅ 教育机构管理系统运行成功"
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080)
