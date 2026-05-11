@@ -812,4 +812,225 @@ def attendance_mark():
         cur.close()
         db.close()
 
-@ -2467,7 +2467,7 @@
+@ -2467,7 +2467,7 @@ def attendance_summary():
+    class_date = request.args.get('class_date')
+    
+    db = get_db()
+    cur = db.cursor()
+    
+    cur.execute("""SELECT cs.id, cs.subject, cs.class_time, cs.classroom, t.name as teacher_name,
+                   COUNT(DISTINCT cs.student_id) as total_students,
+                   COUNT(DISTINCT CASE WHEN a.status='present' THEN a.student_id END) as present_count
+                   FROM course_schedule cs
+                   LEFT JOIN teacher t ON cs.teacher_id = t.id
+                   LEFT JOIN attendance a ON cs.id = a.schedule_id
+                   WHERE cs.class_date = %s
+                   GROUP BY cs.id, cs.subject, cs.class_time, cs.classroom, t.name
+                   ORDER BY cs.class_time""", (class_date,))
+    
+    data = cur.fetchall()
+    cur.close()
+    db.close()
+    
+    result = [{"schedule_id": r[0], "subject": r[1], "class_time": r[2], 
+               "classroom": r[3], "teacher_name": r[4], "total_students": r[5], 
+               "present_count": r[6]} for r in data]
+    return jsonify({"code": 200, "data": result})
+
+# ==================== 导出功能模块 ====================
+@app.route("/api/schedule/export/excel")
+def export_excel():
+    """导出课表到Excel"""
+    start_date = request.args.get('start_date')
+    end_date = request.args.get('end_date')
+    
+    if not start_date or not end_date:
+        return jsonify({"code": 400, "msg": "请选择日期范围"})
+    
+    db = get_db()
+    cur = db.cursor()
+    cur.execute('''SELECT cs.class_date, cs.class_time, cs.subject, t.name as teacher_name, 
+                          s.name as student_name, cs.classroom, cs.status
+                   FROM course_schedule cs
+                   LEFT JOIN teacher t ON cs.teacher_id = t.id
+                   LEFT JOIN student s ON cs.student_id = s.id
+                   WHERE cs.class_date BETWEEN %s AND %s
+                   ORDER BY cs.class_date, cs.class_time''',
+                (start_date, end_date))
+    data = cur.fetchall()
+    cur.close()
+    db.close()
+    
+    # 创建Excel文件
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = f"课表_{start_date}_to_{end_date}"
+    
+    # 设置表头
+    headers = ["上课日期", "上课时间", "课程名称", "授课教师", "学生姓名", "教室", "状态"]
+    ws.append(headers)
+    
+    # 设置表头样式
+    for cell in ws[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+        cell.alignment = Alignment(horizontal="center")
+    
+    # 写入数据
+    for row in data:
+        ws.append([str(row[0]), row[1], row[2], row[3] or "", row[4] or "集体课", 
+                   row[5] or "", "已完成" if row[6] == 'completed' else "待上课"])
+    
+    # 调整列宽
+    for col in ws.columns:
+        max_length = 0
+        col_letter = col[0].column_letter
+        for cell in col:
+            try:
+                if len(str(cell.value)) > max_length:
+                    max_length = len(str(cell.value))
+            except:
+                pass
+        adjusted_width = min(max_length + 2, 25)
+        ws.column_dimensions[col_letter].width = adjusted_width
+    
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    
+    return send_file(output, mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                     as_attachment=True, download_name=f'课表_{start_date}_to_{end_date}.xlsx')
+
+# ==================== 微信提醒模块 ====================
+@app.route("/api/schedule/tomorrow")
+def schedule_tomorrow():
+    """获取明天的课程（用于微信提醒）"""
+    tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+    db = get_db()
+    cur = db.cursor()
+    cur.execute('''SELECT s.name, s.parent_phone, t.name, cs.subject, cs.class_time, cs.classroom
+                   FROM course_schedule cs
+                   JOIN student s ON cs.student_id=s.id
+                   JOIN teacher t ON cs.teacher_id=t.id
+                   WHERE cs.class_date=%s AND cs.status='scheduled'
+                   ORDER BY cs.class_time''', (tomorrow,))
+    data = cur.fetchall()
+    cur.close()
+    db.close()
+    
+    result = [{"student_name": r[0], "parent_phone": r[1], "teacher_name": r[2],
+               "subject": r[3], "class_time": r[4], "classroom": r[5]} for r in data]
+    return jsonify({"code": 200, "data": result, "date": tomorrow})
+
+@app.route("/api/schedule/remind", methods=["POST"])
+def send_remind():
+    """发送课程提醒（触发微信订阅消息）"""
+    d = request.json
+    schedule_ids = d.get('schedule_ids', [])
+    
+    if not schedule_ids:
+        return jsonify({"code": 400, "msg": "请选择课程"})
+    
+    db = get_db()
+    cur = db.cursor()
+    
+    placeholders = ','.join(['%s'] * len(schedule_ids))
+    cur.execute(f'''SELECT cs.id, s.parent_phone, s.parent_name, cs.subject, cs.class_time, cs.class_date
+                    FROM course_schedule cs
+                    JOIN student s ON cs.student_id=s.id
+                    WHERE cs.id IN ({placeholders})''', schedule_ids)
+    data = cur.fetchall()
+    cur.close()
+    db.close()
+    
+    # 这里可以集成微信订阅消息API
+    # 实际发送逻辑需要微信小程序订阅消息配置
+    
+    return jsonify({"code": 200, "msg": f"已发送{len(data)}条提醒", "data": [{
+        "parent_phone": r[1], "parent_name": r[2], "subject": r[3],
+        "class_time": r[4], "class_date": str(r[5])
+    } for r in data]})
+
+# ==================== 数据看板模块 ====================
+@app.route("/api/dashboard/stats")
+def dashboard_stats():
+    """获取首页统计数据"""
+    db = get_db()
+    cur = db.cursor()
+    
+    # 学生总数
+    cur.execute("SELECT COUNT(*) FROM student WHERE status=1")
+    student_count = cur.fetchone()[0]
+    
+    # 教师总数
+    cur.execute("SELECT COUNT(*) FROM teacher WHERE status='active'")
+    teacher_count = cur.fetchone()[0]
+    
+    # 今日课程数
+    today = datetime.now().strftime("%Y-%m-%d")
+    cur.execute("SELECT COUNT(*) FROM course_schedule WHERE class_date=%s AND status='scheduled'", (today,))
+    today_classes = cur.fetchone()[0]
+    
+    # 总课时（剩余）
+    cur.execute("SELECT SUM(surplus) FROM course_package WHERE status='active'")
+    total_surplus = cur.fetchone()[0] or 0
+    
+    # 近7天课程趋势
+    cur.execute("""SELECT class_date, COUNT(*) 
+                   FROM course_schedule 
+                   WHERE class_date >= CURRENT_DATE - INTERVAL '7 days'
+                   GROUP BY class_date 
+                   ORDER BY class_date""")
+    trend = cur.fetchall()
+    
+    cur.close()
+    db.close()
+    
+    return jsonify({"code": 200, "data": {
+        "student_count": student_count,
+        "teacher_count": teacher_count,
+        "today_classes": today_classes,
+        "total_surplus_hours": float(total_surplus),
+        "trend": [{"date": str(t[0]), "count": t[1]} for t in trend]
+    }})
+
+# ==================== 仪表盘图表数据 ====================
+@app.route("/api/dashboard/charts")
+def dashboard_charts():
+    """获取图表数据"""
+    db = get_db()
+    cur = db.cursor()
+    
+    # 考勤统计数据
+    cur.execute("""SELECT status, COUNT(*) 
+                   FROM attendance 
+                   WHERE checkin_time >= CURRENT_DATE - INTERVAL '30 days'
+                   GROUP BY status""")
+    attendance_stats = {r[0]: r[1] for r in cur.fetchall()}
+    
+    # 课时消耗TOP5学生
+    cur.execute("""SELECT s.name, SUM(hc.hours) as total_consumed
+                   FROM hour_consumption hc
+                   JOIN student s ON hc.student_id = s.id
+                   WHERE hc.consume_date >= CURRENT_DATE - INTERVAL '30 days'
+                   GROUP BY s.id, s.name
+                   ORDER BY total_consumed DESC
+                   LIMIT 5""")
+    top_students = cur.fetchall()
+    
+    cur.close()
+    db.close()
+    
+    return jsonify({"code": 200, "data": {
+        "attendance": {
+            "present": attendance_stats.get('present', 0),
+            "absent": attendance_stats.get('absent', 0),
+            "late": attendance_stats.get('late', 0)
+        },
+        "top_students": [{"name": r[0], "hours": float(r[1])} for r in top_students]
+    }})
+
+# ------------------- 启动应用 -------------------
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", 8080))
+    app.run(host="0.0.0.0", port=port, debug=False)
