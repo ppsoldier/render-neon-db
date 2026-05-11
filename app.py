@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
-import psycopg2
+import pg8000
 import os
 from datetime import datetime, timedelta
 import io
@@ -11,14 +11,14 @@ app = Flask(__name__)
 CORS(app)
 
 def get_db():
-    """获取数据库连接"""
-    return psycopg2.connect(
+    """获取数据库连接 - 使用 pg8000 纯 Python 驱动"""
+    return pg8000.connect(
         host=os.getenv("DB_HOST"),
         user=os.getenv("DB_USER"),
         password=os.getenv("DB_PASSWORD"),
         database=os.getenv("DB_NAME"),
         port=5432,
-        sslmode="require"
+        ssl=True  # Neon 需要 SSL
     )
 
 # ------------------- 健康检查 -------------------
