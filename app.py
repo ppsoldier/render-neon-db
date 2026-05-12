@@ -696,88 +696,17 @@ def course_add():
     except Exception as e:
         return jsonify({"code": 500, "msg": f"添加失败: {str(e)}"}), 500
 
-# ==================== 排课管理模块 ====================
+# ==================== 周课表接口 ====================
 
-@app.route("/api/schedule/list", methods=["GET"])
-def schedule_list():
-    """获取排课列表（支持日期范围筛选）"""
+@app.route("/api/schedule/week", methods=["GET"])
+def get_week_schedule():
+    """获取周课表数据"""
     try:
         start_date = request.args.get('start_date')
         end_date = request.args.get('end_date')
-        teacher_id = request.args.get('teacher_id', type=int)
-        student_id = request.args.get('student_id', type=int)
         
-        db = get_db()
-        cur = db.cursor()
-        
-        conditions = []
-        params = []
-        
-        if start_date:
-            conditions.append("s.class_date >= %s")
-            params.append(start_date)
-        if end_date:
-            conditions.append("s.class_date <= %s")
-            params.append(end_date)
-        if teacher_id:
-            conditions.append("s.teacher_id = %s")
-            params.append(teacher_id)
-        if student_id:
-            conditions.append("s.student_id = %s")
-            params.append(student_id)
-        
-        where_clause = " AND ".join(conditions) if conditions else "1=1"
-        
-        sql = f"""
-            SELECT 
-                s.id,
-                s.class_date,
-                s.class_time,
-                s.subject,
-                s.classroom,
-                s.status,
-                s.duration,
-                stu.name as student_name,
-                t.name as teacher_name
-            FROM course_schedule s
-            LEFT JOIN student stu ON s.student_id = stu.id
-            LEFT JOIN teacher t ON s.teacher_id = t.id
-            WHERE {where_clause}
-            ORDER BY s.class_date DESC, s.class_time
-        """
-        
-        cur.execute(sql, params)
-        data = cur.fetchall()
-        cur.close()
-        db.close()
-        
-        result = []
-        for r in data:
-            result.append({
-                "id": r[0],
-                "class_date": str(r[1]),
-                "class_time": r[2],
-                "subject": r[3],
-                "classroom": r[4] or '',
-                "status": r[5] or 'scheduled',
-                "duration": float(r[6]) if r[6] else 1.5,
-                "student_name": r[7] or '集体课',
-                "teacher_name": r[8] or '待分配'
-            })
-        
-        return jsonify({"code": 200, "data": result})
-    except Exception as e:
-        print(f"获取排课列表错误: {str(e)}")
-        return jsonify({"code": 500, "msg": str(e)}), 500
-
-
-@app.route("/api/schedule/calendar", methods=["GET"])
-def schedule_calendar():
-    """获取日历排课数据（按日期）"""
-    try:
-        date = request.args.get('date')
-        if not date:
-            date = datetime.now().strftime("%Y-%m-%d")
+        if not start_date or not end_date:
+            return jsonify({"code": 400, "msg": "缺少日期参数"}), 400
         
         db = get_db()
         cur = db.cursor()
@@ -786,333 +715,123 @@ def schedule_calendar():
             SELECT 
                 s.id,
                 s.class_date,
+                EXTRACT(DOW FROM s.class_date) as weekday,
                 s.class_time,
                 s.subject,
                 s.classroom,
                 s.status,
-                s.duration,
-                stu.name as student_name,
-                t.name as teacher_name
+                t.name as teacher_name,
+                stu.name as student_name
             FROM course_schedule s
-            LEFT JOIN student stu ON s.student_id = stu.id
             LEFT JOIN teacher t ON s.teacher_id = t.id
-            WHERE s.class_date = %s
-            ORDER BY s.class_time
-        """, (date,))
+            LEFT JOIN student stu ON s.student_id = stu.id
+            WHERE s.class_date BETWEEN %s AND %s
+            AND s.status != 'cancelled'
+            ORDER BY s.class_date, s.class_time
+        """, (start_date, end_date))
         
         data = cur.fetchall()
         cur.close()
         db.close()
         
-        result = []
-        for r in data:
-            result.append({
-                "id": r[0],
-                "class_date": str(r[1]),
-                "class_time": r[2],
-                "subject": r[3],
-                "classroom": r[4] or '',
-                "status": r[5] or 'scheduled',
-                "duration": float(r[6]) if r[6] else 1.5,
-                "student_name": r[7] or '集体课',
-                "teacher_name": r[8] or '待分配'
-            })
-        
-        return jsonify({"code": 200, "data": result})
-    except Exception as e:
-        print(f"获取日历排课错误: {str(e)}")
-        return jsonify({"code": 500, "msg": str(e)}), 500
-
-
-@app.route("/api/schedule/detail/<int:schedule_id>", methods=["GET"])
-def schedule_detail(schedule_id):
-    """获取排课详情"""
-    try:
-        db = get_db()
-        cur = db.cursor()
-        
-        cur.execute("""
-            SELECT 
-                s.id,
-                s.student_id,
-                s.teacher_id,
-                s.class_date,
-                s.class_time,
-                s.subject,
-                s.classroom,
-                s.status,
-                s.duration,
-                s.repeat_type,
-                stu.name as student_name,
-                t.name as teacher_name
-            FROM course_schedule s
-            LEFT JOIN student stu ON s.student_id = stu.id
-            LEFT JOIN teacher t ON s.teacher_id = t.id
-            WHERE s.id = %s
-        """, (schedule_id,))
-        
-        data = cur.fetchone()
-        cur.close()
-        db.close()
-        
-        if data:
-            return jsonify({
-                "code": 200,
-                "data": {
-                    "id": data[0],
-                    "student_id": data[1],
-                    "teacher_id": data[2],
-                    "class_date": str(data[3]),
-                    "class_time": data[4],
-                    "subject": data[5],
-                    "classroom": data[6] or '',
-                    "status": data[7] or 'scheduled',
-                    "duration": float(data[8]) if data[8] else 1.5,
-                    "repeat_type": data[9] or 0,
-                    "student_name": data[10] or '集体课',
-                    "teacher_name": data[11] or '待分配'
-                }
-            })
-        return jsonify({"code": 404, "msg": "排课不存在"})
-    except Exception as e:
-        print(f"获取排课详情错误: {str(e)}")
-        return jsonify({"code": 500, "msg": str(e)}), 500
-
-
-@app.route("/api/schedule/check", methods=["POST"])
-def schedule_check():
-    """检查排课冲突"""
-    try:
-        data = request.json
-        teacher_id = data.get('teacher_id')
-        classroom = data.get('classroom')
-        class_date = data.get('class_date')
-        class_time = data.get('class_time')
-        schedule_id = data.get('id', 0)
-        
-        db = get_db()
-        cur = db.cursor()
-        
-        # 检查教师时间冲突
-        if teacher_id:
-            cur.execute("""
-                SELECT COUNT(*) FROM course_schedule
-                WHERE teacher_id = %s 
-                AND class_date = %s 
-                AND class_time = %s 
-                AND id != %s
-                AND status != 'cancelled'
-            """, (teacher_id, class_date, class_time, schedule_id))
-            teacher_conflict = cur.fetchone()[0] > 0
-        else:
-            teacher_conflict = False
-        
-        # 检查教室冲突
-        if classroom:
-            cur.execute("""
-                SELECT COUNT(*) FROM course_schedule
-                WHERE classroom = %s 
-                AND class_date = %s 
-                AND class_time = %s 
-                AND id != %s
-                AND status != 'cancelled'
-            """, (classroom, class_date, class_time, schedule_id))
-            room_conflict = cur.fetchone()[0] > 0
-        else:
-            room_conflict = False
-        
-        cur.close()
-        db.close()
-        
-        return jsonify({
-            "code": 200,
-            "has_conflict": teacher_conflict or room_conflict,
-            "teacher_conflict": teacher_conflict,
-            "room_conflict": room_conflict
-        })
-    except Exception as e:
-        print(f"冲突检测错误: {str(e)}")
-        return jsonify({"code": 500, "msg": str(e)}), 500
-
-
-@app.route("/api/schedule/save", methods=["POST"])
-def schedule_save():
-    """保存排课（支持重复排课）"""
-    try:
-        data = request.json
-        
-        student_id = data.get('student_id')
-        teacher_id = data.get('teacher_id')
-        subject = data.get('subject')
-        start_date = data.get('start_date')
-        class_time = data.get('class_time')
-        classroom = data.get('classroom')
-        duration = data.get('duration', 1.5)
-        repeat_type = data.get('repeat_type', 0)  # 0:不重复, 1:每周重复
-        repeat_weeks = data.get('repeat_weeks', 8)  # 重复周数
-        
-        db = get_db()
-        cur = db.cursor()
-        
-        # 生成排课日期列表
-        dates = []
-        if repeat_type == 1:
-            base_date = datetime.strptime(start_date, "%Y-%m-%d")
-            for i in range(repeat_weeks):
-                dates.append((base_date + timedelta(days=i*7)).strftime("%Y-%m-%d"))
-        else:
-            dates.append(start_date)
-        
-        # 检查冲突
-        for date in dates:
-            # 冲突检测
-            cur.execute("""
-                SELECT COUNT(*) FROM course_schedule
-                WHERE (teacher_id = %s OR classroom = %s)
-                AND class_date = %s AND class_time = %s
-                AND status != 'cancelled'
-            """, (teacher_id, classroom, date, class_time))
-            conflict_count = cur.fetchone()[0]
+        # 组织周课表数据
+        week_schedule = {}
+        for row in data:
+            weekday = int(row[2])  # 0=周日, 1=周一...
+            # 转换：数据库周日=0，我们改为周一=0
+            weekday_idx = 6 if weekday == 0 else weekday - 1
             
-            if conflict_count > 0:
-                cur.close()
-                db.close()
-                return jsonify({
-                    "code": 409,
-                    "msg": f"{date} 存在时间冲突，请调整时间或教室"
-                }), 409
+            time_slot = row[3]  # 时间如 "14:00-15:30"
+            
+            if weekday_idx not in week_schedule:
+                week_schedule[weekday_idx] = {}
+            
+            week_schedule[weekday_idx][time_slot] = {
+                "id": row[0],
+                "subject": row[4],
+                "teacher": row[7] or '',
+                "place": row[5] or '',
+                "student": row[8] or '集体课',
+                "status": row[6]
+            }
         
-        # 保存排课
+        return jsonify({"code": 200, "data": week_schedule})
+    except Exception as e:
+        print(f"获取周课表错误: {str(e)}")
+        return jsonify({"code": 500, "msg": str(e)}), 500
+
+
+@app.route("/api/schedule/batch_save", methods=["POST"])
+def batch_save_schedule():
+    """批量保存周课表"""
+    try:
+        data = request.json
+        courses = data.get('courses', [])
+        
+        db = get_db()
+        cur = db.cursor()
+        
         saved_count = 0
-        for date in dates:
+        for course in courses:
+            # 检查是否已存在
             cur.execute("""
-                INSERT INTO course_schedule 
-                (student_id, teacher_id, subject, class_date, class_time, classroom, duration, repeat_type)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            """, (student_id, teacher_id, subject, date, class_time, classroom, duration, repeat_type))
+                SELECT id FROM course_schedule
+                WHERE class_date = %s AND class_time = %s
+            """, (course['date'], course['time']))
+            
+            existing = cur.fetchone()
+            
+            if existing:
+                # 更新
+                cur.execute("""
+                    UPDATE course_schedule 
+                    SET subject = %s, teacher_id = %s, classroom = %s
+                    WHERE id = %s
+                """, (course['subject'], course.get('teacher_id'), course.get('classroom'), existing[0]))
+            else:
+                # 新增
+                cur.execute("""
+                    INSERT INTO course_schedule 
+                    (subject, teacher_id, classroom, class_date, class_time, duration)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """, (course['subject'], course.get('teacher_id'), course.get('classroom'), 
+                      course['date'], course['time'], 1.5))
             saved_count += 1
         
         db.commit()
         cur.close()
         db.close()
         
-        return jsonify({
-            "code": 200,
-            "msg": f"成功添加 {saved_count} 节课",
-            "data": {"count": saved_count}
-        })
+        return jsonify({"code": 200, "msg": f"成功保存 {saved_count} 门课程"})
     except Exception as e:
-        print(f"保存排课错误: {str(e)}")
+        print(f"批量保存错误: {str(e)}")
         return jsonify({"code": 500, "msg": str(e)}), 500
 
 
-@app.route("/api/schedule/update", methods=["POST"])
-def schedule_update():
-    """更新排课信息"""
+@app.route("/api/schedule/clear_week", methods=["POST"])
+def clear_week_schedule():
+    """清空一周的课程"""
     try:
         data = request.json
-        schedule_id = data.get('id')
+        start_date = data.get('start_date')
+        end_date = data.get('end_date')
         
         db = get_db()
         cur = db.cursor()
         
-        # 冲突检测（排除自身）
-        cur.execute("""
-            SELECT COUNT(*) FROM course_schedule
-            WHERE teacher_id = %s 
-            AND class_date = %s 
-            AND class_time = %s 
-            AND id != %s
-            AND status != 'cancelled'
-        """, (data.get('teacher_id'), data.get('class_date'), data.get('class_time'), schedule_id))
-        conflict = cur.fetchone()[0] > 0
-        
-        if conflict:
-            cur.close()
-            db.close()
-            return jsonify({"code": 409, "msg": "时间冲突，请调整"}), 409
-        
-        cur.execute("""
-            UPDATE course_schedule 
-            SET student_id = %s,
-                teacher_id = %s,
-                subject = %s,
-                class_date = %s,
-                class_time = %s,
-                classroom = %s,
-                duration = %s
-            WHERE id = %s
-        """, (
-            data.get('student_id'),
-            data.get('teacher_id'),
-            data.get('subject'),
-            data.get('class_date'),
-            data.get('class_time'),
-            data.get('classroom'),
-            data.get('duration', 1.5),
-            schedule_id
-        ))
-        
-        db.commit()
-        cur.close()
-        db.close()
-        
-        return jsonify({"code": 200, "msg": "更新成功"})
-    except Exception as e:
-        print(f"更新排课错误: {str(e)}")
-        return jsonify({"code": 500, "msg": str(e)}), 500
-
-
-@app.route("/api/schedule/delete", methods=["POST"])
-def schedule_delete():
-    """删除排课"""
-    try:
-        data = request.json
-        schedule_id = data.get('id')
-        
-        db = get_db()
-        cur = db.cursor()
-        
-        # 软删除：更新状态为 cancelled
         cur.execute("""
             UPDATE course_schedule 
             SET status = 'cancelled' 
-            WHERE id = %s
-        """, (schedule_id,))
+            WHERE class_date BETWEEN %s AND %s
+        """, (start_date, end_date))
         
         db.commit()
         cur.close()
         db.close()
         
-        return jsonify({"code": 200, "msg": "取消成功"})
+        return jsonify({"code": 200, "msg": "清空成功"})
     except Exception as e:
-        print(f"删除排课错误: {str(e)}")
-        return jsonify({"code": 500, "msg": str(e)}), 500
-
-
-@app.route("/api/schedule/complete", methods=["POST"])
-def schedule_complete():
-    """标记课程为已完成"""
-    try:
-        data = request.json
-        schedule_id = data.get('id')
-        
-        db = get_db()
-        cur = db.cursor()
-        
-        cur.execute("""
-            UPDATE course_schedule 
-            SET status = 'completed' 
-            WHERE id = %s
-        """, (schedule_id,))
-        
-        db.commit()
-        cur.close()
-        db.close()
-        
-        return jsonify({"code": 200, "msg": "课程已完成"})
-    except Exception as e:
-        print(f"完成课程错误: {str(e)}")
+        print(f"清空周课表错误: {str(e)}")
         return jsonify({"code": 500, "msg": str(e)}), 500
 
 # ==================== 仪表盘数据 ====================
