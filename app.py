@@ -697,7 +697,51 @@ def course_add():
         return jsonify({"code": 500, "msg": f"添加失败: {str(e)}"}), 500
 
 # ==================== 增强的排课接口 ====================
+@app.route("/api/schedule/calendar", methods=["GET"])
+def get_schedule_calendar():
+    """获取指定日期的课程（供首页使用）"""
+    try:
+        date_str = request.args.get('date')
+        if not date_str:
+            return jsonify({"code": 400, "msg": "缺少日期参数"}), 400
 
+        db = get_db()
+        cur = db.cursor()
+        cur.execute("""
+            SELECT 
+                s.id,
+                s.class_time,
+                s.subject,
+                s.classroom,
+                s.status,
+                t.name as teacher_name
+            FROM course_schedule s
+            LEFT JOIN teacher t ON s.teacher_id = t.id
+            WHERE s.class_date = %s 
+              AND (s.status != 'cancelled' OR s.status IS NULL)
+            ORDER BY s.class_time
+        """, (date_str,))
+        
+        rows = cur.fetchall()
+        cur.close()
+        db.close()
+
+        schedule_list = []
+        for row in rows:
+            schedule_list.append({
+                "id": row[0],
+                "class_time": row[1],
+                "subject": row[2],
+                "classroom": row[3] or '',
+                "status": row[4] or 'scheduled',
+                "teacher_name": row[5] or '待分配'
+            })
+
+        return jsonify({"code": 200, "data": schedule_list})
+    except Exception as e:
+        print(f"获取日历数据错误: {str(e)}")
+        return jsonify({"code": 500, "msg": str(e)}), 500
+        
 @app.route("/api/schedule/batch_save", methods=["POST"])
 def batch_save_schedule():
     """批量保存周课表（支持多学生）"""
