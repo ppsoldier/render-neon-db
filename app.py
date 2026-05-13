@@ -916,30 +916,43 @@ def clear_week_schedule():
 # ==================== 仪表盘数据 ====================
 @app.route("/api/dashboard/stats")
 def dashboard_stats():
-    """获取首页统计数据"""
+    """获取首页统计数据（兼容版）"""
     try:
         db = get_db()
         cur = db.cursor()
-        
-        cur.execute("SELECT COUNT(*) FROM student WHERE status=1")
-        student_count = cur.fetchone()[0]
-        
-        cur.execute("SELECT COUNT(*) FROM teacher WHERE status='active'")
-        teacher_count = cur.fetchone()[0]
-        
+
+        # 1. 查询学生总数 (如果 status 字段不存在，则查询全部)
+        try:
+            cur.execute("SELECT COUNT(*) FROM student WHERE status = 1")
+            student_count = cur.fetchone()[0]
+        except Exception:
+            cur.execute("SELECT COUNT(*) FROM student")
+            student_count = cur.fetchone()[0]
+
+        # 2. 查询教师总数 (如果 status 字段不存在，则查询全部)
+        try:
+            cur.execute("SELECT COUNT(*) FROM teacher WHERE status = 'active'")
+            teacher_count = cur.fetchone()[0]
+        except Exception:
+            cur.execute("SELECT COUNT(*) FROM teacher")
+            teacher_count = cur.fetchone()[0]
+
+        # 3. 查询今日课程
         today = datetime.now().strftime("%Y-%m-%d")
         cur.execute("""
             SELECT COUNT(*) FROM course_schedule 
-            WHERE class_date=%s AND (status IS NULL OR status != 'cancelled')
+            WHERE class_date = %s 
+              AND (status IS NULL OR status != 'cancelled')
         """, (today,))
         today_classes = cur.fetchone()[0]
-        
-        cur.execute("SELECT COALESCE(SUM(surplus), 0) FROM course_package WHERE status='active'")
+
+        # 4. 查询剩余总课时
+        cur.execute("SELECT COALESCE(SUM(surplus), 0) FROM course_package")
         total_surplus = cur.fetchone()[0] or 0
-        
+
         cur.close()
         db.close()
-        
+
         return jsonify({"code": 200, "data": {
             "student_count": student_count,
             "teacher_count": teacher_count,
@@ -947,6 +960,7 @@ def dashboard_stats():
             "total_surplus_hours": float(total_surplus)
         }})
     except Exception as e:
+        print(f"仪表盘接口错误: {str(e)}")
         return jsonify({"code": 500, "msg": str(e)}), 500
 
 # ------------------- 启动应用 -------------------
