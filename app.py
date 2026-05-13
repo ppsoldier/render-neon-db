@@ -749,26 +749,35 @@ def schedule_save():
     """保存排课"""
     try:
         data = request.json
+        print("收到保存请求:", data)  # 添加日志
         
         student_id = data.get('student_id')
         teacher_id = data.get('teacher_id')
         subject = data.get('subject')
-        start_date = data.get('start_date')
-        class_time = data.get('class_time')
+        start_date = data.get('date')  # 注意：前端发送的是 'date'
+        class_time = data.get('time')  # 注意：前端发送的是 'time'
         classroom = data.get('classroom')
         duration = data.get('duration', 2)
+        
+        print(f"解析数据: date={start_date}, time={class_time}, subject={subject}")
+        
+        if not start_date or not class_time:
+            return jsonify({"code": 400, "msg": "日期和时间不能为空"}), 400
         
         db = get_db()
         cur = db.cursor()
         
+        # 检查是否已存在
         cur.execute("""
             SELECT id FROM course_schedule
             WHERE class_date = %s AND class_time = %s
+            AND (status IS NULL OR status != 'cancelled')
         """, (start_date, class_time))
         
         existing = cur.fetchone()
         
         if existing:
+            # 更新
             cur.execute("""
                 UPDATE course_schedule 
                 SET subject = %s, teacher_id = %s, classroom = %s, duration = %s, status = 'scheduled'
@@ -776,6 +785,7 @@ def schedule_save():
             """, (subject, teacher_id, classroom, duration, existing[0]))
             msg = "更新成功"
         else:
+            # 新增
             cur.execute("""
                 INSERT INTO course_schedule 
                 (student_id, teacher_id, subject, class_date, class_time, classroom, duration, status)
@@ -784,6 +794,8 @@ def schedule_save():
             msg = "添加成功"
         
         db.commit()
+        print(f"数据库操作成功，影响行数: {cur.rowcount}")
+        
         cur.close()
         db.close()
         
