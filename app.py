@@ -649,7 +649,7 @@ def get_schedule_calendar():
 
 @app.route("/api/schedule/week", methods=["GET"])
 def get_week_schedule():
-    """获取周课表数据 - 包含学生信息"""
+    """获取周课表数据 - 每个时间段支持多课程"""
     try:
         start_date = request.args.get('start_date')
         end_date = request.args.get('end_date')
@@ -671,12 +671,13 @@ def get_week_schedule():
                 COALESCE(s.status, 'scheduled') as status,
                 COALESCE(s.duration, 2) as duration,
                 t.name as teacher_name,
-                s.student_ids
+                s.student_ids,
+                s.created_at
             FROM course_schedule s
             LEFT JOIN teacher t ON s.teacher_id = t.id
             WHERE s.class_date BETWEEN %s AND %s
               AND (s.status IS NULL OR s.status != 'cancelled')
-            ORDER BY s.class_date, s.class_time
+            ORDER BY s.class_date, s.class_time, s.created_at
         """, (start_date, end_date))
         
         data = cur.fetchall()
@@ -697,6 +698,9 @@ def get_week_schedule():
             if weekday_idx not in week_schedule:
                 week_schedule[weekday_idx] = {}
             
+            if time_slot not in week_schedule[weekday_idx]:
+                week_schedule[weekday_idx][time_slot] = []
+            
             # 解析学生ID列表，获取学生名称
             student_names = []
             student_id_list = []
@@ -704,7 +708,7 @@ def get_week_schedule():
                 student_id_list = [int(x) for x in row[9].split(',') if x]
                 student_names = [students_map.get(sid, '') for sid in student_id_list if students_map.get(sid)]
             
-            week_schedule[weekday_idx][time_slot] = {
+            week_schedule[weekday_idx][time_slot].append({
                 "id": row[0],
                 "subject": row[4] or '',
                 "teacher": row[8] or '',
@@ -713,7 +717,7 @@ def get_week_schedule():
                 "status": row[6],
                 "student_ids": student_id_list,
                 "students": student_names
-            }
+            })
         
         return jsonify({"code": 200, "data": week_schedule})
     except Exception as e:
