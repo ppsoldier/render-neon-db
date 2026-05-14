@@ -7,6 +7,7 @@ import io
 import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill
 import json
+import traceback
 
 app = Flask(__name__)
 CORS(app)
@@ -875,7 +876,6 @@ def schedule_save():
         return jsonify({"code": 200, "msg": msg})
     except Exception as e:
         print(f"保存排课错误: {str(e)}")
-        import traceback
         traceback.print_exc()
         return jsonify({"code": 500, "msg": str(e)}), 500
 
@@ -972,4 +972,205 @@ def clear_week_schedule():
     except Exception as e:
         return jsonify({"code": 500, "msg": str(e)}), 500
 
-@app.route("/api/schedule/batch_save", methods
+@app.route("/api/schedule/tomorrow", methods=["GET"])
+def schedule_tomorrow():
+    """获取明天的课程（用于提醒）"""
+    try:
+        tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+        
+        db = get_db()
+        cur = db.cursor()
+        cur.execute("""
+            SELECT 
+                s.subject,
+                s.class_time,
+                s.classroom,
+                t.name as teacher_name,
+                stu.name as student_name
+            FROM course_schedule s
+            LEFT JOIN teacher t ON s.teacher_id = t.id
+            LEFT JOIN student stu ON s.student_id = stu.id
+            WHERE s.class_date = %s 
+              AND (s.status IS NULL OR s.status != 'cancelled')
+            ORDER BY s.class_time
+        """, (tomorrow,))
+        
+        data = cur.fetchall()
+        cur.close()
+        db.close()
+        
+        result = []
+        for row in data:
+            result.append({
+                "subject": row[0],
+                "class_time": row[1],
+                "classroom": row[2] or '',
+                "teacher_name": row[3] or '待分配',
+                "student_name": row[4] or '集体课'
+            })
+        
+        return jsonify({"code": 200, "data": result, "date": tomorrow})
+    except Exception as e:
+        return jsonify({"code": 500, "msg": str(e)}), 500
+
+# ==================== 仪表盘数据 ====================
+@app.route("/api/dashboard/stats")
+def dashboard_stats():
+    """获取首页统计数据"""
+    try:
+        db = get_db()
+        cur = db.cursor()
+
+        # 学生总数
+        try:
+            cur.execute("SELECT COUNT(*) FROM student WHERE status = 1")
+            student_count = cur.fetchone()[0]
+        except Exception:
+            cur.execute("SELECT COUNT(*) FROM student")
+            student_count = cur.fetchone()[0]
+
+        # 教师总数
+        try:
+            cur.execute("SELECT COUNT(*) FROM teacher WHERE status = 'active'")
+            teacher_count = cur.fetchone()[0]
+        except Exception:
+            cur.execute("SELECT COUNT(*) FROM teacher")
+            teacher_count = cur.fetchone()[0]
+
+        # 今日课程
+        today = datetime.now().strftime("%Y-%m-%d")
+        cur.execute("""
+            SELECT COUNT(*) FROM course_schedule 
+            WHERE class_date = %s 
+              AND (status IS NULL OR status != 'cancelled')
+        """, (today,))
+        today_classes = cur.fetchone()[0]
+
+        # 剩余总课时
+        cur.execute("SELECT COALESCE(SUM(surplus), 0) FROM course_package WHERE status='active'")
+        total_surplus = cur.fetchone()[0] or 0
+
+        cur.close()
+        db.close()
+
+        return jsonify({"code": 200, "data": {
+            "student_count": student_count,
+            "teacher_count": teacher_count,
+            "today_classes": today_classes,
+            "total_surplus_hours": float(total_surplus)
+        }})
+    except Exception as e:
+        print(f"仪表盘错误: {str(e)}")
+        return jsonify({"code": 500, "msg": str(e)}), 500
+
+# ==================== 搜索接口 ====================
+@app.route("/api/search/teachers", methods=["GET"])
+def search_teachers():
+    """模糊查询教师"""
+    try:
+        keyword = request.args.get('keyword', '')
+        db = get_db()
+        cur = db.cursor()
+        cur.execute("""
+            SELECT id, name, phone, subject 
+            FROM teacher 
+            WHERE status = 'active' 
+            AND (name LIKE %s OR subject LIKE %s)
+            LIMIT 20
+        """, (f'%{keyword}%', f'%{keyword}%'))
+        data = cur.fetchall()
+        cur.close()
+        db.close()
+        
+        result = [{"id": r[0], "name": r[1], "phone": r[2], "subject": r[3]} for r in data]
+        return jsonify({"code": 200, "data": result})
+    except Exception as e:
+        return jsonify({"code": 500, "msg": str(e)}), 500
+
+@app.route("/api/search/students", methods=["GET"])
+def search_students():
+    """模糊查询学生"""
+    try:
+        keyword = request.args.get('keyword', '')
+        db = get_db()
+        cur = db.cursor()
+        cur.execute("""
+            SELECT id, name, phone, grade 
+            FROM student 
+            WHERE status = 1 
+            AND (name LIKE %s OR phone LIKE %s)
+            LIMIT 30
+        """, (f'%{keyword}%', f'%{keyword}%'))
+        data = cur.fetchall()
+        cur.close()
+        db.close()
+        
+        result = [{"id": r[0], "name": r[1], "phone": r[2], "grade": r[3]} for r in data]
+        return jsonify({"code": 200, "data": result})
+    except Exception as e:
+        return jsonify({"code": 500, "msg": str(e)}), 500
+
+@app.route("/api/courses/list", methods=["GET"])
+def get_courses_list():
+    """获取课程列表"""
+    try:
+        db = get_db()
+        cur = db.cursor()
+        cur.execute("""
+            SELECT DISTINCT subject FROM course_schedule WHERE subject IS NOT NULL AND subject != ''
+            UNION
+            SELECT '数学' as subject
+            UNION
+            SELECT '语文'
+            UNION
+            SELECT '英语'
+            UNION
+            SELECT '物理'
+            UNION
+            SELECT '化学'
+            ORDER BY subject
+        """)
+        data = cur.fetchall()
+        cur.close()
+        db.close()
+        
+        result = [r[0] for r in data if r[0]]
+        return jsonify({"code": 200, "data": result})
+    except Exception as e:
+        return jsonify({"code": 500, "msg": str(e)}), 500
+
+@app.route("/api/rooms/list", methods=["GET"])
+def get_rooms_list():
+    """获取教室列表"""
+    try:
+        db = get_db()
+        cur = db.cursor()
+        cur.execute("""
+            SELECT DISTINCT classroom FROM course_schedule WHERE classroom IS NOT NULL AND classroom != ''
+            UNION
+            SELECT 'A101' as classroom
+            UNION
+            SELECT 'A102'
+            UNION
+            SELECT 'A103'
+            UNION
+            SELECT 'B201'
+            UNION
+            SELECT 'B202'
+            UNION
+            SELECT 'C301'
+            ORDER BY classroom
+        """)
+        data = cur.fetchall()
+        cur.close()
+        db.close()
+        
+        result = [r[0] for r in data if r[0]]
+        return jsonify({"code": 200, "data": result})
+    except Exception as e:
+        return jsonify({"code": 200, "data": ['A101', 'A102', 'A103', 'B201', 'B202', 'C301']}), 200
+
+# ------------------- 启动应用 -------------------
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", 8080))
+    app.run(host="0.0.0.0", port=port, debug=False)
