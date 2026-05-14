@@ -840,7 +840,7 @@ def schedule_save():
         # 提取数据
         subject = data.get('subject')
         teacher_id = data.get('teacher_id')
-        student_ids = data.get('student_ids')  # 新增：获取学生ID字符串
+        student_ids = data.get('student_ids', '')  # 获取学生ID字符串
         classroom = data.get('classroom')
         class_date = data.get('date')
         class_time = data.get('time')
@@ -861,8 +861,10 @@ def schedule_save():
             except (ValueError, TypeError):
                 teacher_id = None
         
-        # 处理 student_ids（已经是逗号分隔的字符串）
-        if student_ids and isinstance(student_ids, list):
+        # 确保 student_ids 是字符串
+        if student_ids is None:
+            student_ids = ''
+        elif isinstance(student_ids, list):
             student_ids = ','.join(map(str, student_ids))
         
         db = get_db()
@@ -903,6 +905,7 @@ def schedule_save():
         return jsonify({"code": 200, "msg": msg})
     except Exception as e:
         print(f"保存排课错误: {str(e)}")
+        import traceback
         traceback.print_exc()
         return jsonify({"code": 500, "msg": str(e)}), 500
 
