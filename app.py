@@ -649,7 +649,7 @@ def get_schedule_calendar():
 
 @app.route("/api/schedule/week", methods=["GET"])
 def get_week_schedule():
-    """获取周课表数据"""
+    """获取周课表数据 - 包含学生信息"""
     try:
         start_date = request.args.get('start_date')
         end_date = request.args.get('end_date')
@@ -670,7 +670,8 @@ def get_week_schedule():
                 s.classroom,
                 COALESCE(s.status, 'scheduled') as status,
                 COALESCE(s.duration, 2) as duration,
-                t.name as teacher_name
+                t.name as teacher_name,
+                s.student_ids
             FROM course_schedule s
             LEFT JOIN teacher t ON s.teacher_id = t.id
             WHERE s.class_date BETWEEN %s AND %s
@@ -679,6 +680,11 @@ def get_week_schedule():
         """, (start_date, end_date))
         
         data = cur.fetchall()
+        
+        # 获取学生名称映射
+        cur.execute("SELECT id, name FROM student")
+        students_map = {row[0]: row[1] for row in cur.fetchall()}
+        
         cur.close()
         db.close()
         
@@ -691,13 +697,22 @@ def get_week_schedule():
             if weekday_idx not in week_schedule:
                 week_schedule[weekday_idx] = {}
             
+            # 解析学生ID列表，获取学生名称
+            student_names = []
+            student_id_list = []
+            if row[9]:  # student_ids
+                student_id_list = [int(x) for x in row[9].split(',') if x]
+                student_names = [students_map.get(sid, '') for sid in student_id_list if students_map.get(sid)]
+            
             week_schedule[weekday_idx][time_slot] = {
                 "id": row[0],
                 "subject": row[4] or '',
                 "teacher": row[8] or '',
                 "place": row[5] or '',
                 "duration": float(row[7]) if row[7] else 2,
-                "status": row[6]
+                "status": row[6],
+                "student_ids": student_id_list,
+                "students": student_names
             }
         
         return jsonify({"code": 200, "data": week_schedule})
@@ -808,7 +823,7 @@ def schedule_check():
 
 @app.route("/api/schedule/save", methods=["POST"])
 def schedule_save():
-    """保存排课"""
+    """保存排课 - 支持多学生"""
     try:
         data = request.json
         print("=== 收到保存请求 ===")
@@ -817,7 +832,7 @@ def schedule_save():
         # 提取数据
         subject = data.get('subject')
         teacher_id = data.get('teacher_id')
-        student_id = data.get('student_id')
+        student_ids = data.get('student_ids')  # 新增：获取学生ID字符串
         classroom = data.get('classroom')
         class_date = data.get('date')
         class_time = data.get('time')
@@ -838,6 +853,10 @@ def schedule_save():
             except (ValueError, TypeError):
                 teacher_id = None
         
+        # 处理 student_ids（已经是逗号分隔的字符串）
+        if student_ids and isinstance(student_ids, list):
+            student_ids = ','.join(map(str, student_ids))
+        
         db = get_db()
         cur = db.cursor()
         
@@ -853,22 +872,22 @@ def schedule_save():
         if existing:
             cur.execute("""
                 UPDATE course_schedule 
-                SET subject = %s, teacher_id = %s, student_id = %s, classroom = %s, duration = %s, status = 'scheduled'
+                SET subject = %s, teacher_id = %s, student_ids = %s, classroom = %s, duration = %s, status = 'scheduled'
                 WHERE id = %s
-            """, (subject, teacher_id, student_id, classroom, duration, existing[0]))
+            """, (subject, teacher_id, student_ids, classroom, duration, existing[0]))
             msg = "更新成功"
         else:
             cur.execute("""
                 INSERT INTO course_schedule 
-                (subject, teacher_id, student_id, classroom, class_date, class_time, duration, status)
+                (subject, teacher_id, student_ids, classroom, class_date, class_time, duration, status)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, 'scheduled')
                 RETURNING id
-            """, (subject, teacher_id, student_id, classroom, class_date, class_time, duration))
+            """, (subject, teacher_id, student_ids, classroom, class_date, class_time, duration))
             new_id = cur.fetchone()[0]
             msg = f"添加成功，ID: {new_id}"
         
         db.commit()
-        print(f"数据库操作成功: {msg}")
+        print(f"数据库操作成功: {msg}, student_ids: {student_ids}")
         
         cur.close()
         db.close()
@@ -879,9 +898,10 @@ def schedule_save():
         traceback.print_exc()
         return jsonify({"code": 500, "msg": str(e)}), 500
 
+
 @app.route("/api/schedule/update", methods=["POST"])
 def schedule_update():
-    """更新排课信息"""
+    """更新排课信息 - 支持多学生"""
     try:
         data = request.json
         print("=== 收到更新请求 ===")
@@ -890,7 +910,7 @@ def schedule_update():
         schedule_id = data.get('id')
         subject = data.get('subject')
         teacher_id = data.get('teacher_id')
-        student_id = data.get('student_id')
+        student_ids = data.get('student_ids')  # 新增：获取学生ID字符串
         classroom = data.get('classroom')
         class_date = data.get('date')
         class_time = data.get('time')
@@ -906,18 +926,22 @@ def schedule_update():
             except (ValueError, TypeError):
                 teacher_id = None
         
+        # 处理 student_ids
+        if student_ids and isinstance(student_ids, list):
+            student_ids = ','.join(map(str, student_ids))
+        
         db = get_db()
         cur = db.cursor()
         
         cur.execute("""
             UPDATE course_schedule 
-            SET subject = %s, teacher_id = %s, student_id = %s, 
+            SET subject = %s, teacher_id = %s, student_ids = %s, 
                 classroom = %s, class_date = %s, class_time = %s, duration = %s
             WHERE id = %s
-        """, (subject, teacher_id, student_id, classroom, class_date, class_time, duration, schedule_id))
+        """, (subject, teacher_id, student_ids, classroom, class_date, class_time, duration, schedule_id))
         
         db.commit()
-        print(f"更新成功，ID: {schedule_id}")
+        print(f"更新成功，ID: {schedule_id}, student_ids: {student_ids}")
         
         cur.close()
         db.close()
