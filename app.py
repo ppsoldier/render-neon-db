@@ -689,9 +689,11 @@ def get_week_schedule():
         cur.close()
         db.close()
         
+        # 构建数据结构：week_schedule[weekday][time_slot] = [课程列表]
         week_schedule = {}
         for row in data:
             weekday = int(row[2])
+            # 转换：数据库周日=0，我们改为周一=0，周日=6
             weekday_idx = 6 if weekday == 0 else weekday - 1
             time_slot = row[3]
             
@@ -722,6 +724,8 @@ def get_week_schedule():
         return jsonify({"code": 200, "data": week_schedule})
     except Exception as e:
         print(f"获取周课表错误: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"code": 500, "msg": str(e)}), 500
 
 @app.route("/api/schedule/detail/<int:schedule_id>", methods=["GET"])
