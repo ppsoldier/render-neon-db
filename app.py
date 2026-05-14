@@ -735,22 +735,50 @@ def schedule_detail(schedule_id):
         db = get_db()
         cur = db.cursor()
         
+        # 先检查表结构
         cur.execute("""
-            SELECT 
-                s.id,
-                s.student_id,
-                s.teacher_id,
-                s.class_date,
-                s.class_time,
-                s.subject,
-                s.classroom,
-                s.status,
-                s.duration,
-                t.name as teacher_name
-            FROM course_schedule s
-            LEFT JOIN teacher t ON s.teacher_id = t.id
-            WHERE s.id = %s
-        """, (schedule_id,))
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_name = 'course_schedule' AND column_name = 'student_ids'
+        """)
+        has_student_ids = cur.fetchone() is not None
+        
+        if has_student_ids:
+            cur.execute("""
+                SELECT 
+                    s.id,
+                    s.student_id,
+                    s.teacher_id,
+                    s.class_date,
+                    s.class_time,
+                    s.subject,
+                    s.classroom,
+                    s.status,
+                    s.duration,
+                    COALESCE(s.student_ids, '') as student_ids,
+                    t.name as teacher_name
+                FROM course_schedule s
+                LEFT JOIN teacher t ON s.teacher_id = t.id
+                WHERE s.id = %s
+            """, (schedule_id,))
+        else:
+            cur.execute("""
+                SELECT 
+                    s.id,
+                    s.student_id,
+                    s.teacher_id,
+                    s.class_date,
+                    s.class_time,
+                    s.subject,
+                    s.classroom,
+                    s.status,
+                    s.duration,
+                    '' as student_ids,
+                    t.name as teacher_name
+                FROM course_schedule s
+                LEFT JOIN teacher t ON s.teacher_id = t.id
+                WHERE s.id = %s
+            """, (schedule_id,))
         
         data = cur.fetchone()
         cur.close()
@@ -769,11 +797,13 @@ def schedule_detail(schedule_id):
                     "classroom": data[6] or '',
                     "status": data[7] or 'scheduled',
                     "duration": float(data[8]) if data[8] else 2,
-                    "teacher_name": data[9] or ''
+                    "student_ids": data[9] or '',
+                    "teacher_name": data[10] or ''
                 }
             })
         return jsonify({"code": 404, "msg": "排课不存在"})
     except Exception as e:
+        print(f"获取排课详情错误: {str(e)}")
         return jsonify({"code": 500, "msg": str(e)}), 500
 
 @app.route("/api/schedule/check", methods=["POST"])
