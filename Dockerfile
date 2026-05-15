@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # 复制依赖文件
-COPY requirements.txt .
+COPY requirements_stock.txt .
 RUN pip install --no-cache-dir -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 # 复制代码
@@ -19,4 +19,4 @@ COPY . .
 EXPOSE 8081
 
 # 启动命令
-CMD ["python", "app.py"]
+CMD ["python", "app_stock.py"]
