@@ -453,40 +453,67 @@ async def get_watchlist(user_id: str):
     async with pool.acquire() as conn:
         await conn.execute("SET search_path TO stock_watch")
         rows = await conn.fetch("""
-            SELECT w.stock_code, s.stock_name, w.alert_threshold,
+            SELECT w.stock_code, s.stock_name, w.alert_threshold, w.alert_enabled,
                    r.last_price, r.change_percent
             FROM watchlists w
             JOIN stocks s ON w.stock_code = s.stock_code
             LEFT JOIN realtime_quotes r ON w.stock_code = r.stock_code
             WHERE w.user_id = $1
+            ORDER BY w.added_at
         """, user_id)
         
-        return [{
-            "stock_code": row['stock_code'],
-            "stock_name": row['stock_name'],
-            "price": float(row['last_price']) if row['last_price'] else 0,
-            "change_percent": float(row['change_percent']) if row['change_percent'] else 0,
-            "alert_threshold": float(row['alert_threshold'])
-        } for row in rows]
+        return [
+            {
+                "stock_code": row['stock_code'],
+                "stock_name": row['stock_name'],
+                "price": float(row['last_price']) if row['last_price'] else 0,
+                "change_percent": float(row['change_percent']) if row['change_percent'] else 0,
+                "alert_threshold": float(row['alert_threshold']),
+                "alert_enabled": row['alert_enabled']
+            }
+            for row in rows
+        ]
+
 
 @app.post("/api/watchlist")
-async def add_watchlist(user_id: str, item: WatchlistItem):
+async def add_watchlist(request: Request):
     """添加自选股"""
-    pool = await get_db()
-    async with pool.acquire() as conn:
-        await conn.execute("SET search_path TO stock_watch")
-        stock = await conn.fetchrow("SELECT stock_code FROM stocks WHERE stock_code = $1", item.stock_code)
-        if not stock:
-            raise HTTPException(status_code=404, detail="Stock not found")
+    try:
+        body = await request.json()
+        user_id = body.get('user_id')
+        stock_code = body.get('stock_code')
+        alert_threshold = body.get('alert_threshold', 3.0)
         
-        await conn.execute("""
-            INSERT INTO watchlists (user_id, stock_code, alert_threshold, alert_enabled)
-            VALUES ($1, $2, $3, $4)
-            ON CONFLICT (user_id, stock_code) DO UPDATE SET
-                alert_threshold = EXCLUDED.alert_threshold
-        """, user_id, item.stock_code, item.alert_threshold, True)
+        if not user_id or not stock_code:
+            return {"success": False, "message": "user_id and stock_code required"}
         
-        return {"success": True, "message": "Added to watchlist"}
+        pool = await get_db()
+        async with pool.acquire() as conn:
+            await conn.execute("SET search_path TO stock_watch")
+            
+            # 如果股票不存在，先插入股票基本信息
+            stock_exists = await conn.fetchval("SELECT 1 FROM stocks WHERE stock_code = $1", stock_code)
+            if not stock_exists:
+                await conn.execute("""
+                    INSERT INTO stocks (stock_code, stock_name, market)
+                    VALUES ($1, $2, $3)
+                    ON CONFLICT DO NOTHING
+                """, stock_code, stock_code, 'Unknown')
+            
+            await conn.execute("""
+                INSERT INTO watchlists (user_id, stock_code, alert_threshold, alert_enabled, added_at)
+                VALUES ($1, $2, $3, $4, NOW())
+                ON CONFLICT (user_id, stock_code) DO UPDATE SET
+                    alert_threshold = EXCLUDED.alert_threshold,
+                    alert_enabled = EXCLUDED.alert_enabled,
+                    added_at = NOW()
+            """, user_id, stock_code, alert_threshold, True)
+            
+            return {"success": True, "message": "Added to watchlist"}
+    except Exception as e:
+        logger.error(f"Add watchlist error: {e}")
+        return {"success": False, "message": str(e)}
+
 
 @app.delete("/api/watchlist")
 async def remove_watchlist(user_id: str, stock_code: str):
@@ -495,22 +522,34 @@ async def remove_watchlist(user_id: str, stock_code: str):
     async with pool.acquire() as conn:
         await conn.execute("SET search_path TO stock_watch")
         await conn.execute("""
-            DELETE FROM watchlists WHERE user_id = $1 AND stock_code = $2
+            DELETE FROM watchlists
+            WHERE user_id = $1 AND stock_code = $2
         """, user_id, stock_code)
         return {"success": True, "message": "Removed from watchlist"}
 
+
 @app.post("/api/watchlist/alert")
-async def set_alert(user_id: str, alert: AlertSetting):
+async def set_alert(request: Request):
     """设置涨跌提醒"""
-    pool = await get_db()
-    async with pool.acquire() as conn:
-        await conn.execute("SET search_path TO stock_watch")
-        await conn.execute("""
-            UPDATE watchlists
-            SET alert_threshold = $1, alert_enabled = $2
-            WHERE user_id = $3 AND stock_code = $4
-        """, alert.threshold, alert.enabled, user_id, alert.stock_code)
-        return {"success": True, "message": "Alert set successfully"}
+    try:
+        body = await request.json()
+        user_id = body.get('user_id')
+        stock_code = body.get('stock_code')
+        threshold = body.get('threshold', 3.0)
+        enabled = body.get('enabled', True)
+        
+        pool = await get_db()
+        async with pool.acquire() as conn:
+            await conn.execute("SET search_path TO stock_watch")
+            await conn.execute("""
+                UPDATE watchlists
+                SET alert_threshold = $1, alert_enabled = $2
+                WHERE user_id = $3 AND stock_code = $4
+            """, threshold, enabled, user_id, stock_code)
+            return {"success": True, "message": "Alert set successfully"}
+    except Exception as e:
+        logger.error(f"Set alert error: {e}")
+        return {"success": False, "message": str(e)}
 
 # ========== 按首字母搜索接口 ==========
 @app.get("/api/stock/search-by-letter")
