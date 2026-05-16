@@ -10,6 +10,11 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from contextlib import asynccontextmanager
 import logging
 import json
+# ========== 导入新模块 ==========
+import requests
+import hashlib
+import time
+from datetime import datetime
 
 # ========== 拼音首字母映射表（从您提供的数据生成）==========
 PINYIN_MAP = {
@@ -759,6 +764,245 @@ async def get_latest_research(limit: int = Query(20, ge=1, le=50)):
         except Exception as e:
             logger.error(f"最新研报接口错误: {e}")
             return []
+
+# ========== 9FZT 实时数据接口 ==========
+
+# 获取股票涨幅榜 signature
+def generate_signature(listed_sector, sort_field, sort_type, timestamp, page):
+    base_string = f"sjdxfnqogbzoun13d971ckh8p{listed_sector}{page}20{sort_field}{sort_type}{timestamp}"
+    return hashlib.md5(base_string.encode()).hexdigest()
+
+# 获取股票行业板块排行榜 signature
+def get_signature(time_stamp):
+    base_string = f"sjdxfnqogbzoun13d971ckh8p{time_stamp}"
+    return hashlib.md5(base_string.encode()).hexdigest()
+
+# 股票涨跌幅排行（实时数据）
+async def fetch_realtime_rank(sort_type: str):
+    """获取实时涨跌幅排行数据
+    sort_type: '0' 涨幅榜, '1' 跌幅榜
+    """
+    stock_rank = []
+    for page in range(1, 3):
+        timestamp = str(int(time.time() * 1000))
+        params = {
+            'pageNum': str(page),
+            'pageSize': '20',
+            'listedSector': '0',
+            'sortField': 'pxChangeRate',
+            'sortType': sort_type,
+        }
+        
+        signature = generate_signature(
+            listed_sector=params['listedSector'],
+            sort_field=params['sortField'],
+            sort_type=params['sortType'],
+            timestamp=timestamp,
+            page=page
+        )
+        
+        headers = {
+            'accept': 'application/json, text/plain, */*',
+            'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            'origin': 'https://www.9fzt.com',
+            'referer': 'https://www.9fzt.com/',
+            'signature': signature,
+            'timestamp': timestamp,
+            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        
+        url = 'https://api-hq.chongnengjihua.com/finance/api/2/stock/a/rank/list'
+        
+        try:
+            response = requests.get(url=url, params=params, headers=headers, timeout=10)
+            data = response.json()
+            
+            if not data or 'data' not in data or 'infos' not in data['data']:
+                break
+                
+            infos = data['data']['infos']
+            for item in infos:
+                stock_rank.append({
+                    "stock_code": item['symbol'],
+                    "stock_name": item['prodName'],
+                    "price": item['closePx'],
+                    "change_percent": round(item['pxChangeRate'] * 100, 2),
+                    "volume": item.get('volume', 0),
+                    "amount": item.get('turnover', 0)
+                })
+            time.sleep(0.5)
+        except Exception as e:
+            logger.error(f"Fetch realtime rank error: {e}")
+            continue
+    
+    return stock_rank
+
+# 获取行业/概念板块排行榜
+async def fetch_sector_rank(hq_type_code: str):
+    """获取板块排行榜
+    hq_type_code: 'HY' 行业, 'GN' 概念
+    """
+    sector_rank = []
+    for page in range(1, 2):
+        timestamp = str(int(time.time() * 1000))
+        params = {
+            'hqTypeCode': hq_type_code,
+            'sortFlag': 'true',
+            'sortFields': 'pxChangeRate',
+            'pageNum': page,
+            'pageSize': '30',
+        }
+        
+        sign = get_signature(timestamp)
+        
+        headers = {
+            'accept': 'application/json, text/plain, */*',
+            'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            'origin': 'https://stock.9fzt.com',
+            'referer': 'https://stock.9fzt.com/',
+            'signature': sign,
+            'timestamp': timestamp,
+            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        
+        url = 'https://hq.chongnengjihua.com/rjhy-quote-sector/api/1/pc/plate/block/quote/list'
+        
+        try:
+            response = requests.get(url=url, headers=headers, params=params)
+            data = response.json()
+            
+            if not data or 'data' not in data or 'plate' not in data['data']:
+                break
+                
+            plates = data['data']['plate']
+            for item in plates:
+                sector_rank.append({
+                    "sector_code": item['ProdCode'],
+                    "sector_name": item['ProdName'],
+                    "price": round(item['LastPx'] / 1000, 2),
+                    "change_percent": round(item['PxChangeRate'] / 100, 2)
+                })
+            time.sleep(0.5)
+        except Exception as e:
+            logger.error(f"Fetch sector rank error: {e}")
+            continue
+    
+    return sector_rank
+
+# ========== 新增 API 接口 ==========
+
+@app.get("/api/realtime/ranks")
+async def get_realtime_ranks(rank_type: str = Query("up", description="up/down")):
+    """获取实时涨跌幅榜单（从9FZT实时获取）"""
+    sort_type = '0' if rank_type == 'up' else '1'
+    try:
+        ranks = await fetch_realtime_rank(sort_type)
+        return {
+            "code": 200,
+            "message": "success",
+            "data": ranks,
+            "update_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+    except Exception as e:
+        logger.error(f"Get realtime ranks error: {e}")
+        return {
+            "code": 500,
+            "message": str(e),
+            "data": []
+        }
+
+@app.get("/api/realtime/industry")
+async def get_realtime_industry():
+    """获取实时行业板块排行"""
+    try:
+        industries = await fetch_sector_rank('HY')
+        return {
+            "code": 200,
+            "message": "success",
+            "data": industries,
+            "update_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+    except Exception as e:
+        logger.error(f"Get realtime industry error: {e}")
+        return {
+            "code": 500,
+            "message": str(e),
+            "data": []
+        }
+
+@app.get("/api/realtime/concept")
+async def get_realtime_concept():
+    """获取实时概念板块排行"""
+    try:
+        concepts = await fetch_sector_rank('GN')
+        return {
+            "code": 200,
+            "message": "success",
+            "data": concepts,
+            "update_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+    except Exception as e:
+        logger.error(f"Get realtime concept error: {e}")
+        return {
+            "code": 500,
+            "message": str(e),
+            "data": []
+        }
+
+# 更新原有的榜单接口，可选使用实时数据
+@app.get("/api/market/ranks")
+async def get_market_ranks(
+    rank_type: str = Query("up", description="up/down"),
+    limit: int = Query(20, ge=1, le=100),
+    source: str = Query("database", description="database/realtime")
+):
+    """获取涨跌幅榜单（可选从数据库或实时API）"""
+    if source == "realtime":
+        sort_type = '0' if rank_type == 'up' else '1'
+        try:
+            ranks = await fetch_realtime_rank(sort_type)
+            ranks = ranks[:limit]
+            return [
+                {
+                    "stock_code": item["stock_code"],
+                    "stock_name": item["stock_name"],
+                    "price": item["price"],
+                    "change_percent": item["change_percent"],
+                    "volume": item.get("volume", 0),
+                    "amount": item.get("amount", 0)
+                }
+                for item in ranks
+            ]
+        except Exception as e:
+            logger.error(f"Realtime rank error: {e}")
+            # 失败时回退到数据库
+    
+    # 从数据库获取（原有逻辑）
+    pool = await get_db()
+    async with pool.acquire() as conn:
+        await conn.execute("SET search_path TO stock_watch")
+        order = "DESC" if rank_type == "up" else "ASC"
+        rows = await conn.fetch(f"""
+            SELECT r.stock_code, s.stock_name, r.last_price, r.change_percent, r.volume, r.amount
+            FROM realtime_quotes r
+            JOIN stocks s ON r.stock_code = s.stock_code
+            WHERE r.change_percent IS NOT NULL
+            ORDER BY r.change_percent {order}
+            LIMIT $1
+        """, limit)
+        
+        return [
+            {
+                "stock_code": row['stock_code'],
+                "stock_name": row['stock_name'],
+                "price": float(row['last_price']) if row['last_price'] else 0,
+                "change_percent": float(row['change_percent']) if row['change_percent'] else 0,
+                "volume": row['volume'],
+                "amount": row['amount']
+            }
+            for row in rows
+        ]
+
 
 # ========== 定时任务 ==========
 scheduler = BackgroundScheduler()
