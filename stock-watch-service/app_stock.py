@@ -916,10 +916,18 @@ async def get_realtime_industry():
     """获取实时行业板块排行"""
     try:
         industries = await fetch_sector_rank('HY')
+        # 格式化返回数据，确保字段名与前端一致
+        formatted_data = []
+        for item in industries:
+            formatted_data.append({
+                "industry_code": item.get("sector_code", ""),
+                "industry_name": item.get("sector_name", ""),
+                "change_percent": item.get("change_percent", 0)
+            })
         return {
             "code": 200,
             "message": "success",
-            "data": industries,
+            "data": formatted_data,
             "update_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
     except Exception as e:
@@ -935,10 +943,18 @@ async def get_realtime_concept():
     """获取实时概念板块排行"""
     try:
         concepts = await fetch_sector_rank('GN')
+        # 格式化返回数据，确保字段名与前端一致
+        formatted_data = []
+        for item in concepts:
+            formatted_data.append({
+                "concept_code": item.get("sector_code", ""),
+                "concept_name": item.get("sector_name", ""),
+                "change_percent": item.get("change_percent", 0)
+            })
         return {
             "code": 200,
             "message": "success",
-            "data": concepts,
+            "data": formatted_data,
             "update_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
     except Exception as e:
