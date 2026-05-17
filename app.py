@@ -1078,6 +1078,119 @@ def schedule_tomorrow():
     except Exception as e:
         return jsonify({"code": 500, "msg": str(e)}), 500
 
+@app.route("/api/schedule/copy_week", methods=["POST"])
+def copy_week_schedule():
+    """复制本周课程到下一周"""
+    try:
+        data = request.json
+        current_start_date = data.get('current_start_date')
+        current_end_date = data.get('current_end_date')
+        
+        if not current_start_date or not current_end_date:
+            return jsonify({"code": 400, "msg": "缺少日期参数"}), 400
+        
+        db = get_db()
+        cur = db.cursor()
+        
+        # 获取本周的所有课程
+        cur.execute("""
+            SELECT 
+                student_id,
+                teacher_id,
+                subject,
+                classroom,
+                class_time,
+                duration,
+                student_ids,
+                repeat_type
+            FROM course_schedule
+            WHERE class_date BETWEEN %s AND %s
+              AND (status IS NULL OR status != 'cancelled')
+        """, (current_start_date, current_end_date))
+        
+        courses = cur.fetchall()
+        
+        if not courses:
+            cur.close()
+            db.close()
+            return jsonify({"code": 200, "msg": "本周没有课程可复制", "count": 0})
+        
+        # 计算下一周的日期范围（当前日期 + 7天）
+        from datetime import datetime, timedelta
+        
+        current_start = datetime.strptime(current_start_date, "%Y-%m-%d")
+        next_start = current_start + timedelta(days=7)
+        next_end = next_start + timedelta(days=6)
+        
+        # 计算日期偏移量
+        def get_new_date(old_date_str, current_start, next_start):
+            old_date = datetime.strptime(old_date_str, "%Y-%m-%d")
+            # 计算在当前周的第几天
+            day_offset = (old_date - current_start).days
+            # 计算新日期
+            new_date = next_start + timedelta(days=day_offset)
+            return new_date.strftime("%Y-%m-%d")
+        
+        copied_count = 0
+        for course in courses:
+            # 获取原课程的具体日期（需要查询）
+            cur.execute("""
+                SELECT class_date FROM course_schedule
+                WHERE student_id = %s AND teacher_id = %s 
+                AND subject = %s AND class_time = %s
+                AND class_date BETWEEN %s AND %s
+                LIMIT 1
+            """, (course[0], course[1], course[2], course[4], current_start_date, current_end_date))
+            
+            date_result = cur.fetchone()
+            if not date_result:
+                continue
+            
+            old_date = date_result[0]
+            new_date = get_new_date(str(old_date), current_start, next_start)
+            
+            # 检查下一周是否已经有相同时间段的课程
+            cur.execute("""
+                SELECT id FROM course_schedule
+                WHERE class_date = %s AND class_time = %s
+                AND (status IS NULL OR status != 'cancelled')
+            """, (new_date, course[4]))
+            
+            existing = cur.fetchone()
+            
+            if existing:
+                # 如果已存在，跳过
+                continue
+            
+            # 插入新课程
+            cur.execute("""
+                INSERT INTO course_schedule 
+                (student_id, teacher_id, subject, classroom, class_date, class_time, duration, student_ids, status)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'scheduled')
+            """, (course[0], course[1], course[2], course[3], new_date, course[4], course[5], course[6]))
+            
+            copied_count += 1
+        
+        db.commit()
+        cur.close()
+        db.close()
+        
+        return jsonify({
+            "code": 200, 
+            "msg": f"成功复制 {copied_count} 门课程到下一周",
+            "count": copied_count,
+            "next_week_start": next_start.strftime("%Y-%m-%d"),
+            "next_week_end": next_end.strftime("%Y-%m-%d")
+        })
+    except Exception as e:
+        print(f"复制周课表错误: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"code": 500, "msg": str(e)}), 500
+
+
+
+
 # ==================== 仪表盘数据 ====================
 @app.route("/api/dashboard/stats")
 def dashboard_stats():
