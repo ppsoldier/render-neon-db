@@ -1160,11 +1160,20 @@ def copy_week_schedule():
             duration = course[7]
             student_ids = course[8]
             
-            # 计算新日期（同星期几，加7天）
+            # 计算新日期：原日期 + 7天
+            # 注意：old_date 已经是 datetime.date 对象，需要转换为 datetime
+            if isinstance(old_date, str):
+                old_date = datetime.strptime(str(old_date), "%Y-%m-%d")
+            elif hasattr(old_date, 'strftime'):
+                # 已经是 datetime 对象
+                pass
+            else:
+                old_date = datetime.strptime(str(old_date), "%Y-%m-%d")
+            
             new_date = old_date + timedelta(days=7)
             new_date_str = new_date.strftime("%Y-%m-%d")
             
-            print(f"处理课程: {subject}, 原日期: {old_date}, 新日期: {new_date_str}")
+            print(f"处理课程: {subject}, 原日期: {old_date.strftime('%Y-%m-%d')}, 新日期: {new_date_str}")
             
             # 检查下一周是否已经有相同时间段的课程
             key = f"{new_date_str}_{class_time}"
@@ -1183,7 +1192,7 @@ def copy_week_schedule():
             """, (student_id, teacher_id, subject, classroom, new_date_str, class_time, duration, student_ids))
             
             new_id = cur.fetchone()[0]
-            print(f"  成功复制: ID {course_id} -> {new_id}")
+            print(f"  成功复制: ID {course_id} -> {new_id}, 日期: {new_date_str}")
             copied_count += 1
         
         db.commit()
@@ -1192,7 +1201,6 @@ def copy_week_schedule():
         
         print(f"复制完成: 成功 {copied_count} 门, 跳过 {skipped_count} 门")
         
-        # 构建返回消息
         if copied_count == 0:
             msg = "没有课程可复制到下一周"
         else:
