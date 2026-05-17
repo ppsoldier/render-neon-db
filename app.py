@@ -1130,6 +1130,22 @@ def copy_week_schedule():
         print(f"当前周: {current_start_date} ~ {current_end_date}")
         print(f"下一周: {next_start.strftime('%Y-%m-%d')} ~ {next_end.strftime('%Y-%m-%d')}")
         
+        # 先查询下一周已有哪些课程（用于冲突检测）
+        cur.execute("""
+            SELECT class_date, class_time, id
+            FROM course_schedule
+            WHERE class_date BETWEEN %s AND %s
+              AND (status IS NULL OR status != 'cancelled')
+        """, (next_start.strftime("%Y-%m-%d"), next_end.strftime("%Y-%m-%d")))
+        
+        existing_courses = cur.fetchall()
+        existing_map = {}
+        for ec in existing_courses:
+            key = f"{ec[0]}_{ec[1]}"
+            existing_map[key] = ec[2]
+        
+        print(f"下一周已有 {len(existing_courses)} 门课程")
+        
         copied_count = 0
         skipped_count = 0
         
@@ -1145,21 +1161,16 @@ def copy_week_schedule():
             student_ids = course[8]
             
             # 计算新日期（同星期几，加7天）
-            new_date = (old_date + timedelta(days=7)).strftime("%Y-%m-%d")
+            new_date = old_date + timedelta(days=7)
+            new_date_str = new_date.strftime("%Y-%m-%d")
             
-            print(f"处理课程: {subject}, 原日期: {old_date}, 新日期: {new_date}")
+            print(f"处理课程: {subject}, 原日期: {old_date}, 新日期: {new_date_str}")
             
             # 检查下一周是否已经有相同时间段的课程
-            cur.execute("""
-                SELECT id FROM course_schedule
-                WHERE class_date = %s AND class_time = %s
-                AND (status IS NULL OR status != 'cancelled')
-            """, (new_date, class_time))
+            key = f"{new_date_str}_{class_time}"
             
-            existing = cur.fetchone()
-            
-            if existing:
-                print(f"  跳过: 下一周 {new_date} {class_time} 已有课程")
+            if key in existing_map:
+                print(f"  跳过: 下一周 {new_date_str} {class_time} 已有课程 (ID: {existing_map[key]})")
                 skipped_count += 1
                 continue
             
@@ -1169,7 +1180,7 @@ def copy_week_schedule():
                 (student_id, teacher_id, subject, classroom, class_date, class_time, duration, student_ids, status)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'scheduled')
                 RETURNING id
-            """, (student_id, teacher_id, subject, classroom, new_date, class_time, duration, student_ids))
+            """, (student_id, teacher_id, subject, classroom, new_date_str, class_time, duration, student_ids))
             
             new_id = cur.fetchone()[0]
             print(f"  成功复制: ID {course_id} -> {new_id}")
@@ -1181,9 +1192,17 @@ def copy_week_schedule():
         
         print(f"复制完成: 成功 {copied_count} 门, 跳过 {skipped_count} 门")
         
+        # 构建返回消息
+        if copied_count == 0:
+            msg = "没有课程可复制到下一周"
+        else:
+            msg = f"成功复制 {copied_count} 门课程到下一周"
+            if skipped_count > 0:
+                msg += f"，跳过 {skipped_count} 门（下一周已有相同时间段课程）"
+        
         return jsonify({
             "code": 200, 
-            "msg": f"成功复制 {copied_count} 门课程到下一周，跳过 {skipped_count} 门（已有课程）",
+            "msg": msg,
             "count": copied_count,
             "skipped": skipped_count,
             "next_week_start": next_start.strftime("%Y-%m-%d"),
