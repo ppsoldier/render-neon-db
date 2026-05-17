@@ -1092,17 +1092,20 @@ def copy_week_schedule():
         db = get_db()
         cur = db.cursor()
         
-        # 获取本周的所有课程
+        # 获取本周的所有课程（包含具体日期）
         cur.execute("""
             SELECT 
+                id,
                 student_id,
                 teacher_id,
                 subject,
                 classroom,
+                class_date,
                 class_time,
                 duration,
                 student_ids,
-                repeat_type
+                repeat_type,
+                status
             FROM course_schedule
             WHERE class_date BETWEEN %s AND %s
               AND (status IS NULL OR status != 'cancelled')
@@ -1115,51 +1118,49 @@ def copy_week_schedule():
             db.close()
             return jsonify({"code": 200, "msg": "本周没有课程可复制", "count": 0})
         
-        # 计算下一周的日期范围（当前日期 + 7天）
+        print(f"找到 {len(courses)} 门课程待复制")
+        
+        # 计算下一周的日期范围
         from datetime import datetime, timedelta
         
         current_start = datetime.strptime(current_start_date, "%Y-%m-%d")
         next_start = current_start + timedelta(days=7)
         next_end = next_start + timedelta(days=6)
         
-        # 计算日期偏移量
-        def get_new_date(old_date_str, current_start, next_start):
-            old_date = datetime.strptime(old_date_str, "%Y-%m-%d")
-            # 计算在当前周的第几天
-            day_offset = (old_date - current_start).days
-            # 计算新日期
-            new_date = next_start + timedelta(days=day_offset)
-            return new_date.strftime("%Y-%m-%d")
+        print(f"当前周: {current_start_date} ~ {current_end_date}")
+        print(f"下一周: {next_start.strftime('%Y-%m-%d')} ~ {next_end.strftime('%Y-%m-%d')}")
         
         copied_count = 0
+        skipped_count = 0
+        
         for course in courses:
-            # 获取原课程的具体日期（需要查询）
-            cur.execute("""
-                SELECT class_date FROM course_schedule
-                WHERE student_id = %s AND teacher_id = %s 
-                AND subject = %s AND class_time = %s
-                AND class_date BETWEEN %s AND %s
-                LIMIT 1
-            """, (course[0], course[1], course[2], course[4], current_start_date, current_end_date))
+            course_id = course[0]
+            student_id = course[1]
+            teacher_id = course[2]
+            subject = course[3]
+            classroom = course[4]
+            old_date = course[5]
+            class_time = course[6]
+            duration = course[7]
+            student_ids = course[8]
             
-            date_result = cur.fetchone()
-            if not date_result:
-                continue
+            # 计算新日期（同星期几，加7天）
+            new_date = (old_date + timedelta(days=7)).strftime("%Y-%m-%d")
             
-            old_date = date_result[0]
-            new_date = get_new_date(str(old_date), current_start, next_start)
+            print(f"处理课程: {subject}, 原日期: {old_date}, 新日期: {new_date}")
             
             # 检查下一周是否已经有相同时间段的课程
             cur.execute("""
                 SELECT id FROM course_schedule
                 WHERE class_date = %s AND class_time = %s
                 AND (status IS NULL OR status != 'cancelled')
-            """, (new_date, course[4]))
+            """, (new_date, class_time))
             
             existing = cur.fetchone()
             
             if existing:
-                # 如果已存在，跳过
+                print(f"  跳过: 下一周 {new_date} {class_time} 已有课程")
+                skipped_count += 1
                 continue
             
             # 插入新课程
@@ -1167,18 +1168,24 @@ def copy_week_schedule():
                 INSERT INTO course_schedule 
                 (student_id, teacher_id, subject, classroom, class_date, class_time, duration, student_ids, status)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'scheduled')
-            """, (course[0], course[1], course[2], course[3], new_date, course[4], course[5], course[6]))
+                RETURNING id
+            """, (student_id, teacher_id, subject, classroom, new_date, class_time, duration, student_ids))
             
+            new_id = cur.fetchone()[0]
+            print(f"  成功复制: ID {course_id} -> {new_id}")
             copied_count += 1
         
         db.commit()
         cur.close()
         db.close()
         
+        print(f"复制完成: 成功 {copied_count} 门, 跳过 {skipped_count} 门")
+        
         return jsonify({
             "code": 200, 
-            "msg": f"成功复制 {copied_count} 门课程到下一周",
+            "msg": f"成功复制 {copied_count} 门课程到下一周，跳过 {skipped_count} 门（已有课程）",
             "count": copied_count,
+            "skipped": skipped_count,
             "next_week_start": next_start.strftime("%Y-%m-%d"),
             "next_week_end": next_end.strftime("%Y-%m-%d")
         })
