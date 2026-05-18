@@ -1019,6 +1019,201 @@ async def get_market_ranks(
             for row in rows
         ]
 
+# ========== 研报爬虫接口（基于9FZT）==========
+import requests
+import hashlib
+import time
+from datetime import datetime
+
+# 获取研报列表的签名函数
+def get_report_signature(timestamp, page_num):
+    """生成研报接口签名"""
+    base_string = f"sjdxfnqogbzoun13d971ckh8p{timestamp}{page_num}20researchReportList"
+    return hashlib.md5(base_string.encode()).hexdigest()
+
+async def fetch_latest_research_from_9fzt(page: int = 1, page_size: int = 20):
+    """从9FZT获取最新研报数据"""
+    try:
+        timestamp = str(int(time.time() * 1000))
+        
+        # 请求参数
+        params = {
+            'pageNum': str(page),
+            'pageSize': str(page_size),
+            'type': 'researchReportList'
+        }
+        
+        # 生成签名
+        signature = get_report_signature(timestamp, page)
+        
+        headers = {
+            'accept': 'application/json, text/plain, */*',
+            'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            'origin': 'https://www.9fzt.com',
+            'referer': 'https://www.9fzt.com/',
+            'signature': signature,
+            'timestamp': timestamp,
+            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'sec-ch-ua': '"Not(A:Brand";v="8", "Chromium";v="144", "Microsoft Edge";v="144"',
+            'sec-ch-ua-mobile': '?0',
+            'sec-ch-ua-platform': '"Windows"',
+            'sec-fetch-dest': 'empty',
+            'sec-fetch-mode': 'cors',
+            'sec-fetch-site': 'cross-site'
+        }
+        
+        url = 'https://api-hq.chongnengjihua.com/finance/api/2/stock/a/rank/list'
+        
+        response = requests.get(url=url, params=params, headers=headers, timeout=15)
+        data = response.json()
+        
+        if not data or 'data' not in data or 'infos' not in data['data']:
+            return []
+        
+        reports = []
+        for item in data['data']['infos']:
+            # 提取研报信息
+            report = {
+                "id": item.get('id', ''),
+                "title": item.get('title', '') or item.get('prodName', '研究报告'),
+                "stock_code": item.get('symbol', ''),
+                "stock_name": item.get('prodName', ''),
+                "publisher": item.get('publisher', '券商研究'),
+                "publish_date": item.get('publishDate', ''),
+                "rating": item.get('rating', '推荐'),
+                "summary": item.get('summary', '点击查看详细内容'),
+                "url": item.get('url', '')
+            }
+            reports.append(report)
+        
+        return reports
+    except Exception as e:
+        logger.error(f"Fetch research from 9fzt error: {e}")
+        return []
+
+
+@app.get("/api/research/latest-v2")
+async def get_latest_research_v2(
+    page: int = Query(1, ge=1, le=10),
+    page_size: int = Query(20, ge=1, le=50)
+):
+    """获取最新研报（从9FZT实时爬取）"""
+    try:
+        reports = await fetch_latest_research_from_9fzt(page, page_size)
+        
+        if reports:
+            return {
+                "code": 200,
+                "message": "success",
+                "data": reports,
+                "total": len(reports),
+                "update_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "source": "9fzt"
+            }
+        else:
+            # 如果爬取失败，返回数据库中的模拟数据
+            return await get_local_research(page, page_size)
+    except Exception as e:
+        logger.error(f"Get latest research error: {e}")
+        return await get_local_research(page, page_size)
+
+
+async def get_local_research(page: int, page_size: int):
+    """从本地数据库获取研报（备用）"""
+    pool = await get_db()
+    async with pool.acquire() as conn:
+        await conn.execute("SET search_path TO stock_watch")
+        
+        offset = (page - 1) * page_size
+        rows = await conn.fetch("""
+            SELECT r.id, r.title, r.publisher, r.publish_date, r.rating, 
+                   r.summary, r.stock_code, s.stock_name
+            FROM research_reports r
+            LEFT JOIN stocks s ON r.stock_code = s.stock_code
+            ORDER BY r.publish_date DESC
+            LIMIT $1 OFFSET $2
+        """, page_size, offset)
+        
+        reports = [
+            {
+                "id": row['id'],
+                "title": row['title'],
+                "stock_code": row['stock_code'],
+                "stock_name": row['stock_name'] or row['stock_code'],
+                "publisher": row['publisher'],
+                "publish_date": row['publish_date'].strftime("%Y-%m-%d") if row['publish_date'] else "",
+                "rating": row['rating'],
+                "summary": row['summary']
+            }
+            for row in rows
+        ]
+        
+        return {
+            "code": 200,
+            "message": "success",
+            "data": reports,
+            "total": len(reports),
+            "update_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "source": "database"
+        }
+
+
+# 个股研报接口（增强版，优先从爬虫获取）
+@app.get("/api/research/stock-v2")
+async def get_stock_research_v2(
+    stock_code: str,
+    limit: int = Query(20, ge=1, le=50)
+):
+    """获取个股研报（从9FZT实时爬取）"""
+    try:
+        # 从9FZT搜索该股票的研报
+        reports = await fetch_stock_research_from_9fzt(stock_code, limit)
+        if reports:
+            return {
+                "code": 200,
+                "message": "success",
+                "data": reports,
+                "source": "9fzt"
+            }
+    except Exception as e:
+        logger.error(f"Fetch stock research error: {e}")
+    
+    # 回退到本地数据库
+    return await get_local_stock_research(stock_code, limit)
+
+
+async def fetch_stock_research_from_9fzt(stock_code: str, limit: int):
+    """从9FZT搜索个股研报"""
+    # 由于9FZT的研报搜索可能需要不同的接口
+    # 这里先返回空，后续可根据实际接口完善
+    return []
+
+
+async def get_local_stock_research(stock_code: str, limit: int):
+    """从本地数据库获取个股研报"""
+    pool = await get_db()
+    async with pool.acquire() as conn:
+        await conn.execute("SET search_path TO stock_watch")
+        
+        rows = await conn.fetch("""
+            SELECT title, publisher, publish_date, rating, summary
+            FROM research_reports
+            WHERE stock_code = $1
+            ORDER BY publish_date DESC
+            LIMIT $2
+        """, stock_code, limit)
+        
+        return [
+            {
+                "title": row['title'],
+                "publisher": row['publisher'],
+                "publish_date": row['publish_date'].strftime("%Y-%m-%d") if row['publish_date'] else None,
+                "rating": row['rating'],
+                "summary": row['summary']
+            }
+            for row in rows
+        ]
+
 
 # ========== 定时任务 ==========
 scheduler = BackgroundScheduler()
