@@ -1059,7 +1059,14 @@ async def fetch_jiufang_research(page: int = 1, page_size: int = 20):
         response = requests.get(url=url, params=params, headers=headers, timeout=15)
         data = response.json()
         
-        print(f"九方智投原始响应: {json.dumps(data, ensure_ascii=False)[:500]}")  # 打印前500字符
+        # 打印完整的原始数据，查看所有可用字段
+        print("=" * 50)
+        print("九方智投原始响应（第一条数据的所有字段）:")
+        if data.get('data', {}).get('infos'):
+            first_item = data['data']['infos'][0]
+            for key, value in first_item.items():
+                print(f"  {key}: {value}")
+        print("=" * 50)
         
         if not data or 'data' not in data:
             return []
@@ -1070,14 +1077,16 @@ async def fetch_jiufang_research(page: int = 1, page_size: int = 20):
         
         reports = []
         for item in infos:
-            # 使用九方智投原始字段
+            # 打印每条数据的关键字段
+            print(f"处理研报: symbol={item.get('symbol')}, title={item.get('title')}, orgNameDisc={item.get('orgNameDisc')}, orgDescription={item.get('orgDescription')}")
+            
             report = {
                 "id": item.get('id', ''),
-                "stock_code": item.get('symbol', ''),           # 股票代码
-                "stock_name": item.get('prodName', ''),         # 股票名称
-                "title": item.get('title', item.get('prodName', '研究报告')),  # 研报标题（使用原始title）
-                "publisher": item.get('orgNameDisc', ''),       # 券商名称（使用orgNameDisc）
-                "rating": item.get('orgDescription', '关注'),    # 评级
+                "stock_code": item.get('symbol', ''),
+                "stock_name": item.get('prodName', ''),
+                "title": item.get('title', item.get('prodName', '研究报告')),
+                "publisher": item.get('orgNameDisc', ''),  # 券商名称
+                "rating": item.get('orgDescription', '关注'),  # 评级
                 "publish_date": item.get('publishDate', datetime.now().strftime("%Y-%m-%d")),
                 "summary": item.get('summary', '点击查看详细内容'),
                 "url": item.get('url', '')
