@@ -1009,32 +1009,29 @@ async def get_market_ranks(
             for row in rows
         ]
 
-# ========== 研报爬虫接口（基于9FZT）==========
+# ========== 九方智投研报接口 ==========
 import requests
 import hashlib
 import time
 from datetime import datetime
 
-# 获取研报列表的签名函数
-def get_report_signature(timestamp, page_num):
-    """生成研报接口签名"""
+def get_jiufang_signature(timestamp, page_num):
+    """生成九方智投研报接口签名"""
     base_string = f"sjdxfnqogbzoun13d971ckh8p{timestamp}{page_num}20researchReportList"
     return hashlib.md5(base_string.encode()).hexdigest()
 
-async def fetch_latest_research_from_9fzt(page: int = 1, page_size: int = 20):
-    """从9FZT获取最新研报数据"""
+async def fetch_jiufang_research(page: int = 1, page_size: int = 20):
+    """从九方智投获取研报数据"""
     try:
         timestamp = str(int(time.time() * 1000))
         
-        # 请求参数
         params = {
             'pageNum': str(page),
             'pageSize': str(page_size),
             'type': 'researchReportList'
         }
         
-        # 生成签名
-        signature = get_report_signature(timestamp, page)
+        signature = get_jiufang_signature(timestamp, page)
         
         headers = {
             'accept': 'application/json, text/plain, */*',
@@ -1057,20 +1054,21 @@ async def fetch_latest_research_from_9fzt(page: int = 1, page_size: int = 20):
         response = requests.get(url=url, params=params, headers=headers, timeout=15)
         data = response.json()
         
+        print(f"九方智投研报响应: {data}")  # 调试日志
+        
         if not data or 'data' not in data or 'infos' not in data['data']:
             return []
         
         reports = []
         for item in data['data']['infos']:
-            # 提取研报信息
             report = {
                 "id": item.get('id', ''),
                 "title": item.get('title', '') or item.get('prodName', '研究报告'),
                 "stock_code": item.get('symbol', ''),
                 "stock_name": item.get('prodName', ''),
-                "publisher": item.get('publisher', '券商研究'),
-                "publish_date": item.get('publishDate', ''),
-                "rating": item.get('rating', '推荐'),
+                "publisher": item.get('publisher', '九方智投'),
+                "publish_date": item.get('publishDate', datetime.now().strftime("%Y-%m-%d")),
+                "rating": item.get('rating', '关注'),
                 "summary": item.get('summary', '点击查看详细内容'),
                 "url": item.get('url', '')
             }
@@ -1078,8 +1076,34 @@ async def fetch_latest_research_from_9fzt(page: int = 1, page_size: int = 20):
         
         return reports
     except Exception as e:
-        logger.error(f"Fetch research from 9fzt error: {e}")
+        print(f"获取九方智投研报错误: {e}")
         return []
+
+
+@app.get("/api/research/jiufang")
+async def get_jiufang_research(
+    page: int = Query(1, ge=1, le=10),
+    page_size: int = Query(20, ge=1, le=50)
+):
+    """获取九方智投最新研报"""
+    try:
+        reports = await fetch_jiufang_research(page, page_size)
+        
+        if reports:
+            return {
+                "code": 200,
+                "message": "success",
+                "data": reports,
+                "total": len(reports),
+                "update_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "source": "九方智投"
+            }
+        else:
+            # 如果获取失败，返回本地数据
+            return await get_local_research(page, page_size)
+    except Exception as e:
+        print(f"获取九方智投研报异常: {e}")
+        return await get_local_research(page, page_size)
 
 
 @app.get("/api/research/latest-v2")
