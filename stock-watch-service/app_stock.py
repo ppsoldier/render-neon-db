@@ -1009,29 +1009,42 @@ async def get_market_ranks(
             for row in rows
         ]
 
-# ========== 九方智投研报接口 ==========
+# ========== 九方智投研报接口（修正版）==========
 import requests
 import hashlib
 import time
 from datetime import datetime
 
-def get_jiufang_signature(timestamp, page_num):
-    """生成九方智投研报接口签名"""
-    base_string = f"sjdxfnqogbzoun13d971ckh8p{timestamp}{page_num}20researchReportList"
-    return hashlib.md5(base_string.encode()).hexdigest()
+def get_real_signature(params):
+    """生成九方智投接口签名"""
+    secret = "sjdxfnqogbzoun13d971ckh8p"
+    timestamp = str(int(time.time() * 1000))
+
+    # 核心：按键排序 → 只拼接参数值（完全匹配JS）
+    sorted_keys = sorted(params.keys())
+    values_str = "".join([params[k] for k in sorted_keys])
+
+    # 签名拼接：密钥 + 值字符串 + 时间戳
+    sign_str = secret + values_str + timestamp
+    sign = hashlib.md5(sign_str.encode()).hexdigest()
+
+    return sign, timestamp
+
 
 async def fetch_jiufang_research(page: int = 1, page_size: int = 20):
     """从九方智投获取研报数据"""
     try:
-        timestamp = str(int(time.time() * 1000))
-        
+        # 构建请求参数
         params = {
             'pageNum': str(page),
             'pageSize': str(page_size),
-            'type': 'researchReportList'
+            'listedSector': '0',
+            'sortField': 'publishTime',
+            'sortType': '0',  # 0: 降序（最新），1: 升序
         }
         
-        signature = get_jiufang_signature(timestamp, page)
+        # 生成签名和时间戳
+        signature, timestamp = get_real_signature(params)
         
         headers = {
             'accept': 'application/json, text/plain, */*',
@@ -1051,16 +1064,26 @@ async def fetch_jiufang_research(page: int = 1, page_size: int = 20):
         
         url = 'https://api-hq.chongnengjihua.com/finance/api/2/stock/a/rank/list'
         
+        print(f"请求九方智投研报: page={page}, params={params}")
+        print(f"签名: {signature}, 时间戳: {timestamp}")
+        
         response = requests.get(url=url, params=params, headers=headers, timeout=15)
+        print(f"响应状态码: {response.status_code}")
+        
         data = response.json()
         
-        print(f"九方智投研报响应: {data}")  # 调试日志
+        if not data or 'data' not in data:
+            print("没有找到 data 字段")
+            return []
         
-        if not data or 'data' not in data or 'infos' not in data['data']:
+        infos = data.get('data', {}).get('infos', [])
+        if not infos:
+            print("没有找到研报数据")
             return []
         
         reports = []
-        for item in data['data']['infos']:
+        for item in infos:
+            # 提取研报信息
             report = {
                 "id": item.get('id', ''),
                 "title": item.get('title', '') or item.get('prodName', '研究报告'),
@@ -1074,6 +1097,7 @@ async def fetch_jiufang_research(page: int = 1, page_size: int = 20):
             }
             reports.append(report)
         
+        print(f"获取到 {len(reports)} 条研报")
         return reports
     except Exception as e:
         print(f"获取九方智投研报错误: {e}")
@@ -1099,12 +1123,51 @@ async def get_jiufang_research(
                 "source": "九方智投"
             }
         else:
-            # 如果获取失败，返回本地数据
+            print("九方智投无数据，返回本地数据")
             return await get_local_research(page, page_size)
     except Exception as e:
         print(f"获取九方智投研报异常: {e}")
         return await get_local_research(page, page_size)
 
+
+async def get_local_research(page: int, page_size: int):
+    """从本地数据库获取研报（备用）"""
+    pool = await get_db()
+    async with pool.acquire() as conn:
+        await conn.execute("SET search_path TO stock_watch")
+        
+        offset = (page - 1) * page_size
+        rows = await conn.fetch("""
+            SELECT r.id, r.title, r.publisher, r.publish_date, r.rating, 
+                   r.summary, r.stock_code, s.stock_name
+            FROM research_reports r
+            LEFT JOIN stocks s ON r.stock_code = s.stock_code
+            ORDER BY r.publish_date DESC
+            LIMIT $1 OFFSET $2
+        """, page_size, offset)
+        
+        reports = [
+            {
+                "id": row['id'],
+                "title": row['title'],
+                "stock_code": row['stock_code'],
+                "stock_name": row['stock_name'] or row['stock_code'],
+                "publisher": row['publisher'],
+                "publish_date": row['publish_date'].strftime("%Y-%m-%d") if row['publish_date'] else "",
+                "rating": row['rating'],
+                "summary": row['summary']
+            }
+            for row in rows
+        ]
+        
+        return {
+            "code": 200,
+            "message": "success",
+            "data": reports,
+            "total": len(reports),
+            "update_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "source": "database"
+        }
 
 @app.get("/api/research/latest-v2")
 async def get_latest_research_v2(
