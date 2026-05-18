@@ -1034,16 +1034,14 @@ def get_real_signature(params):
 async def fetch_jiufang_research(page: int = 1, page_size: int = 20):
     """从九方智投获取研报数据"""
     try:
-        # 构建请求参数
         params = {
             'pageNum': str(page),
             'pageSize': str(page_size),
             'listedSector': '0',
             'sortField': 'publishTime',
-            'sortType': '0',  # 0: 降序（最新），1: 升序
+            'sortType': '0',
         }
         
-        # 生成签名和时间戳
         signature, timestamp = get_real_signature(params)
         
         headers = {
@@ -1054,55 +1052,40 @@ async def fetch_jiufang_research(page: int = 1, page_size: int = 20):
             'signature': signature,
             'timestamp': timestamp,
             'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'sec-ch-ua': '"Not(A:Brand";v="8", "Chromium";v="144", "Microsoft Edge";v="144"',
-            'sec-ch-ua-mobile': '?0',
-            'sec-ch-ua-platform': '"Windows"',
-            'sec-fetch-dest': 'empty',
-            'sec-fetch-mode': 'cors',
-            'sec-fetch-site': 'cross-site'
         }
         
         url = 'https://api-hq.chongnengjihua.com/finance/api/2/stock/a/rank/list'
         
-        print(f"请求九方智投研报: page={page}, params={params}")
-        print(f"签名: {signature}, 时间戳: {timestamp}")
-        
         response = requests.get(url=url, params=params, headers=headers, timeout=15)
-        print(f"响应状态码: {response.status_code}")
-        
         data = response.json()
         
         if not data or 'data' not in data:
-            print("没有找到 data 字段")
             return []
         
         infos = data.get('data', {}).get('infos', [])
         if not infos:
-            print("没有找到研报数据")
             return []
         
         reports = []
         for item in infos:
-            # 提取研报信息
+            # 使用正确的字段映射
             report = {
                 "id": item.get('id', ''),
-                "title": item.get('title', '') or item.get('prodName', '研究报告'),
-                "stock_code": item.get('symbol', ''),
-                "stock_name": item.get('prodName', ''),
-                "publisher": item.get('publisher', '九方智投'),
+                "stock_code": item.get('symbol', ''),           # 股票代码
+                "stock_name": item.get('prodName', ''),         # 股票名称
+                "title": item.get('title', '研究报告'),          # 研报标题
+                "publisher": item.get('orgNameDisc', '九方智投'), # 券商名称
+                "rating": item.get('orgDescription', '3星'),     # 评级（星数）
                 "publish_date": item.get('publishDate', datetime.now().strftime("%Y-%m-%d")),
-                "rating": item.get('rating', '关注'),
                 "summary": item.get('summary', '点击查看详细内容'),
                 "url": item.get('url', '')
             }
             reports.append(report)
         
-        print(f"获取到 {len(reports)} 条研报")
         return reports
     except Exception as e:
         print(f"获取九方智投研报错误: {e}")
         return []
-
 
 @app.get("/api/research/jiufang")
 async def get_jiufang_research(
