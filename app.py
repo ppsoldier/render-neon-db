@@ -1225,29 +1225,20 @@ def copy_week_schedule():
 
 
 
-# ==================== 仪表盘数据 ====================
 @app.route("/api/dashboard/stats")
 def dashboard_stats():
-    """获取首页统计数据 - 兼容版"""
+    """获取首页统计数据"""
     try:
         db = get_db()
         cur = db.cursor()
 
-        # 学生总数（兼容没有status字段的情况）
-        try:
-            cur.execute("SELECT COUNT(*) FROM student WHERE status = 1")
-            student_count = cur.fetchone()[0]
-        except Exception:
-            cur.execute("SELECT COUNT(*) FROM student")
-            student_count = cur.fetchone()[0]
+        # 学生总数 - 查询全部
+        cur.execute("SELECT COUNT(*) FROM student")
+        student_count = cur.fetchone()[0]
 
-        # 教师总数（兼容没有status字段的情况）
-        try:
-            cur.execute("SELECT COUNT(*) FROM teacher WHERE status = 'active'")
-            teacher_count = cur.fetchone()[0]
-        except Exception:
-            cur.execute("SELECT COUNT(*) FROM teacher")
-            teacher_count = cur.fetchone()[0]
+        # 教师总数 - 查询全部
+        cur.execute("SELECT COUNT(*) FROM teacher")
+        teacher_count = cur.fetchone()[0]
 
         # 今日课程
         today = datetime.now().strftime("%Y-%m-%d")
@@ -1259,15 +1250,13 @@ def dashboard_stats():
         today_classes = cur.fetchone()[0]
 
         # 剩余总课时
-        try:
-            cur.execute("SELECT COALESCE(SUM(surplus), 0) FROM course_package WHERE status='active'")
-            total_surplus = cur.fetchone()[0] or 0
-        except Exception:
-            cur.execute("SELECT COALESCE(SUM(surplus), 0) FROM course_package")
-            total_surplus = cur.fetchone()[0] or 0
+        cur.execute("SELECT COALESCE(SUM(surplus), 0) FROM course_package")
+        total_surplus = cur.fetchone()[0] or 0
 
         cur.close()
         db.close()
+
+        print(f"仪表盘数据: 学生={student_count}, 教师={teacher_count}, 今日课程={today_classes}, 剩余课时={total_surplus}")
 
         return jsonify({"code": 200, "data": {
             "student_count": student_count,
@@ -1277,7 +1266,8 @@ def dashboard_stats():
         }})
     except Exception as e:
         print(f"仪表盘错误: {str(e)}")
-        # 返回空数据而不是500错误
+        import traceback
+        traceback.print_exc()
         return jsonify({"code": 200, "data": {
             "student_count": 0,
             "teacher_count": 0,
