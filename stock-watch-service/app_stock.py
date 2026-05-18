@@ -702,36 +702,23 @@ async def get_stock_research(stock_code: str, limit: int = Query(20, ge=1, le=50
                 LIMIT $2
             """, stock_code, limit)
             
-            return [
-                {
-                    "title": row['title'] if row['title'] else f"{stock_code} 研究报告",
-                    "publisher": row['publisher'] if row['publisher'] else "券商研究",
-                    "publish_date": row['publish_date'].strftime("%Y-%m-%d") if row['publish_date'] else "2024-01-01",
-                    "rating": row['rating'] if row['rating'] else "买入",
-                    "summary": row['summary'] if row['summary'] else "公司经营稳健，业绩符合预期，维持推荐评级。"
-                }
-                for row in rows
-            ]
+            if rows:
+                return [
+                    {
+                        "title": row['title'],
+                        "publisher": row['publisher'],
+                        "publish_date": row['publish_date'].strftime("%Y-%m-%d") if row['publish_date'] else None,
+                        "rating": row['rating'],
+                        "summary": row['summary']
+                    }
+                    for row in rows
+                ]
+            else:
+                # 没有数据时返回空数组，前端显示"暂无研报"
+                return []
         except Exception as e:
-            logger.error(f"研报接口错误: {e}")
-            # 返回模拟研报数据
-            return [
-                {
-                    "title": f"{stock_code} 深度研究报告",
-                    "publisher": "中信证券",
-                    "publish_date": "2024-01-15",
-                    "rating": "买入",
-                    "summary": "公司行业龙头地位稳固，业绩持续增长，给予买入评级。"
-                },
-                {
-                    "title": f"{stock_code} 业绩点评",
-                    "publisher": "国泰君安",
-                    "publish_date": "2024-02-20",
-                    "rating": "增持",
-                    "summary": "业绩符合预期，看好公司长期发展。"
-                }
-            ]
-
+            logger.error(f"Stock research error: {e}")
+            return []
 
 # ========== 最新研报接口 ==========
 @app.get("/api/research/latest")
@@ -743,26 +730,29 @@ async def get_latest_research(limit: int = Query(20, ge=1, le=50)):
         
         try:
             rows = await conn.fetch("""
-                SELECT r.title, r.publisher, r.publish_date, r.rating, r.stock_code, s.stock_name
+                SELECT r.id, r.title, r.publisher, r.publish_date, r.rating, 
+                       r.summary, r.stock_code, s.stock_name
                 FROM research_reports r
-                JOIN stocks s ON r.stock_code = s.stock_code
+                LEFT JOIN stocks s ON r.stock_code = s.stock_code
                 ORDER BY r.publish_date DESC
                 LIMIT $1
             """, limit)
             
             return [
                 {
-                    "stock_code": row['stock_code'],
-                    "stock_name": row['stock_name'],
+                    "id": row['id'],
                     "title": row['title'],
+                    "stock_code": row['stock_code'],
+                    "stock_name": row['stock_name'] or row['stock_code'],
                     "publisher": row['publisher'],
-                    "publish_date": row['publish_date'].strftime("%Y-%m-%d") if row['publish_date'] else "2024-01-01",
-                    "rating": row['rating']
+                    "publish_date": row['publish_date'].strftime("%Y-%m-%d") if row['publish_date'] else None,
+                    "rating": row['rating'],
+                    "summary": row['summary']
                 }
                 for row in rows
             ]
         except Exception as e:
-            logger.error(f"最新研报接口错误: {e}")
+            logger.error(f"Latest research error: {e}")
             return []
 
 # ========== 9FZT 实时数据接口 ==========
