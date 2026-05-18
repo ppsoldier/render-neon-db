@@ -1059,6 +1059,8 @@ async def fetch_jiufang_research(page: int = 1, page_size: int = 20):
         response = requests.get(url=url, params=params, headers=headers, timeout=15)
         data = response.json()
         
+        print(f"九方智投原始响应: {json.dumps(data, ensure_ascii=False)[:500]}")  # 打印前500字符
+        
         if not data or 'data' not in data:
             return []
         
@@ -1068,20 +1070,21 @@ async def fetch_jiufang_research(page: int = 1, page_size: int = 20):
         
         reports = []
         for item in infos:
-            # 使用正确的字段映射
+            # 使用九方智投原始字段
             report = {
                 "id": item.get('id', ''),
                 "stock_code": item.get('symbol', ''),           # 股票代码
                 "stock_name": item.get('prodName', ''),         # 股票名称
-                "title": item.get('title', '研究报告'),          # 研报标题
-                "publisher": item.get('orgNameDisc', '九方智投'), # 券商名称
-                "rating": item.get('orgDescription', '3星'),     # 评级（星数）
+                "title": item.get('title', item.get('prodName', '研究报告')),  # 研报标题（使用原始title）
+                "publisher": item.get('orgNameDisc', ''),       # 券商名称（使用orgNameDisc）
+                "rating": item.get('orgDescription', '关注'),    # 评级
                 "publish_date": item.get('publishDate', datetime.now().strftime("%Y-%m-%d")),
                 "summary": item.get('summary', '点击查看详细内容'),
                 "url": item.get('url', '')
             }
             reports.append(report)
         
+        print(f"获取到 {len(reports)} 条研报")
         return reports
     except Exception as e:
         print(f"获取九方智投研报错误: {e}")
