@@ -57,15 +57,16 @@ def get_real_signature(params):
     return sign, timestamp
 
 
+# ========== 九方智投研报接口（使用正确的接口URL）==========
+
 async def fetch_jiufang_research(page: int = 1, page_size: int = 20):
-    """从九方智投获取研报数据"""
+    """从九方智投获取研报数据 - 使用正确的研报接口"""
     try:
+        # 研报专用接口参数
         params = {
             'pageNum': str(page),
             'pageSize': str(page_size),
-            'listedSector': '0',
-            'sortField': 'publishTime',
-            'sortType': '0',
+            'type': 'researchReportList',  # 研报类型
         }
         
         signature, timestamp = get_real_signature(params)
@@ -80,45 +81,37 @@ async def fetch_jiufang_research(page: int = 1, page_size: int = 20):
             'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         }
         
+        # 研报专用接口URL
         url = 'https://api-hq.chongnengjihua.com/finance/api/2/stock/a/rank/list'
         
         response = requests.get(url=url, params=params, headers=headers, timeout=15)
         data = response.json()
         
+        logger.info(f"研报接口响应: {json.dumps(data, ensure_ascii=False)[:500]}")
+        
         if not data or 'data' not in data:
-            logger.warning("九方智投接口返回无data字段")
             return []
         
         infos = data.get('data', {}).get('infos', [])
         if not infos:
-            logger.warning("九方智投接口返回无infos数据")
             return []
         
         reports = []
         for item in infos:
-            # 尝试多个可能的字段名
-            title = item.get('title') or item.get('prodName') or item.get('name') or '研究报告'
-            publisher = item.get('orgNameDisc') or item.get('publisher') or item.get('source') or item.get('orgName') or ''
-            rating = item.get('orgDescription') or item.get('rating') or item.get('starLevel') or item.get('level') or '关注'
-            
-            # 如果title还是股票名称，尝试组合
-            if title == item.get('prodName'):
-                title = f"{item.get('prodName')} 研究报告"
-            
+            # 提取研报字段
             report = {
                 "id": item.get('id', ''),
                 "stock_code": item.get('symbol', ''),
                 "stock_name": item.get('prodName', ''),
-                "title": title,
-                "publisher": publisher,
-                "rating": rating,
+                "title": item.get('title', item.get('summary', '研究报告'))[:100],  # 限制长度
+                "publisher": item.get('orgNameDisc', '九方智投'),
+                "rating": item.get('orgDescription', '关注'),
                 "publish_date": item.get('publishDate', datetime.now().strftime("%Y-%m-%d")),
                 "summary": item.get('summary', '点击查看详细内容'),
                 "url": item.get('url', '')
             }
             reports.append(report)
         
-        logger.info(f"获取到 {len(reports)} 条九方智投研报")
         return reports
     except Exception as e:
         logger.error(f"获取九方智投研报错误: {e}")
