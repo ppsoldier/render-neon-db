@@ -237,6 +237,121 @@ async def health_check():
     return {"status": "healthy", "service": "stock-watch"}
 
 
+
+# ========== 实时行情接口（用于首页）==========
+
+@app.get("/api/realtime/ranks")
+async def get_realtime_ranks(rank_type: str = Query("up", description="up/down")):
+    """获取实时涨跌幅榜单"""
+    try:
+        # 从数据库获取实时行情数据
+        pool = await get_db()
+        async with pool.acquire() as conn:
+            await conn.execute("SET search_path TO stock_watch")
+            order = "DESC" if rank_type == "up" else "ASC"
+            rows = await conn.fetch(f"""
+                SELECT r.stock_code, s.stock_name, r.last_price, r.change_percent, r.volume, r.amount
+                FROM realtime_quotes r
+                JOIN stocks s ON r.stock_code = s.stock_code
+                WHERE r.change_percent IS NOT NULL
+                ORDER BY r.change_percent {order}
+                LIMIT 20
+            """)
+            
+            return [
+                {
+                    "stock_code": row['stock_code'],
+                    "stock_name": row['stock_name'],
+                    "price": float(row['last_price']) if row['last_price'] else 0,
+                    "change_percent": float(row['change_percent']) if row['change_percent'] else 0,
+                    "volume": row['volume'],
+                    "amount": row['amount']
+                }
+                for row in rows
+            ]
+    except Exception as e:
+        logger.error(f"获取实时榜单错误: {e}")
+        return []
+
+
+@app.get("/api/realtime/industry")
+async def get_realtime_industry():
+    """获取实时行业板块排行"""
+    try:
+        pool = await get_db()
+        async with pool.acquire() as conn:
+            await conn.execute("SET search_path TO stock_watch")
+            rows = await conn.fetch("""
+                SELECT industry_code, industry_name, change_percent
+                FROM industries
+                WHERE change_percent IS NOT NULL
+                ORDER BY change_percent DESC
+                LIMIT 30
+            """)
+            
+            return [
+                {
+                    "industry_code": row['industry_code'],
+                    "industry_name": row['industry_name'],
+                    "change_percent": float(row['change_percent']) if row['change_percent'] else 0
+                }
+                for row in rows
+            ]
+    except Exception as e:
+        logger.error(f"获取行业板块错误: {e}")
+        return []
+
+
+@app.get("/api/realtime/concept")
+async def get_realtime_concept():
+    """获取实时概念板块排行"""
+    try:
+        pool = await get_db()
+        async with pool.acquire() as conn:
+            await conn.execute("SET search_path TO stock_watch")
+            rows = await conn.fetch("""
+                SELECT concept_code, concept_name, change_percent
+                FROM concepts
+                WHERE change_percent IS NOT NULL
+                ORDER BY change_percent DESC
+                LIMIT 30
+            """)
+            
+            return [
+                {
+                    "concept_code": row['concept_code'],
+                    "concept_name": row['concept_name'],
+                    "change_percent": float(row['change_percent']) if row['change_percent'] else 0
+                }
+                for row in rows
+            ]
+    except Exception as e:
+        logger.error(f"获取概念板块错误: {e}")
+        return []
+
+
+@app.get("/api/market/limit-stats")
+async def get_limit_stats():
+    """获取涨跌停统计"""
+    try:
+        # 返回模拟数据，实际可从数据库获取
+        return {
+            "limit_up_count": 45,
+            "limit_down_count": 12,
+            "sentiment": 65
+        }
+    except Exception as e:
+        logger.error(f"获取涨跌停统计错误: {e}")
+        return {
+            "limit_up_count": 0,
+            "limit_down_count": 0,
+            "sentiment": 50
+        }
+
+
+
+
+
 # ========== 行情接口 ==========
 @app.get("/api/market/ranks")
 async def get_market_ranks(rank_type: str = Query("up"), limit: int = Query(20)):
