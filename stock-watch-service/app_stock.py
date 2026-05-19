@@ -1,6 +1,6 @@
 import os
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -57,61 +57,72 @@ def get_real_signature(params):
     return sign, timestamp
 
 
-# ========== 九方智投研报接口（使用正确的接口URL）==========
-
-async def fetch_jiufang_research(page: int = 1, page_size: int = 20):
+async def fetch_jiufang_research(page: int = 0, page_size: int = 50):
     """从九方智投获取研报数据 - 使用正确的研报接口"""
     try:
-        # 研报专用接口参数
+        # 计算日期范围（最近30天）
+        today = datetime.now()
+        from_date = (today - timedelta(days=30)).strftime("%Y-%m-%d")
+        to_date = today.strftime("%Y-%m-%d")
+        
+        # 请求参数
         params = {
-            'pageNum': str(page),
+            'pageNo': str(page),
             'pageSize': str(page_size),
-            'type': 'researchReportList',  # 研报类型
+            'from': from_date,
+            'to': to_date,
         }
         
-        signature, timestamp = get_real_signature(params)
+        # 生成签名
+        sign, timestamp = get_real_signature(params)
         
         headers = {
-            'accept': 'application/json, text/plain, */*',
-            'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
-            'origin': 'https://www.9fzt.com',
-            'referer': 'https://www.9fzt.com/',
-            'signature': signature,
+            'referer': 'https://stock.9fzt.com/',
+            'signature': sign,
             'timestamp': timestamp,
             'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'accept': 'application/json, text/plain, */*',
         }
         
-        # 研报专用接口URL
-        url = 'https://api-hq.chongnengjihua.com/finance/api/2/stock/a/rank/list'
+        url = 'https://api-hq.chongnengjihua.com/news/api/1/company/report/list'
         
-        response = requests.get(url=url, params=params, headers=headers, timeout=15)
+        response = requests.get(url=url, headers=headers, params=params, timeout=15)
         data = response.json()
         
-        logger.info(f"研报接口响应: {json.dumps(data, ensure_ascii=False)[:500]}")
+        logger.info(f"九方智投研报接口响应码: {data.get('code')}")
         
-        if not data or 'data' not in data:
+        if data.get('code') != 1:
+            logger.warning(f"研报接口返回错误: {data}")
             return []
         
-        infos = data.get('data', {}).get('infos', [])
+        infos = data.get('data', {}).get('data', [])
         if not infos:
+            logger.warning("没有获取到研报数据")
             return []
         
         reports = []
         for item in infos:
-            # 提取研报字段
+            # 解析星级（orgDescription 可能是数字）
+            rating_value = item.get('orgDescription', 0)
+            if rating_value and rating_value > 0:
+                rating = f"{rating_value}星"
+            else:
+                rating = "关注"
+            
             report = {
-                "id": item.get('id', ''),
+                "id": item.get('reportId', ''),
                 "stock_code": item.get('symbol', ''),
-                "stock_name": item.get('prodName', ''),
-                "title": item.get('title', item.get('summary', '研究报告'))[:100],  # 限制长度
+                "stock_name": item.get('stockName', ''),
+                "title": item.get('title', '研究报告'),
                 "publisher": item.get('orgNameDisc', '九方智投'),
-                "rating": item.get('orgDescription', '关注'),
-                "publish_date": item.get('publishDate', datetime.now().strftime("%Y-%m-%d")),
-                "summary": item.get('summary', '点击查看详细内容'),
-                "url": item.get('url', '')
+                "rating": rating,
+                "publish_date": datetime.fromtimestamp(item.get('publishDate', 0)).strftime("%Y-%m-%d") if item.get('publishDate') else "",
+                "summary": item.get('title', '点击查看详细内容'),
+                "url": ""
             }
             reports.append(report)
         
+        logger.info(f"获取到 {len(reports)} 条九方智投研报")
         return reports
     except Exception as e:
         logger.error(f"获取九方智投研报错误: {e}")
@@ -398,8 +409,8 @@ async def set_alert(request: Request):
 # ========== 九方智投研报接口 ==========
 @app.get("/api/research/jiufang")
 async def get_jiufang_research(
-    page: int = Query(1, ge=1, le=10),
-    page_size: int = Query(20, ge=1, le=50)
+    page: int = Query(0, ge=0, le=10),
+    page_size: int = Query(50, ge=1, le=100)
 ):
     """获取九方智投最新研报"""
     try:
@@ -415,7 +426,7 @@ async def get_jiufang_research(
                 "source": "九方智投"
             }
         else:
-            # 返回本地数据库研报
+            # 如果获取失败，返回本地数据库研报
             return await get_local_research(page, page_size)
     except Exception as e:
         logger.error(f"获取九方智投研报异常: {e}")
@@ -428,7 +439,7 @@ async def get_local_research(page: int, page_size: int):
     async with pool.acquire() as conn:
         await conn.execute("SET search_path TO stock_watch")
         
-        offset = (page - 1) * page_size
+        offset = page * page_size
         rows = await conn.fetch("""
             SELECT id, title, publisher, publish_date, rating, summary, stock_code
             FROM research_reports
@@ -486,7 +497,7 @@ async def get_stock_research(stock_code: str, limit: int = Query(20, ge=1, le=50
 
 
 @app.get("/api/research/latest")
-async def get_latest_research(limit: int = Query(20, ge=1, le=50)):
+async def get_latest_research(limit: int = Query(50, ge=1, le=100)):
     """获取最新研报（本地数据库）"""
     pool = await get_db()
     async with pool.acquire() as conn:
@@ -511,37 +522,6 @@ async def get_latest_research(limit: int = Query(20, ge=1, le=50)):
             "rating": row['rating'],
             "summary": row['summary']
         } for row in rows]
-
-
-@app.get("/api/test/jiufang-raw")
-async def test_jiufang_raw():
-    """测试九方智投原始数据"""
-    params = {
-        'pageNum': '1',
-        'pageSize': '5',
-        'type': 'researchReportList',
-    }
-    signature, timestamp = get_real_signature(params)
-    
-    headers = {
-        'accept': 'application/json, text/plain, */*',
-        'origin': 'https://www.9fzt.com',
-        'referer': 'https://www.9fzt.com/',
-        'signature': signature,
-        'timestamp': timestamp,
-        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-    }
-    
-    url = 'https://api-hq.chongnengjihua.com/finance/api/2/stock/a/rank/list'
-    response = requests.get(url=url, params=params, headers=headers, timeout=15)
-    
-    return {
-        "url": url,
-        "params": params,
-        "signature": signature,
-        "timestamp": timestamp,
-        "response": response.json()
-    }
 
 
 # ========== 定时任务 ==========
