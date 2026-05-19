@@ -1222,7 +1222,394 @@ def copy_week_schedule():
         traceback.print_exc()
         return jsonify({"code": 500, "msg": str(e)}), 500
 
+# ==================== 学生课时管理模块 ====================
 
+@app.route("/api/student/hours/list", methods=["GET"])
+def student_hours_list():
+    """获取学生课时列表"""
+    try:
+        student_id = request.args.get('student_id', type=int)
+        
+        db = get_db()
+        cur = db.cursor()
+        
+        sql = """
+            SELECT 
+                cp.id,
+                s.id as student_id,
+                s.name as student_name,
+                s.grade,
+                s.phone,
+                cp.course_name,
+                cp.total,
+                cp.used,
+                cp.surplus,
+                cp.expire_date,
+                cp.status,
+                cp.created_at
+            FROM course_package cp
+            JOIN student s ON cp.student_id = s.id
+            WHERE cp.status = 'active'
+        """
+        params = []
+        
+        if student_id:
+            sql += " AND cp.student_id = %s"
+            params.append(student_id)
+        
+        sql += " ORDER BY cp.created_at DESC"
+        
+        cur.execute(sql, params)
+        data = cur.fetchall()
+        cur.close()
+        db.close()
+        
+        result = []
+        for r in data:
+            result.append({
+                "id": r[0],
+                "student_id": r[1],
+                "student_name": r[2],
+                "grade": r[3] or '',
+                "phone": r[4] or '',
+                "course_name": r[5] or '标准课程',
+                "total": float(r[6]) if r[6] else 0,
+                "used": float(r[7]) if r[7] else 0,
+                "surplus": float(r[8]) if r[8] else 0,
+                "expire_date": str(r[9]) if r[9] else None,
+                "status": r[10] or 'active',
+                "created_at": str(r[11]) if r[11] else None
+            })
+        
+        return jsonify({"code": 200, "data": result})
+    except Exception as e:
+        print(f"获取课时列表错误: {str(e)}")
+        return jsonify({"code": 500, "msg": str(e)}), 500
+
+
+@app.route("/api/student/hours/statistics", methods=["GET"])
+def student_hours_statistics():
+    """获取课时统计数据"""
+    try:
+        db = get_db()
+        cur = db.cursor()
+        
+        # 总课时统计
+        cur.execute("""
+            SELECT 
+                COUNT(*) as total_packages,
+                COALESCE(SUM(total), 0) as total_hours,
+                COALESCE(SUM(used), 0) as used_hours,
+                COALESCE(SUM(surplus), 0) as surplus_hours
+            FROM course_package
+            WHERE status = 'active'
+        """)
+        total_stats = cur.fetchone()
+        
+        # 按年级统计
+        cur.execute("""
+            SELECT 
+                s.grade,
+                COUNT(cp.id) as package_count,
+                COALESCE(SUM(cp.surplus), 0) as surplus_hours
+            FROM course_package cp
+            JOIN student s ON cp.student_id = s.id
+            WHERE cp.status = 'active'
+            GROUP BY s.grade
+            ORDER BY s.grade
+        """)
+        grade_stats = cur.fetchall()
+        
+        # 即将过期课时（30天内）
+        cur.execute("""
+            SELECT 
+                COUNT(*) as expiring_count,
+                COALESCE(SUM(surplus), 0) as expiring_hours
+            FROM course_package
+            WHERE status = 'active'
+              AND expire_date IS NOT NULL
+              AND expire_date <= CURRENT_DATE + INTERVAL '30 days'
+        """)
+        expiring_stats = cur.fetchone()
+        
+        cur.close()
+        db.close()
+        
+        grade_list = []
+        for g in grade_stats:
+            grade_list.append({
+                "grade": g[0] or '未设置',
+                "package_count": g[1],
+                "surplus_hours": float(g[2]) if g[2] else 0
+            })
+        
+        return jsonify({"code": 200, "data": {
+            "total_packages": total_stats[0] or 0,
+            "total_hours": float(total_stats[1]) if total_stats[1] else 0,
+            "used_hours": float(total_stats[2]) if total_stats[2] else 0,
+            "surplus_hours": float(total_stats[3]) if total_stats[3] else 0,
+            "grade_stats": grade_list,
+            "expiring_count": expiring_stats[0] or 0,
+            "expiring_hours": float(expiring_stats[1]) if expiring_stats[1] else 0
+        }})
+    except Exception as e:
+        print(f"获取课时统计错误: {str(e)}")
+        return jsonify({"code": 500, "msg": str(e)}), 500
+
+
+@app.route("/api/student/hours/add", methods=["POST"])
+def student_hours_add():
+    """添加课时包"""
+    try:
+        data = request.json
+        student_id = data.get('student_id')
+        total_hours = data.get('total_hours')
+        course_name = data.get('course_name', '标准课程')
+        expire_date = data.get('expire_date')
+        
+        if not student_id:
+            return jsonify({"code": 400, "msg": "请选择学生"}), 400
+        if not total_hours or total_hours <= 0:
+            return jsonify({"code": 400, "msg": "请输入有效的课时数"}), 400
+        
+        db = get_db()
+        cur = db.cursor()
+        
+        cur.execute("""
+            INSERT INTO course_package (student_id, total, used, surplus, course_name, expire_date, status)
+            VALUES (%s, %s, 0, %s, %s, %s, 'active')
+            RETURNING id
+        """, (student_id, total_hours, total_hours, course_name, expire_date))
+        
+        new_id = cur.fetchone()[0]
+        db.commit()
+        cur.close()
+        db.close()
+        
+        return jsonify({"code": 200, "msg": "添加成功", "data": {"id": new_id}})
+    except Exception as e:
+        print(f"添加课时包错误: {str(e)}")
+        return jsonify({"code": 500, "msg": str(e)}), 500
+
+
+@app.route("/api/student/hours/consume", methods=["POST"])
+def student_hours_consume():
+    """消耗课时"""
+    try:
+        data = request.json
+        package_id = data.get('package_id')
+        hours = data.get('hours')
+        schedule_id = data.get('schedule_id')
+        note = data.get('note', '')
+        
+        if not package_id:
+            return jsonify({"code": 400, "msg": "请选择课时包"}), 400
+        if not hours or hours <= 0:
+            return jsonify({"code": 400, "msg": "请输入有效的消耗课时"}), 400
+        
+        db = get_db()
+        cur = db.cursor()
+        
+        # 检查剩余课时
+        cur.execute("SELECT surplus FROM course_package WHERE id = %s", (package_id,))
+        result = cur.fetchone()
+        if not result:
+            return jsonify({"code": 404, "msg": "课时包不存在"}), 404
+        
+        surplus = result[0]
+        if surplus < hours:
+            return jsonify({"code": 400, "msg": f"剩余课时不足，仅剩 {surplus} 小时"}), 400
+        
+        # 更新课时包
+        cur.execute("""
+            UPDATE course_package 
+            SET used = used + %s, surplus = surplus - %s
+            WHERE id = %s
+        """, (hours, hours, package_id))
+        
+        # 记录消耗日志
+        cur.execute("""
+            INSERT INTO hour_consumption (package_id, schedule_id, hours, consume_date, note)
+            VALUES (%s, %s, %s, CURRENT_DATE, %s)
+        """, (package_id, schedule_id, hours, note))
+        
+        db.commit()
+        cur.close()
+        db.close()
+        
+        return jsonify({"code": 200, "msg": f"成功消耗 {hours} 课时"})
+    except Exception as e:
+        print(f"消耗课时错误: {str(e)}")
+        return jsonify({"code": 500, "msg": str(e)}), 500
+
+
+@app.route("/api/student/hours/consumption/list", methods=["GET"])
+def hours_consumption_list():
+    """获取课时消耗记录"""
+    try:
+        student_id = request.args.get('student_id', type=int)
+        package_id = request.args.get('package_id', type=int)
+        
+        db = get_db()
+        cur = db.cursor()
+        
+        sql = """
+            SELECT 
+                hc.id,
+                hc.package_id,
+                cp.course_name,
+                s.name as student_name,
+                hc.hours,
+                hc.consume_date,
+                hc.note,
+                hc.created_at,
+                cs.subject as schedule_subject,
+                cs.class_date
+            FROM hour_consumption hc
+            LEFT JOIN course_package cp ON hc.package_id = cp.id
+            LEFT JOIN student s ON cp.student_id = s.id
+            LEFT JOIN course_schedule cs ON hc.schedule_id = cs.id
+            WHERE 1=1
+        """
+        params = []
+        
+        if student_id:
+            sql += " AND cp.student_id = %s"
+            params.append(student_id)
+        if package_id:
+            sql += " AND hc.package_id = %s"
+            params.append(package_id)
+        
+        sql += " ORDER BY hc.consume_date DESC, hc.created_at DESC LIMIT 100"
+        
+        cur.execute(sql, params)
+        data = cur.fetchall()
+        cur.close()
+        db.close()
+        
+        result = []
+        for r in data:
+            result.append({
+                "id": r[0],
+                "package_id": r[1],
+                "course_name": r[2] or '',
+                "student_name": r[3] or '',
+                "hours": float(r[4]) if r[4] else 0,
+                "consume_date": str(r[5]) if r[5] else None,
+                "note": r[6] or '',
+                "schedule_subject": r[8] or '',
+                "class_date": str(r[9]) if r[9] else None
+            })
+        
+        return jsonify({"code": 200, "data": result})
+    except Exception as e:
+        print(f"获取消耗记录错误: {str(e)}")
+        return jsonify({"code": 500, "msg": str(e)}), 500
+
+
+@app.route("/api/student/hours/export", methods=["POST"])
+def student_hours_export():
+    """导出课时报表"""
+    try:
+        data = request.json
+        student_ids = data.get('student_ids', [])
+        
+        db = get_db()
+        cur = db.cursor()
+        
+        if student_ids:
+            placeholders = ','.join(['%s'] * len(student_ids))
+            sql = f"""
+                SELECT 
+                    s.name,
+                    s.grade,
+                    s.phone,
+                    cp.course_name,
+                    cp.total,
+                    cp.used,
+                    cp.surplus,
+                    cp.expire_date
+                FROM course_package cp
+                JOIN student s ON cp.student_id = s.id
+                WHERE cp.status = 'active' AND s.id IN ({placeholders})
+                ORDER BY s.grade, s.name
+            """
+            cur.execute(sql, student_ids)
+        else:
+            cur.execute("""
+                SELECT 
+                    s.name,
+                    s.grade,
+                    s.phone,
+                    cp.course_name,
+                    cp.total,
+                    cp.used,
+                    cp.surplus,
+                    cp.expire_date
+                FROM course_package cp
+                JOIN student s ON cp.student_id = s.id
+                WHERE cp.status = 'active'
+                ORDER BY s.grade, s.name
+            """)
+        
+        data = cur.fetchall()
+        cur.close()
+        db.close()
+        
+        # 创建Excel文件
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "学生课时统计"
+        
+        # 设置表头
+        headers = ["学生姓名", "年级", "联系电话", "课程名称", "总课时", "已用课时", "剩余课时", "有效期"]
+        ws.append(headers)
+        
+        # 设置表头样式
+        for cell in ws[1]:
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+            cell.alignment = Alignment(horizontal="center")
+        
+        # 写入数据
+        for row in data:
+            ws.append([
+                row[0] or '',
+                row[1] or '',
+                row[2] or '',
+                row[3] or '',
+                float(row[4]) if row[4] else 0,
+                float(row[5]) if row[5] else 0,
+                float(row[6]) if row[6] else 0,
+                str(row[7]) if row[7] else '永久'
+            ])
+        
+        # 调整列宽
+        for col in ws.columns:
+            max_length = 0
+            col_letter = col[0].column_letter
+            for cell in col:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
+            adjusted_width = min(max_length + 2, 25)
+            ws.column_dimensions[col_letter].width = adjusted_width
+        
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+        
+        return send_file(
+            output, 
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            as_attachment=True, 
+            download_name=f'学生课时统计_{datetime.now().strftime("%Y%m%d")}.xlsx'
+        )
+    except Exception as e:
+        print(f"导出课时报表错误: {str(e)}")
+        return jsonify({"code": 500, "msg": str(e)}), 500
 
 
 @app.route("/api/dashboard/stats")
