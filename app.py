@@ -2151,6 +2151,8 @@ def export_semester_report():
 
 # ==================== 基于排课表的课时统计模块 ====================
 
+# ==================== 基于排课表的课时统计模块（PostgreSQL兼容版）====================
+
 @app.route("/api/student/attendance/list", methods=["GET"])
 def get_student_attendance_list():
     """获取学生的出勤记录列表"""
@@ -2210,152 +2212,22 @@ def get_student_attendance_list():
         cur.close()
         db.close()
         
-        # 获取当前时间
         now = datetime.now()
         today_date = now.date()
         now_time_str = now.strftime("%H:%M")
         
-        print(f"当前时间: {now_time_str}")
-        
         result = []
         for row in data:
             class_date = row[1]
-            class_time = row[2]  # 格式如 "20:00-22:00"
+            class_time = row[2]
             status = row[5]
             
-            # 提取课程开始时间（时间段的前半部分）
             start_time_str = class_time.split('-')[0].strip() if class_time else "00:00"
             
-            print(f"课程: {row[3]}, 日期: {class_date}, 开始时间: {start_time_str}, 当前时间: {now_time_str}")
-            
-            # 判断是否已上课
-            is_completed = False
-            
-            if class_date < today_date:
-                # 课程日期 < 今天 → 已上课
-                is_completed = True
-                print(f"  -> 日期小于今天，判定为已上课")
-            elif class_date == today_date:
-                # 课程日期 = 今天，比较时间
-                if start_time_str <= now_time_str:
-                    is_completed = True
-                    print(f"  -> 开始时间 {start_time_str} <= 当前时间 {now_time_str}，判定为已上课")
-                else:
-                    print(f"  -> 开始时间 {start_time_str} > 当前时间 {now_time_str}，判定为待上课")
-            else:
-                print(f"  -> 日期大于今天，判定为待上课")
-            
-            if is_completed and status != 'cancelled':
-                actual_status = 'completed'
-                status_text = '已上课'
-            elif status == 'cancelled':
-                actual_status = 'cancelled'
-                status_text = '已取消'
-            else:
-                actual_status = 'scheduled'
-                status_text = '待上课'
-            
-            result.append({
-                "id": row[0],
-                "class_date": str(class_date),
-                "class_time": class_time,
-                "subject": row[3] or '',
-                "classroom": row[4] or '',
-                "status": actual_status,
-                "status_text": status_text,
-                "teacher_name": row[6] or '待分配',
-                "start_time": start_time_str
-            })
-        
-        return jsonify({"code": 200, "data": result})
-    except Exception as e:
-        print(f"获取出勤记录错误: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({"code": 500, "msg": str(e)}), 500
-
-
-@app.route("/api/student/attendance/list", methods=["GET"])
-def get_student_attendance_list():
-    """获取学生的出勤记录列表"""
-    try:
-        student_id = request.args.get('student_id', type=int)
-        start_date = request.args.get('start_date')
-        end_date = request.args.get('end_date')
-        
-        if not student_id:
-            return jsonify({"code": 400, "msg": "请选择学生"}), 400
-        
-        db = get_db()
-        cur = db.cursor()
-        
-        student_id_str = str(student_id)
-        
-        sql = """
-            SELECT 
-                cs.id,
-                cs.class_date,
-                cs.class_time,
-                cs.subject,
-                cs.classroom,
-                cs.status,
-                t.name as teacher_name
-            FROM course_schedule cs
-            LEFT JOIN teacher t ON cs.teacher_id = t.id
-            WHERE cs.status != 'cancelled'
-              AND (
-                  cs.student_id = %s 
-                  OR cs.student_ids = %s
-                  OR cs.student_ids LIKE %s
-                  OR cs.student_ids LIKE %s
-                  OR cs.student_ids LIKE %s
-              )
-        """
-        
-        params = [
-            student_id,
-            student_id_str,
-            f'{student_id_str},%',
-            f'%,{student_id_str}',
-            f'%,{student_id_str},%'
-        ]
-        
-        if start_date:
-            sql += " AND cs.class_date >= %s"
-            params.append(start_date)
-        if end_date:
-            sql += " AND cs.class_date <= %s"
-            params.append(end_date)
-        
-        sql += " ORDER BY cs.class_date DESC, cs.class_time"
-        
-        cur.execute(sql, params)
-        data = cur.fetchall()
-        cur.close()
-        db.close()
-        
-        # 获取当前时间
-        now = datetime.now()
-        today_date = now.date()
-        now_time = now.strftime("%H:%M")
-        
-        result = []
-        for row in data:
-            class_date = row[1]
-            class_time = row[2]  # 格式如 "08:30-10:30"
-            status = row[5]
-            
-            # 提取课程开始时间（时间段的前半部分）
-            start_time = class_time.split('-')[0] if class_time else "00:00"
-            
-            # 判断是否已上课：
-            # 1. 课程日期 < 今天 → 已上课
-            # 2. 课程日期 = 今天 且 开始时间 <= 当前时间 → 已上课
-            # 3. 课程日期 > 今天 → 待上课
             is_completed = False
             if class_date < today_date:
                 is_completed = True
-            elif class_date == today_date and start_time <= now_time:
+            elif class_date == today_date and start_time_str <= now_time_str:
                 is_completed = True
             
             if is_completed and status != 'cancelled':
@@ -2376,21 +2248,18 @@ def get_student_attendance_list():
                 "classroom": row[4] or '',
                 "status": actual_status,
                 "status_text": status_text,
-                "teacher_name": row[6] or '待分配',
-                "start_time": start_time
+                "teacher_name": row[6] or '待分配'
             })
         
         return jsonify({"code": 200, "data": result})
     except Exception as e:
         print(f"获取出勤记录错误: {str(e)}")
-        import traceback
-        traceback.print_exc()
         return jsonify({"code": 500, "msg": str(e)}), 500
 
 
 @app.route("/api/student/attendance/statistics", methods=["GET"])
 def get_student_attendance_statistics():
-    """获取学生出勤统计（基于精确时间判断）"""
+    """获取学生出勤统计"""
     try:
         student_id = request.args.get('student_id', type=int)
         start_date = request.args.get('start_date')
@@ -2440,12 +2309,11 @@ def get_student_attendance_statistics():
         cur.close()
         db.close()
         
-        # 获取当前时间
         now = datetime.now()
         today_date = now.date()
-        now_time = now.strftime("%H:%M")
+        now_time_str = now.strftime("%H:%M")
         
-        total_classes = len(data)
+        total_classes = 0
         completed_classes = 0
         upcoming_classes = 0
         
@@ -2457,17 +2325,13 @@ def get_student_attendance_statistics():
             if status == 'cancelled':
                 continue
             
-            # 提取课程开始时间
-            start_time = class_time.split('-')[0] if class_time else "00:00"
+            total_classes += 1
             
-            # 判断是否已上课
-            is_completed = False
+            start_time_str = class_time.split('-')[0].strip() if class_time else "00:00"
+            
             if class_date < today_date:
-                is_completed = True
-            elif class_date == today_date and start_time <= now_time:
-                is_completed = True
-            
-            if is_completed:
+                completed_classes += 1
+            elif class_date == today_date and start_time_str <= now_time_str:
                 completed_classes += 1
             else:
                 upcoming_classes += 1
@@ -2491,30 +2355,136 @@ def get_student_attendance_statistics():
         print(f"获取出勤统计错误: {str(e)}")
         return jsonify({"code": 500, "msg": str(e)}), 500
 
-@app.route("/api/student/attendance/update", methods=["POST"])
-def update_attendance_status():
-    """手动更新课程状态"""
+
+@app.route("/api/student/attendance/export", methods=["POST"])
+def export_attendance_report():
+    """导出学生出勤报表"""
     try:
         data = request.json
-        schedule_id = data.get('schedule_id')
-        status = data.get('status')  # completed, cancelled, scheduled
+        student_id = data.get('student_id')
+        start_date = data.get('start_date')
+        end_date = data.get('end_date')
+        
+        if not student_id:
+            return jsonify({"code": 400, "msg": "请选择学生"}), 400
         
         db = get_db()
         cur = db.cursor()
         
-        cur.execute("""
-            UPDATE course_schedule 
-            SET status = %s 
-            WHERE id = %s
-        """, (status, schedule_id))
+        student_id_str = str(student_id)
         
-        db.commit()
+        sql = """
+            SELECT 
+                s.name as student_name,
+                s.grade,
+                s.phone,
+                cs.class_date,
+                cs.class_time,
+                cs.subject,
+                cs.classroom,
+                t.name as teacher_name,
+                cs.status
+            FROM course_schedule cs
+            LEFT JOIN teacher t ON cs.teacher_id = t.id
+            CROSS JOIN student s
+            WHERE s.id = %s
+              AND cs.status != 'cancelled'
+              AND (
+                  cs.student_id = %s 
+                  OR cs.student_ids = %s
+                  OR cs.student_ids LIKE %s
+                  OR cs.student_ids LIKE %s
+                  OR cs.student_ids LIKE %s
+              )
+        """
+        
+        params = [student_id, student_id, student_id_str, f'{student_id_str},%', f'%,{student_id_str}', f'%,{student_id_str},%']
+        
+        if start_date:
+            sql += " AND cs.class_date >= %s"
+            params.append(start_date)
+        if end_date:
+            sql += " AND cs.class_date <= %s"
+            params.append(end_date)
+        
+        sql += " ORDER BY cs.class_date, cs.class_time"
+        
+        cur.execute(sql, params)
+        data = cur.fetchall()
         cur.close()
         db.close()
         
-        return jsonify({"code": 200, "msg": "更新成功"})
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "学生出勤报表"
+        
+        headers = ["学生姓名", "年级", "联系电话", "上课日期", "上课时间", "课程名称", "教室", "授课教师", "状态"]
+        ws.append(headers)
+        
+        for cell in ws[1]:
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+            cell.alignment = Alignment(horizontal="center")
+        
+        now = datetime.now()
+        today_date = now.date()
+        now_time_str = now.strftime("%H:%M")
+        
+        for row in data:
+            class_date = row[3]
+            class_time = row[4]
+            status = row[8]
+            
+            start_time_str = class_time.split('-')[0].strip() if class_time else "00:00"
+            
+            if class_date < today_date:
+                status_text = '已上课'
+            elif class_date == today_date and start_time_str <= now_time_str:
+                status_text = '已上课'
+            elif status == 'cancelled':
+                status_text = '已取消'
+            else:
+                status_text = '待上课'
+            
+            ws.append([
+                row[0] or '',
+                row[1] or '',
+                row[2] or '',
+                str(row[3]) if row[3] else '',
+                row[4] or '',
+                row[5] or '',
+                row[6] or '',
+                row[7] or '',
+                status_text
+            ])
+        
+        for col in ws.columns:
+            max_length = 0
+            col_letter = col[0].column_letter
+            for cell in col:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
+            adjusted_width = min(max_length + 2, 20)
+            ws.column_dimensions[col_letter].width = adjusted_width
+        
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+        
+        return send_file(
+            output, 
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            as_attachment=True, 
+            download_name=f'学生出勤报表_{datetime.now().strftime("%Y%m%d")}.xlsx'
+        )
     except Exception as e:
+        print(f"导出出勤报表错误: {str(e)}")
         return jsonify({"code": 500, "msg": str(e)}), 500
+
+
 
 
 # ------------------- 启动应用 -------------------
