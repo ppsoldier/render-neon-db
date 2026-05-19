@@ -2151,6 +2151,8 @@ def export_semester_report():
 
 # ==================== 基于排课表的课时统计模块 ====================
 
+# ==================== 基于排课表的课时统计模块（PostgreSQL兼容版）====================
+
 @app.route("/api/student/attendance/list", methods=["GET"])
 def get_student_attendance_list():
     """获取学生的出勤记录列表"""
@@ -2158,11 +2160,14 @@ def get_student_attendance_list():
         student_id = request.args.get('student_id', type=int)
         start_date = request.args.get('start_date')
         end_date = request.args.get('end_date')
-        status = request.args.get('status')  # scheduled, completed, all
+        
+        if not student_id:
+            return jsonify({"code": 400, "msg": "请选择学生"}), 400
         
         db = get_db()
         cur = db.cursor()
         
+        # PostgreSQL 兼容的查询：使用 string_to_array 和 ANY
         sql = """
             SELECT 
                 cs.id,
@@ -2172,14 +2177,14 @@ def get_student_attendance_list():
                 cs.classroom,
                 cs.status,
                 t.name as teacher_name,
-                s.name as student_name,
-                s.id as student_id
+                s.name as student_name
             FROM course_schedule cs
             LEFT JOIN teacher t ON cs.teacher_id = t.id
-            LEFT JOIN student s ON cs.student_id = s.id OR FIND_IN_SET(s.id, cs.student_ids) > 0
+            CROSS JOIN student s
             WHERE s.id = %s
+              AND (cs.student_id = %s OR cs.student_ids LIKE '%' || %s || '%')
         """
-        params = [student_id]
+        params = [student_id, student_id, student_id]
         
         if start_date:
             sql += " AND cs.class_date >= %s"
@@ -2187,9 +2192,6 @@ def get_student_attendance_list():
         if end_date:
             sql += " AND cs.class_date <= %s"
             params.append(end_date)
-        if status and status != 'all':
-            sql += " AND cs.status = %s"
-            params.append(status)
         
         sql += " ORDER BY cs.class_date DESC, cs.class_time"
         
@@ -2203,7 +2205,7 @@ def get_student_attendance_list():
         result = []
         for row in data:
             class_date = row[1]
-            # 如果课程日期小于今天且状态不是completed，自动标记为已完成
+            # 如果课程日期小于今天且状态不是cancelled，自动标记为已完成
             if class_date < today and row[5] != 'cancelled':
                 actual_status = 'completed'
             else:
@@ -2217,8 +2219,7 @@ def get_student_attendance_list():
                 "classroom": row[4] or '',
                 "status": actual_status,
                 "teacher_name": row[6] or '待分配',
-                "student_name": row[7] or '',
-                "student_id": row[8]
+                "student_name": row[7] or ''
             })
         
         return jsonify({"code": 200, "data": result})
@@ -2235,24 +2236,20 @@ def get_student_attendance_statistics():
         start_date = request.args.get('start_date')
         end_date = request.args.get('end_date')
         
+        if not student_id:
+            return jsonify({"code": 400, "msg": "请选择学生"}), 400
+        
         db = get_db()
         cur = db.cursor()
         
-        # 构建查询条件
         sql = """
             SELECT 
-                cs.id,
                 cs.class_date,
-                cs.class_time,
-                cs.subject,
-                cs.status,
-                t.name as teacher_name
+                cs.status
             FROM course_schedule cs
-            LEFT JOIN teacher t ON cs.teacher_id = t.id
-            LEFT JOIN student s ON cs.student_id = s.id OR FIND_IN_SET(s.id, cs.student_ids) > 0
-            WHERE s.id = %s
+            WHERE (cs.student_id = %s OR cs.student_ids LIKE '%' || %s || '%')
         """
-        params = [student_id]
+        params = [student_id, student_id]
         
         if start_date:
             sql += " AND cs.class_date >= %s"
@@ -2268,20 +2265,22 @@ def get_student_attendance_statistics():
         
         today = datetime.now().date()
         
-        total_classes = 0
+        total_classes = len(data)
         completed_classes = 0
         upcoming_classes = 0
-        total_hours = 0
         
         for row in data:
-            class_date = row[1]
-            total_classes += 1
-            total_hours += 2  # 每次课2课时
+            class_date = row[0]
+            status = row[1]
             
-            if class_date < today:
+            if class_date < today and status != 'cancelled':
                 completed_classes += 1
-            else:
+            elif class_date >= today and status != 'cancelled':
                 upcoming_classes += 1
+        
+        total_hours = total_classes * 2
+        completed_hours = completed_classes * 2
+        upcoming_hours = upcoming_classes * 2
         
         return jsonify({
             "code": 200,
@@ -2290,38 +2289,12 @@ def get_student_attendance_statistics():
                 "completed_classes": completed_classes,
                 "upcoming_classes": upcoming_classes,
                 "total_hours": total_hours,
-                "completed_hours": completed_classes * 2,
-                "upcoming_hours": upcoming_classes * 2
+                "completed_hours": completed_hours,
+                "upcoming_hours": upcoming_hours
             }
         })
     except Exception as e:
         print(f"获取出勤统计错误: {str(e)}")
-        return jsonify({"code": 500, "msg": str(e)}), 500
-
-
-@app.route("/api/student/attendance/update", methods=["POST"])
-def update_attendance_status():
-    """手动更新出勤状态"""
-    try:
-        data = request.json
-        schedule_id = data.get('schedule_id')
-        status = data.get('status')  # scheduled, completed, cancelled
-        
-        db = get_db()
-        cur = db.cursor()
-        
-        cur.execute("""
-            UPDATE course_schedule 
-            SET status = %s 
-            WHERE id = %s
-        """, (status, schedule_id))
-        
-        db.commit()
-        cur.close()
-        db.close()
-        
-        return jsonify({"code": 200, "msg": "更新成功"})
-    except Exception as e:
         return jsonify({"code": 500, "msg": str(e)}), 500
 
 
@@ -2330,9 +2303,12 @@ def export_attendance_report():
     """导出学生出勤报表"""
     try:
         data = request.json
-        student_ids = data.get('student_ids', [])
+        student_id = data.get('student_id')
         start_date = data.get('start_date')
         end_date = data.get('end_date')
+        
+        if not student_id:
+            return jsonify({"code": 400, "msg": "请选择学生"}), 400
         
         db = get_db()
         cur = db.cursor()
@@ -2350,15 +2326,12 @@ def export_attendance_report():
                 cs.status
             FROM course_schedule cs
             LEFT JOIN teacher t ON cs.teacher_id = t.id
-            JOIN student s ON cs.student_id = s.id OR FIND_IN_SET(s.id, cs.student_ids) > 0
-            WHERE 1=1
+            CROSS JOIN student s
+            WHERE s.id = %s
+              AND (cs.student_id = %s OR cs.student_ids LIKE '%' || %s || '%')
         """
-        params = []
+        params = [student_id, student_id, student_id]
         
-        if student_ids:
-            placeholders = ','.join(['%s'] * len(student_ids))
-            sql += f" AND s.id IN ({placeholders})"
-            params.extend(student_ids)
         if start_date:
             sql += " AND cs.class_date >= %s"
             params.append(start_date)
@@ -2366,7 +2339,7 @@ def export_attendance_report():
             sql += " AND cs.class_date <= %s"
             params.append(end_date)
         
-        sql += " ORDER BY s.name, cs.class_date, cs.class_time"
+        sql += " ORDER BY cs.class_date, cs.class_time"
         
         cur.execute(sql, params)
         data = cur.fetchall()
@@ -2392,9 +2365,11 @@ def export_attendance_report():
         today = datetime.now().date()
         for row in data:
             class_date = row[3]
-            if class_date < today and row[8] != 'cancelled':
+            status = row[8]
+            
+            if class_date < today and status != 'cancelled':
                 status_text = '已完成'
-            elif row[8] == 'cancelled':
+            elif status == 'cancelled':
                 status_text = '已取消'
             else:
                 status_text = '待上课'
