@@ -2151,8 +2151,6 @@ def export_semester_report():
 
 # ==================== 基于排课表的课时统计模块 ====================
 
-# ==================== 基于排课表的课时统计模块（PostgreSQL兼容版）====================
-
 @app.route("/api/student/attendance/list", methods=["GET"])
 def get_student_attendance_list():
     """获取学生的出勤记录列表"""
@@ -2167,9 +2165,8 @@ def get_student_attendance_list():
         db = get_db()
         cur = db.cursor()
         
-        # 查询条件：
-        # 1. student_id 直接匹配
-        # 2. student_ids 中包含该ID（格式如 "14" 或 "14,15" 或 "14,15,16"）
+        student_id_str = str(student_id)
+        
         sql = """
             SELECT 
                 cs.id,
@@ -2191,14 +2188,12 @@ def get_student_attendance_list():
               )
         """
         
-        # 构建匹配模式
-        student_id_str = str(student_id)
         params = [
-            student_id,                           # cs.student_id = %s
-            student_id_str,                       # cs.student_ids = '14'
-            f'{student_id_str},%',                # cs.student_ids LIKE '14,%'
-            f'%,{student_id_str}',                # cs.student_ids LIKE '%,14'
-            f'%,{student_id_str},%'               # cs.student_ids LIKE '%,14,%'
+            student_id,
+            student_id_str,
+            f'{student_id_str},%',
+            f'%,{student_id_str}',
+            f'%,{student_id_str},%'
         ]
         
         if start_date:
@@ -2210,28 +2205,29 @@ def get_student_attendance_list():
         
         sql += " ORDER BY cs.class_date DESC, cs.class_time"
         
-        print(f"查询学生ID: {student_id}")
-        print(f"SQL: {sql}")
-        print(f"参数: {params}")
-        
         cur.execute(sql, params)
         data = cur.fetchall()
-        
-        print(f"查询到 {len(data)} 条记录")
-        
         cur.close()
         db.close()
         
+        # 获取今天的日期（不带时间）
         today = datetime.now().date()
         
         result = []
         for row in data:
-            class_date = row[1]
-            # 如果课程日期小于今天，自动标记为已完成
-            if class_date < today and row[5] != 'cancelled':
+            class_date = row[1]  # 这是 date 对象
+            status = row[5]
+            
+            # 判断：课程日期 <= 今天 且 状态不是已取消，则标记为"已上课"
+            if class_date <= today and status != 'cancelled':
                 actual_status = 'completed'
+                status_text = '已上课'
+            elif status == 'cancelled':
+                actual_status = 'cancelled'
+                status_text = '已取消'
             else:
-                actual_status = row[5] or 'scheduled'
+                actual_status = 'scheduled'
+                status_text = '待上课'
             
             result.append({
                 "id": row[0],
@@ -2240,6 +2236,7 @@ def get_student_attendance_list():
                 "subject": row[3] or '',
                 "classroom": row[4] or '',
                 "status": actual_status,
+                "status_text": status_text,
                 "teacher_name": row[6] or '待分配'
             })
         
@@ -2312,9 +2309,10 @@ def get_student_attendance_statistics():
             class_date = row[0]
             status = row[1]
             
-            if class_date < today and status != 'cancelled':
+            # 课程日期 <= 今天 且 不是已取消，算作已完成
+            if class_date <= today and status != 'cancelled':
                 completed_classes += 1
-            elif class_date >= today and status != 'cancelled':
+            elif class_date > today and status != 'cancelled':
                 upcoming_classes += 1
         
         total_hours = total_classes * 2
