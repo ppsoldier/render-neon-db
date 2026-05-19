@@ -2367,6 +2367,32 @@ def get_student_attendance_statistics():
         print(f"获取出勤统计错误: {str(e)}")
         return jsonify({"code": 500, "msg": str(e)}), 500
 
+@app.route("/api/student/attendance/update", methods=["POST"])
+def update_attendance_status():
+    """手动更新课程状态"""
+    try:
+        data = request.json
+        schedule_id = data.get('schedule_id')
+        status = data.get('status')  # completed, cancelled, scheduled
+        
+        db = get_db()
+        cur = db.cursor()
+        
+        cur.execute("""
+            UPDATE course_schedule 
+            SET status = %s 
+            WHERE id = %s
+        """, (status, schedule_id))
+        
+        db.commit()
+        cur.close()
+        db.close()
+        
+        return jsonify({"code": 200, "msg": "更新成功"})
+    except Exception as e:
+        return jsonify({"code": 500, "msg": str(e)}), 500
+
+
 # ------------------- 启动应用 -------------------
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8080))
