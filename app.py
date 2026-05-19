@@ -2485,7 +2485,164 @@ def export_attendance_report():
         return jsonify({"code": 500, "msg": str(e)}), 500
 
 
+# ==================== 课表导出模块 ====================
 
+@app.route("/api/schedule/export/excel", methods=["POST"])
+def export_schedule_excel():
+    """导出周课表为Excel"""
+    try:
+        data = request.json
+        start_date = data.get('start_date')
+        end_date = data.get('end_date')
+        week_offset = data.get('week_offset', 0)
+        
+        if not start_date or not end_date:
+            return jsonify({"code": 400, "msg": "缺少日期参数"}), 400
+        
+        db = get_db()
+        cur = db.cursor()
+        
+        # 获取周课表数据
+        cur.execute("""
+            SELECT 
+                s.id,
+                s.class_date,
+                EXTRACT(DOW FROM s.class_date) as weekday,
+                s.class_time,
+                s.subject,
+                s.classroom,
+                COALESCE(s.status, 'scheduled') as status,
+                t.name as teacher_name,
+                s.student_ids
+            FROM course_schedule s
+            LEFT JOIN teacher t ON s.teacher_id = t.id
+            WHERE s.class_date BETWEEN %s AND %s
+              AND (s.status IS NULL OR s.status != 'cancelled')
+            ORDER BY s.class_date, s.class_time
+        """, (start_date, end_date))
+        
+        data = cur.fetchall()
+        
+        # 获取学生名称映射
+        cur.execute("SELECT id, name FROM student")
+        students_map = {row[0]: row[1] for row in cur.fetchall()}
+        
+        cur.close()
+        db.close()
+        
+        # 整理数据结构
+        weekdays = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
+        time_slots = set()
+        schedule_data = {}
+        
+        for row in data:
+            weekday_idx = int(row[2])
+            weekday_idx = 6 if weekday_idx == 0 else weekday_idx - 1
+            weekday_name = weekdays[weekday_idx]
+            class_time = row[3]
+            time_slots.add(class_time)
+            
+            # 解析学生名称
+            student_names = []
+            if row[8]:
+                student_ids = [int(x) for x in row[8].split(',') if x]
+                student_names = [students_map.get(sid, '') for sid in student_ids if students_map.get(sid)]
+            
+            key = f"{weekday_name}_{class_time}"
+            schedule_data[key] = {
+                "subject": row[4] or '',
+                "teacher": row[7] or '',
+                "classroom": row[5] or '',
+                "students": '、'.join(student_names) if student_names else '集体课',
+                "status": '已完成' if row[6] == 'completed' else '待上课'
+            }
+        
+        # 排序时间段
+        def get_start_time(time_str):
+            return time_str.split('-')[0] if time_str else '00:00'
+        sorted_time_slots = sorted(list(time_slots), key=get_start_time)
+        
+        # 创建工作簿
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = f"周课表_{start_date}_至_{end_date}"
+        
+        # 设置表头样式
+        header_fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+        header_font = Font(bold=True, color="FFFFFF", size=12)
+        center_alignment = Alignment(horizontal="center", vertical="center")
+        
+        # 第一行：标题
+        ws.merge_cells('A1:F1')
+        title_cell = ws['A1']
+        title_cell.value = f"课 程 表  ({start_date} ~ {end_date})"
+        title_cell.font = Font(bold=True, size=16)
+        title_cell.alignment = center_alignment
+        
+        # 第二行：表头
+        headers = ['时间', '周一', '周二', '周三', '周四', '周五', '周六', '周日']
+        for col, header in enumerate(headers, 1):
+            cell = ws.cell(row=2, column=col, value=header)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = center_alignment
+        
+        # 写入课程数据
+        row_num = 3
+        for time_slot in sorted_time_slots:
+            ws.cell(row=row_num, column=1, value=time_slot).alignment = center_alignment
+            
+            for col, weekday in enumerate(weekdays, 2):
+                key = f"{weekday}_{time_slot}"
+                if key in schedule_data:
+                    course = schedule_data[key]
+                    cell_value = f"{course['subject']}\n{course['teacher']}\n{course['classroom']}\n{course['students']}"
+                    cell = ws.cell(row=row_num, column=col, value=cell_value)
+                    cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                else:
+                    cell = ws.cell(row=row_num, column=col, value="")
+                    cell.alignment = center_alignment
+            
+            row_num += 1
+        
+        # 设置行高和列宽
+        ws.row_dimensions[1].height = 30
+        ws.row_dimensions[2].height = 25
+        
+        for row in range(3, row_num):
+            ws.row_dimensions[row].height = 80
+        
+        for col in range(1, 9):
+            ws.column_dimensions[chr(64 + col)].width = 18
+        
+        # 添加边框
+        thin_border = openpyxl.styles.Border(
+            left=openpyxl.styles.Side(style='thin'),
+            right=openpyxl.styles.Side(style='thin'),
+            top=openpyxl.styles.Side(style='thin'),
+            bottom=openpyxl.styles.Side(style='thin')
+        )
+        
+        for row in ws.iter_rows(min_row=2, max_row=row_num-1, min_col=1, max_col=8):
+            for cell in row:
+                cell.border = thin_border
+        
+        # 保存到内存
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+        
+        return send_file(
+            output, 
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            as_attachment=True, 
+            download_name=f'周课表_{start_date}_至_{end_date}.xlsx'
+        )
+    except Exception as e:
+        print(f"导出课表错误: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"code": 500, "msg": str(e)}), 500
 
 # ------------------- 启动应用 -------------------
 if __name__ == "__main__":
