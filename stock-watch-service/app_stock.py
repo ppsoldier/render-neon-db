@@ -109,11 +109,18 @@ async def fetch_stock_rank(sort_type: str):
             
             infos = data['data']['infos']
             for item in infos:
+                # 获取价格，优先使用 closePx，如果没有则使用 lastPx
+                price = item.get('closePx')
+                if price is None:
+                    price = item.get('lastPx', 0)
+                if price is None:
+                    price = 0
+                
                 stock_rank.append({
-                    "stock_code": item['symbol'],
-                    "stock_name": item['prodName'],
-                    "price": item['closePx'],
-                    "change_percent": round(item['pxChangeRate'] * 100, 2),
+                    "stock_code": item.get('symbol', ''),
+                    "stock_name": item.get('prodName', ''),
+                    "price": float(price) if price else 0,
+                    "change_percent": round(float(item.get('pxChangeRate', 0)) * 100, 2) if item.get('pxChangeRate') else 0,
                     "volume": item.get('businessAmount', 0),
                     "amount": item.get('businessBalance', 0)
                 })
@@ -126,9 +133,7 @@ async def fetch_stock_rank(sort_type: str):
 
 
 async def fetch_sector_rank(hq_type_code: str):
-    """获取行业/概念板块排行
-    hq_type_code: 'HY' 行业, 'GN' 概念
-    """
+    """获取行业/概念板块排行"""
     sector_rank = []
     for page in range(1, 2):
         timestamp = str(int(time.time() * 1000))
@@ -163,11 +168,15 @@ async def fetch_sector_rank(hq_type_code: str):
             
             plates = data['data']['plate']
             for item in plates:
+                # 获取价格和涨跌幅
+                last_px = item.get('LastPx', 0)
+                px_change_rate = item.get('PxChangeRate', 0)
+                
                 sector_rank.append({
-                    "sector_code": item['ProdCode'],
-                    "sector_name": item['ProdName'],
-                    "price": round(item['LastPx'] / 1000, 2),
-                    "change_percent": round(item['PxChangeRate'] / 100, 2)
+                    "sector_code": item.get('ProdCode', ''),
+                    "sector_name": item.get('ProdName', ''),
+                    "price": round(last_px / 1000, 2) if last_px else 0,
+                    "change_percent": round(px_change_rate / 100, 2) if px_change_rate else 0
                 })
             await asyncio.sleep(0.5)
         except Exception as e:
