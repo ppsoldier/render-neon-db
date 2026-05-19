@@ -2275,9 +2275,9 @@ def get_student_attendance_list():
         return jsonify({"code": 500, "msg": str(e)}), 500
 
 
-@app.route("/api/student/attendance/statistics", methods=["GET"])
-def get_student_attendance_statistics():
-    """获取学生出勤统计（基于精确时间判断）"""
+@app.route("/api/student/attendance/list", methods=["GET"])
+def get_student_attendance_list():
+    """获取学生的出勤记录列表"""
     try:
         student_id = request.args.get('student_id', type=int)
         start_date = request.args.get('start_date')
@@ -2293,10 +2293,15 @@ def get_student_attendance_statistics():
         
         sql = """
             SELECT 
+                cs.id,
                 cs.class_date,
                 cs.class_time,
-                cs.status
+                cs.subject,
+                cs.classroom,
+                cs.status,
+                t.name as teacher_name
             FROM course_schedule cs
+            LEFT JOIN teacher t ON cs.teacher_id = t.id
             WHERE cs.status != 'cancelled'
               AND (
                   cs.student_id = %s 
@@ -2322,6 +2327,8 @@ def get_student_attendance_statistics():
             sql += " AND cs.class_date <= %s"
             params.append(end_date)
         
+        sql += " ORDER BY cs.class_date DESC, cs.class_time"
+        
         cur.execute(sql, params)
         data = cur.fetchall()
         cur.close()
@@ -2330,56 +2337,54 @@ def get_student_attendance_statistics():
         # 获取当前时间
         now = datetime.now()
         today_date = now.date()
-        now_time_str = now.strftime("%H:%M")
+        now_time = now.strftime("%H:%M")
         
-        total_classes = 0
-        completed_classes = 0
-        upcoming_classes = 0
-        
+        result = []
         for row in data:
-            class_date = row[0]
-            class_time = row[1]
-            status = row[2]
+            class_date = row[1]
+            class_time = row[2]  # 格式如 "08:30-10:30"
+            status = row[5]
             
-            if status == 'cancelled':
-                continue
+            # 提取课程开始时间（时间段的前半部分）
+            start_time = class_time.split('-')[0] if class_time else "00:00"
             
-            total_classes += 1
-            
-            # 提取课程开始时间
-            start_time_str = class_time.split('-')[0].strip() if class_time else "00:00"
-            
-            # 判断是否已上课
+            # 判断是否已上课：
+            # 1. 课程日期 < 今天 → 已上课
+            # 2. 课程日期 = 今天 且 开始时间 <= 当前时间 → 已上课
+            # 3. 课程日期 > 今天 → 待上课
             is_completed = False
             if class_date < today_date:
                 is_completed = True
-            elif class_date == today_date and start_time_str <= now_time_str:
+            elif class_date == today_date and start_time <= now_time:
                 is_completed = True
             
-            if is_completed:
-                completed_classes += 1
+            if is_completed and status != 'cancelled':
+                actual_status = 'completed'
+                status_text = '已上课'
+            elif status == 'cancelled':
+                actual_status = 'cancelled'
+                status_text = '已取消'
             else:
-                upcoming_classes += 1
+                actual_status = 'scheduled'
+                status_text = '待上课'
+            
+            result.append({
+                "id": row[0],
+                "class_date": str(class_date),
+                "class_time": class_time,
+                "subject": row[3] or '',
+                "classroom": row[4] or '',
+                "status": actual_status,
+                "status_text": status_text,
+                "teacher_name": row[6] or '待分配',
+                "start_time": start_time
+            })
         
-        total_hours = total_classes * 2
-        completed_hours = completed_classes * 2
-        upcoming_hours = upcoming_classes * 2
-        
-        print(f"统计结果: 总课次={total_classes}, 已上课={completed_classes}, 待上课={upcoming_classes}")
-        
-        return jsonify({
-            "code": 200,
-            "data": {
-                "total_classes": total_classes,
-                "completed_classes": completed_classes,
-                "upcoming_classes": upcoming_classes,
-                "total_hours": total_hours,
-                "completed_hours": completed_hours,
-                "upcoming_hours": upcoming_hours
-            }
-        })
+        return jsonify({"code": 200, "data": result})
     except Exception as e:
-        print(f"获取出勤统计错误: {str(e)}")
+        print(f"获取出勤记录错误: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"code": 500, "msg": str(e)}), 500
 
 
