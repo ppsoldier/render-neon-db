@@ -2210,16 +2210,31 @@ def get_student_attendance_list():
         cur.close()
         db.close()
         
-        # 获取今天的日期（不带时间）
-        today = datetime.now().date()
+        # 获取当前时间
+        now = datetime.now()
+        today_date = now.date()
+        now_time = now.strftime("%H:%M")
         
         result = []
         for row in data:
-            class_date = row[1]  # 这是 date 对象
+            class_date = row[1]
+            class_time = row[2]  # 格式如 "08:30-10:30"
             status = row[5]
             
-            # 判断：课程日期 <= 今天 且 状态不是已取消，则标记为"已上课"
-            if class_date <= today and status != 'cancelled':
+            # 提取课程开始时间（时间段的前半部分）
+            start_time = class_time.split('-')[0] if class_time else "00:00"
+            
+            # 判断是否已上课：
+            # 1. 课程日期 < 今天 → 已上课
+            # 2. 课程日期 = 今天 且 开始时间 <= 当前时间 → 已上课
+            # 3. 课程日期 > 今天 → 待上课
+            is_completed = False
+            if class_date < today_date:
+                is_completed = True
+            elif class_date == today_date and start_time <= now_time:
+                is_completed = True
+            
+            if is_completed and status != 'cancelled':
                 actual_status = 'completed'
                 status_text = '已上课'
             elif status == 'cancelled':
@@ -2232,12 +2247,13 @@ def get_student_attendance_list():
             result.append({
                 "id": row[0],
                 "class_date": str(class_date),
-                "class_time": row[2],
+                "class_time": class_time,
                 "subject": row[3] or '',
                 "classroom": row[4] or '',
                 "status": actual_status,
                 "status_text": status_text,
-                "teacher_name": row[6] or '待分配'
+                "teacher_name": row[6] or '待分配',
+                "start_time": start_time
             })
         
         return jsonify({"code": 200, "data": result})
@@ -2250,7 +2266,7 @@ def get_student_attendance_list():
 
 @app.route("/api/student/attendance/statistics", methods=["GET"])
 def get_student_attendance_statistics():
-    """获取学生出勤统计"""
+    """获取学生出勤统计（基于精确时间判断）"""
     try:
         student_id = request.args.get('student_id', type=int)
         start_date = request.args.get('start_date')
@@ -2267,6 +2283,7 @@ def get_student_attendance_statistics():
         sql = """
             SELECT 
                 cs.class_date,
+                cs.class_time,
                 cs.status
             FROM course_schedule cs
             WHERE cs.status != 'cancelled'
@@ -2299,7 +2316,10 @@ def get_student_attendance_statistics():
         cur.close()
         db.close()
         
-        today = datetime.now().date()
+        # 获取当前时间
+        now = datetime.now()
+        today_date = now.date()
+        now_time = now.strftime("%H:%M")
         
         total_classes = len(data)
         completed_classes = 0
@@ -2307,12 +2327,25 @@ def get_student_attendance_statistics():
         
         for row in data:
             class_date = row[0]
-            status = row[1]
+            class_time = row[1]
+            status = row[2]
             
-            # 课程日期 <= 今天 且 不是已取消，算作已完成
-            if class_date <= today and status != 'cancelled':
+            if status == 'cancelled':
+                continue
+            
+            # 提取课程开始时间
+            start_time = class_time.split('-')[0] if class_time else "00:00"
+            
+            # 判断是否已上课
+            is_completed = False
+            if class_date < today_date:
+                is_completed = True
+            elif class_date == today_date and start_time <= now_time:
+                is_completed = True
+            
+            if is_completed:
                 completed_classes += 1
-            elif class_date > today and status != 'cancelled':
+            else:
                 upcoming_classes += 1
         
         total_hours = total_classes * 2
@@ -2333,7 +2366,6 @@ def get_student_attendance_statistics():
     except Exception as e:
         print(f"获取出勤统计错误: {str(e)}")
         return jsonify({"code": 500, "msg": str(e)}), 500
-
 
 # ------------------- 启动应用 -------------------
 if __name__ == "__main__":
