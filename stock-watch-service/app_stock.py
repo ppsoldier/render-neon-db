@@ -513,6 +513,37 @@ async def get_latest_research(limit: int = Query(20, ge=1, le=50)):
         } for row in rows]
 
 
+@app.get("/api/test/jiufang-raw")
+async def test_jiufang_raw():
+    """测试九方智投原始数据"""
+    params = {
+        'pageNum': '1',
+        'pageSize': '5',
+        'type': 'researchReportList',
+    }
+    signature, timestamp = get_real_signature(params)
+    
+    headers = {
+        'accept': 'application/json, text/plain, */*',
+        'origin': 'https://www.9fzt.com',
+        'referer': 'https://www.9fzt.com/',
+        'signature': signature,
+        'timestamp': timestamp,
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    }
+    
+    url = 'https://api-hq.chongnengjihua.com/finance/api/2/stock/a/rank/list'
+    response = requests.get(url=url, params=params, headers=headers, timeout=15)
+    
+    return {
+        "url": url,
+        "params": params,
+        "signature": signature,
+        "timestamp": timestamp,
+        "response": response.json()
+    }
+
+
 # ========== 定时任务 ==========
 scheduler = BackgroundScheduler()
 
