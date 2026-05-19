@@ -577,6 +577,253 @@ async def get_stock_research(stock_code: str, limit: int = Query(20, ge=1, le=50
         return []
 
 
+
+# ========== 微信提醒功能 ==========
+import asyncio
+import threading
+from datetime import datetime, timedelta
+
+# 提醒记录存储（避免重复推送）
+alert_record = {}
+
+# 微信小程序订阅消息模板ID（需要在微信公众平台申请）
+# 模板示例：涨跌提醒模板
+TEMPLATE_ID = "你的模板ID"  # 需要在微信公众平台申请订阅消息模板
+
+async def check_and_send_alerts():
+    """检查自选股涨跌幅并发送提醒"""
+    try:
+        # 获取实时行情
+        up_ranks = await fetch_stock_rank('0')
+        down_ranks = await fetch_stock_rank('1')
+        
+        # 建立行情映射
+        quote_map = {}
+        for item in up_ranks + down_ranks:
+            quote_map[item['stock_code']] = item
+        
+        # 遍历所有用户的自选股
+        for user_id, watchlist in watchlist_storage.items():
+            for stock_code in watchlist:
+                # 获取提醒阈值（默认3%）
+                threshold = user_alert_settings.get(user_id, {}).get(stock_code, 3.0)
+                
+                # 获取实时行情
+                quote = quote_map.get(stock_code)
+                if not quote:
+                    continue
+                
+                change_percent = quote.get('change_percent', 0)
+                stock_name = quote.get('stock_name', stock_code)
+                price = quote.get('price', 0)
+                
+                # 检查是否触发提醒
+                alert_key = f"{user_id}_{stock_code}_{datetime.now().strftime('%Y-%m-%d')}"
+                
+                # 涨幅超过阈值且今日未提醒过
+                if change_percent >= threshold and alert_key not in alert_record:
+                    alert_record[alert_key] = True
+                    # 发送微信提醒
+                    await send_wechat_alert(user_id, stock_code, stock_name, price, change_percent, "上涨")
+                # 跌幅超过阈值（可选，-3%）
+                elif change_percent <= -threshold and alert_key not in alert_record:
+                    alert_record[alert_key] = True
+                    await send_wechat_alert(user_id, stock_code, stock_name, price, change_percent, "下跌")
+                    
+        # 清理7天前的提醒记录
+        clean_old_records()
+        
+    except Exception as e:
+        logger.error(f"检查提醒错误: {e}")
+
+
+async def send_wechat_alert(user_id, stock_code, stock_name, price, change_percent, alert_type):
+    """发送微信订阅消息"""
+    try:
+        # 获取用户的openid（需要从用户登录信息获取）
+        openid = user_openid_map.get(user_id)
+        if not openid:
+            logger.warning(f"用户 {user_id} 未绑定openid")
+            return
+        
+        # 构建消息内容
+        data = {
+            "thing1": {"value": stock_name},  # 股票名称
+            "amount2": {"value": f"{price:.2f}"},  # 当前价格
+            "thing3": {"value": f"{alert_type}{abs(change_percent):.2f}%"},  # 涨跌幅
+            "time4": {"value": datetime.now().strftime("%H:%M")},  # 时间
+            "thing5": {"value": f"您的自选股{stock_name}{alert_type}{abs(change_percent):.2f}%，请注意查看"}  # 提醒内容
+        }
+        
+        # 调用微信小程序服务端API
+        access_token = await get_access_token()
+        url = f"https://api.weixin.qq.com/cgi-bin/message/subscribe/send?access_token={access_token}"
+        
+        payload = {
+            "touser": openid,
+            "template_id": TEMPLATE_ID,
+            "page": f"pages/stock-detail/stock-detail?code={stock_code}",
+            "data": data
+        }
+        
+        response = requests.post(url, json=payload, timeout=10)
+        result = response.json()
+        
+        if result.get('errcode') == 0:
+            logger.info(f"发送提醒成功: {stock_name} {alert_type}{change_percent}%")
+        else:
+            logger.error(f"发送提醒失败: {result}")
+            
+    except Exception as e:
+        logger.error(f"发送微信提醒错误: {e}")
+
+
+async def get_access_token():
+    """获取微信小程序access_token"""
+    # 从环境变量获取配置
+    appid = os.environ.get("WECHAT_APPID", "")
+    secret = os.environ.get("WECHAT_SECRET", "")
+    
+    # 缓存token
+    if hasattr(get_access_token, "token") and hasattr(get_access_token, "expire_time"):
+        if datetime.now() < get_access_token.expire_time:
+            return get_access_token.token
+    
+    url = f"https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid={appid}&secret={secret}"
+    response = requests.get(url, timeout=10)
+    data = response.json()
+    
+    if data.get('access_token'):
+        get_access_token.token = data['access_token']
+        get_access_token.expire_time = datetime.now() + timedelta(seconds=7000)
+        return get_access_token.token
+    else:
+        logger.error(f"获取access_token失败: {data}")
+        return None
+
+
+def clean_old_records():
+    """清理7天前的提醒记录"""
+    now = datetime.now()
+    keys_to_delete = []
+    for key in alert_record:
+        try:
+            # 从key中提取日期
+            date_str = key.split('_')[-1]
+            record_date = datetime.strptime(date_str, '%Y-%m-%d')
+            if (now - record_date).days >= 7:
+                keys_to_delete.append(key)
+        except:
+            pass
+    
+    for key in keys_to_delete:
+        del alert_record[key]
+
+
+# 用户openid映射（需要在小程序登录时保存）
+user_openid_map = {}
+
+# 用户提醒阈值设置
+user_alert_settings = {}
+
+
+# ========== 用户登录接口 ==========
+@app.post("/api/user/login")
+async def user_login(request: Request):
+    """小程序登录，保存openid"""
+    try:
+        body = await request.json()
+        code = body.get('code')  # 微信登录code
+        user_id = body.get('user_id')  # 前端生成的用户标识
+        
+        # 用code换取openid
+        appid = os.environ.get("WECHAT_APPID", "")
+        secret = os.environ.get("WECHAT_SECRET", "")
+        url = f"https://api.weixin.qq.com/sns/jscode2session?appid={appid}&secret={secret}&js_code={code}&grant_type=authorization_code"
+        
+        response = requests.get(url, timeout=10)
+        data = response.json()
+        
+        openid = data.get('openid')
+        if openid:
+            user_openid_map[user_id] = openid
+            return {"success": True, "openid": openid}
+        else:
+            return {"success": False, "message": "登录失败"}
+    except Exception as e:
+        logger.error(f"登录错误: {e}")
+        return {"success": False, "message": str(e)}
+
+
+# ========== 提醒设置接口 ==========
+@app.post("/api/watchlist/alert")
+async def set_alert(request: Request):
+    """设置涨跌提醒阈值"""
+    try:
+        body = await request.json()
+        user_id = body.get('user_id')
+        stock_code = body.get('stock_code')
+        threshold = body.get('threshold', 3.0)
+        enabled = body.get('enabled', True)
+        
+        if user_id not in user_alert_settings:
+            user_alert_settings[user_id] = {}
+        
+        if enabled:
+            user_alert_settings[user_id][stock_code] = threshold
+        else:
+            if stock_code in user_alert_settings[user_id]:
+                del user_alert_settings[user_id][stock_code]
+        
+        return {"success": True, "message": f"提醒设置成功，涨跌超过{threshold}%将收到微信通知"}
+    except Exception as e:
+        logger.error(f"设置提醒错误: {e}")
+        return {"success": False, "message": str(e)}
+
+
+@app.get("/api/watchlist/alert/settings")
+async def get_alert_settings(user_id: str):
+    """获取用户的提醒设置"""
+    settings = user_alert_settings.get(user_id, {})
+    return [
+        {"stock_code": code, "threshold": threshold}
+        for code, threshold in settings.items()
+    ]
+
+
+# ========== 启动定时任务 ==========
+def start_alert_checker():
+    """启动定时检查提醒的线程"""
+    def check_loop():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        while True:
+            try:
+                # 只在交易时段检查（9:30-15:00）
+                now = datetime.now()
+                if 9 <= now.hour <= 15:
+                    loop.run_until_complete(check_and_send_alerts())
+                time.sleep(60)  # 每分钟检查一次
+            except Exception as e:
+                logger.error(f"提醒检查循环错误: {e}")
+                time.sleep(60)
+    
+    thread = threading.Thread(target=check_loop, daemon=True)
+    thread.start()
+
+# 启动提醒检查线程
+start_alert_checker()
+
+
+
+
+
+
+
+
+
+
+
 # ========== 定时任务 ==========
 scheduler = BackgroundScheduler()
 
