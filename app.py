@@ -2213,26 +2213,37 @@ def get_student_attendance_list():
         # 获取当前时间
         now = datetime.now()
         today_date = now.date()
-        now_time = now.strftime("%H:%M")
+        now_time_str = now.strftime("%H:%M")
+        
+        print(f"当前时间: {now_time_str}")
         
         result = []
         for row in data:
             class_date = row[1]
-            class_time = row[2]  # 格式如 "08:30-10:30"
+            class_time = row[2]  # 格式如 "20:00-22:00"
             status = row[5]
             
             # 提取课程开始时间（时间段的前半部分）
-            start_time = class_time.split('-')[0] if class_time else "00:00"
+            start_time_str = class_time.split('-')[0].strip() if class_time else "00:00"
             
-            # 判断是否已上课：
-            # 1. 课程日期 < 今天 → 已上课
-            # 2. 课程日期 = 今天 且 开始时间 <= 当前时间 → 已上课
-            # 3. 课程日期 > 今天 → 待上课
+            print(f"课程: {row[3]}, 日期: {class_date}, 开始时间: {start_time_str}, 当前时间: {now_time_str}")
+            
+            # 判断是否已上课
             is_completed = False
+            
             if class_date < today_date:
+                # 课程日期 < 今天 → 已上课
                 is_completed = True
-            elif class_date == today_date and start_time <= now_time:
-                is_completed = True
+                print(f"  -> 日期小于今天，判定为已上课")
+            elif class_date == today_date:
+                # 课程日期 = 今天，比较时间
+                if start_time_str <= now_time_str:
+                    is_completed = True
+                    print(f"  -> 开始时间 {start_time_str} <= 当前时间 {now_time_str}，判定为已上课")
+                else:
+                    print(f"  -> 开始时间 {start_time_str} > 当前时间 {now_time_str}，判定为待上课")
+            else:
+                print(f"  -> 日期大于今天，判定为待上课")
             
             if is_completed and status != 'cancelled':
                 actual_status = 'completed'
@@ -2253,7 +2264,7 @@ def get_student_attendance_list():
                 "status": actual_status,
                 "status_text": status_text,
                 "teacher_name": row[6] or '待分配',
-                "start_time": start_time
+                "start_time": start_time_str
             })
         
         return jsonify({"code": 200, "data": result})
@@ -2261,6 +2272,114 @@ def get_student_attendance_list():
         print(f"获取出勤记录错误: {str(e)}")
         import traceback
         traceback.print_exc()
+        return jsonify({"code": 500, "msg": str(e)}), 500
+
+
+@app.route("/api/student/attendance/statistics", methods=["GET"])
+def get_student_attendance_statistics():
+    """获取学生出勤统计（基于精确时间判断）"""
+    try:
+        student_id = request.args.get('student_id', type=int)
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+        
+        if not student_id:
+            return jsonify({"code": 400, "msg": "请选择学生"}), 400
+        
+        db = get_db()
+        cur = db.cursor()
+        
+        student_id_str = str(student_id)
+        
+        sql = """
+            SELECT 
+                cs.class_date,
+                cs.class_time,
+                cs.status
+            FROM course_schedule cs
+            WHERE cs.status != 'cancelled'
+              AND (
+                  cs.student_id = %s 
+                  OR cs.student_ids = %s
+                  OR cs.student_ids LIKE %s
+                  OR cs.student_ids LIKE %s
+                  OR cs.student_ids LIKE %s
+              )
+        """
+        
+        params = [
+            student_id,
+            student_id_str,
+            f'{student_id_str},%',
+            f'%,{student_id_str}',
+            f'%,{student_id_str},%'
+        ]
+        
+        if start_date:
+            sql += " AND cs.class_date >= %s"
+            params.append(start_date)
+        if end_date:
+            sql += " AND cs.class_date <= %s"
+            params.append(end_date)
+        
+        cur.execute(sql, params)
+        data = cur.fetchall()
+        cur.close()
+        db.close()
+        
+        # 获取当前时间
+        now = datetime.now()
+        today_date = now.date()
+        now_time_str = now.strftime("%H:%M")
+        
+        total_classes = 0
+        completed_classes = 0
+        upcoming_classes = 0
+        
+        for row in data:
+            class_date = row[0]
+            class_time = row[1]
+            status = row[2]
+            
+            if status == 'cancelled':
+                continue
+            
+            total_classes += 1
+            
+            # 提取课程开始时间
+            start_time_str = class_time.split('-')[0].strip() if class_time else "00:00"
+            
+            # 判断是否已上课
+            is_completed = False
+            if class_date < today_date:
+                is_completed = True
+            elif class_date == today_date and start_time_str <= now_time_str:
+                is_completed = True
+            
+            if is_completed:
+                completed_classes += 1
+            else:
+                upcoming_classes += 1
+        
+        total_hours = total_classes * 2
+        completed_hours = completed_classes * 2
+        upcoming_hours = upcoming_classes * 2
+        
+        print(f"统计结果: 总课次={total_classes}, 已上课={completed_classes}, 待上课={upcoming_classes}")
+        
+        return jsonify({
+            "code": 200,
+            "data": {
+                "total_classes": total_classes,
+                "completed_classes": completed_classes,
+                "upcoming_classes": upcoming_classes,
+                "total_hours": total_hours,
+                "completed_hours": completed_hours,
+                "upcoming_hours": upcoming_hours
+            }
+        })
+    except Exception as e:
+        print(f"获取出勤统计错误: {str(e)}")
         return jsonify({"code": 500, "msg": str(e)}), 500
 
 
