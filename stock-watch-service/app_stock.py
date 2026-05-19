@@ -41,75 +41,180 @@ async def get_db():
     return db_pool
 
 # ========== 九方智投签名算法 ==========
-def get_real_signature(params):
-    """生成九方智投接口签名"""
+
+# 获取股票涨幅榜 signature
+def generate_signature(listed_sector, sort_field, sort_type, timestamp, page):
+    base_string = f"sjdxfnqogbzoun13d971ckh8p{listed_sector}{page}20{sort_field}{sort_type}{timestamp}"
+    return hashlib.md5(base_string.encode()).hexdigest()
+
+# 获取股票行业板块排行榜 signature
+def get_sector_signature(time_stamp):
+    base_string = f"sjdxfnqogbzoun13d971ckh8p{time_stamp}"
+    return hashlib.md5(base_string.encode()).hexdigest()
+
+# 获取公司研报 signature
+def get_research_signature(params):
     secret = "sjdxfnqogbzoun13d971ckh8p"
     timestamp = str(int(time.time() * 1000))
-
-    # 核心：按键排序 → 只拼接参数值
     sorted_keys = sorted(params.keys())
     values_str = "".join([params[k] for k in sorted_keys])
-
-    # 签名拼接：密钥 + 值字符串 + 时间戳
     sign_str = secret + values_str + timestamp
     sign = hashlib.md5(sign_str.encode()).hexdigest()
-
     return sign, timestamp
 
 
-async def fetch_jiufang_research(page: int = 0, page_size: int = 50):
-    """从九方智投获取研报数据 - 使用正确的研报接口"""
-    try:
-        # 计算日期范围（最近30天）
-        today = datetime.now()
-        from_date = (today - timedelta(days=30)).strftime("%Y-%m-%d")
-        to_date = today.strftime("%Y-%m-%d")
-        
-        # 请求参数
+# ========== 实时数据采集函数 ==========
+
+async def fetch_stock_rank(sort_type: str):
+    """获取股票涨跌幅排行
+    sort_type: '0' 涨幅榜, '1' 跌幅榜
+    """
+    stock_rank = []
+    for page in range(1, 3):
+        timestamp = str(int(time.time() * 1000))
         params = {
-            'pageNo': str(page),
-            'pageSize': str(page_size),
-            'from': from_date,
-            'to': to_date,
+            'pageNum': str(page),
+            'pageSize': '20',
+            'listedSector': '0',
+            'sortField': 'pxChangeRate',
+            'sortType': sort_type,
         }
         
-        # 生成签名
-        sign, timestamp = get_real_signature(params)
+        signature = generate_signature(
+            listed_sector=params['listedSector'],
+            sort_field=params['sortField'],
+            sort_type=params['sortType'],
+            timestamp=timestamp,
+            page=page
+        )
+        
+        headers = {
+            'accept': 'application/json, text/plain, */*',
+            'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            'origin': 'https://www.9fzt.com',
+            'referer': 'https://www.9fzt.com/',
+            'signature': signature,
+            'timestamp': timestamp,
+            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        }
+        
+        url = 'https://api-hq.chongnengjihua.com/finance/api/2/stock/a/rank/list'
+        
+        try:
+            response = requests.get(url=url, params=params, headers=headers, timeout=10)
+            data = response.json()
+            
+            if not data or 'data' not in data or 'infos' not in data['data']:
+                break
+            
+            infos = data['data']['infos']
+            for item in infos:
+                stock_rank.append({
+                    "stock_code": item['symbol'],
+                    "stock_name": item['prodName'],
+                    "price": item['closePx'],
+                    "change_percent": round(item['pxChangeRate'] * 100, 2),
+                    "volume": item.get('businessAmount', 0),
+                    "amount": item.get('businessBalance', 0)
+                })
+            await asyncio.sleep(0.5)
+        except Exception as e:
+            logger.error(f"获取股票排行错误: {e}")
+            continue
+    
+    return stock_rank
+
+
+async def fetch_sector_rank(hq_type_code: str):
+    """获取行业/概念板块排行
+    hq_type_code: 'HY' 行业, 'GN' 概念
+    """
+    sector_rank = []
+    for page in range(1, 2):
+        timestamp = str(int(time.time() * 1000))
+        params = {
+            'hqTypeCode': hq_type_code,
+            'sortFlag': 'true',
+            'sortFields': 'pxChangeRate',
+            'pageNum': page,
+            'pageSize': '30',
+        }
+        
+        sign = get_sector_signature(timestamp)
+        
+        headers = {
+            'accept': 'application/json, text/plain, */*',
+            'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            'origin': 'https://stock.9fzt.com',
+            'referer': 'https://stock.9fzt.com/',
+            'signature': sign,
+            'timestamp': timestamp,
+            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        }
+        
+        url = 'https://hq.chongnengjihua.com/rjhy-quote-sector/api/1/pc/plate/block/quote/list'
+        
+        try:
+            response = requests.get(url=url, headers=headers, params=params, timeout=10)
+            data = response.json()
+            
+            if not data or 'data' not in data or 'plate' not in data['data']:
+                break
+            
+            plates = data['data']['plate']
+            for item in plates:
+                sector_rank.append({
+                    "sector_code": item['ProdCode'],
+                    "sector_name": item['ProdName'],
+                    "price": round(item['LastPx'] / 1000, 2),
+                    "change_percent": round(item['PxChangeRate'] / 100, 2)
+                })
+            await asyncio.sleep(0.5)
+        except Exception as e:
+            logger.error(f"获取板块排行错误: {e}")
+            continue
+    
+    return sector_rank
+
+
+async def fetch_research_reports(page: int = 0, page_size: int = 50):
+    """获取研报数据"""
+    reports = []
+    today = datetime.now()
+    from_date = (today - timedelta(days=30)).strftime("%Y-%m-%d")
+    to_date = today.strftime("%Y-%m-%d")
+    
+    params = {
+        'pageNo': str(page),
+        'pageSize': str(page_size),
+        'from': from_date,
+        'to': to_date,
+    }
+    
+    try:
+        sign, timestamp = get_research_signature(params)
         
         headers = {
             'referer': 'https://stock.9fzt.com/',
             'signature': sign,
             'timestamp': timestamp,
             'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'accept': 'application/json, text/plain, */*',
         }
         
         url = 'https://api-hq.chongnengjihua.com/news/api/1/company/report/list'
-        
-        response = requests.get(url=url, headers=headers, params=params, timeout=15)
+        response = requests.get(url, headers=headers, params=params, timeout=15)
         data = response.json()
-        
-        logger.info(f"九方智投研报接口响应码: {data.get('code')}")
         
         if data.get('code') != 1:
             logger.warning(f"研报接口返回错误: {data}")
             return []
         
         infos = data.get('data', {}).get('data', [])
-        if not infos:
-            logger.warning("没有获取到研报数据")
-            return []
-        
-        reports = []
         for item in infos:
-            # 解析星级（orgDescription 可能是数字）
             rating_value = item.get('orgDescription', 0)
-            if rating_value and rating_value > 0:
-                rating = f"{rating_value}星"
-            else:
-                rating = "关注"
+            rating = f"{rating_value}星" if rating_value and rating_value > 0 else "关注"
             
-            report = {
+            reports.append({
                 "id": item.get('reportId', ''),
                 "stock_code": item.get('symbol', ''),
                 "stock_name": item.get('stockName', ''),
@@ -117,15 +222,13 @@ async def fetch_jiufang_research(page: int = 0, page_size: int = 50):
                 "publisher": item.get('orgNameDisc', '九方智投'),
                 "rating": rating,
                 "publish_date": datetime.fromtimestamp(item.get('publishDate', 0)).strftime("%Y-%m-%d") if item.get('publishDate') else "",
-                "summary": item.get('title', '点击查看详细内容'),
-                "url": ""
-            }
-            reports.append(report)
+                "summary": item.get('title', '点击查看详细内容')
+            })
         
-        logger.info(f"获取到 {len(reports)} 条九方智投研报")
+        logger.info(f"获取到 {len(reports)} 条研报")
         return reports
     except Exception as e:
-        logger.error(f"获取九方智投研报错误: {e}")
+        logger.error(f"获取研报错误: {e}")
         return []
 
 
@@ -148,18 +251,6 @@ async def init_database():
             )
         """)
         
-        # 实时行情表
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS realtime_quotes (
-                stock_code VARCHAR(10) PRIMARY KEY,
-                last_price DECIMAL(10,3),
-                change_percent DECIMAL(8,3),
-                volume BIGINT,
-                amount DECIMAL(16,2),
-                update_time TIMESTAMP DEFAULT NOW()
-            )
-        """)
-        
         # 自选股表
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS watchlists (
@@ -172,40 +263,6 @@ async def init_database():
                 UNIQUE(user_id, stock_code)
             )
         """)
-        
-        # 研报表
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS research_reports (
-                id SERIAL PRIMARY KEY,
-                stock_code VARCHAR(10) NOT NULL,
-                title VARCHAR(500) NOT NULL,
-                publisher VARCHAR(100),
-                publish_date DATE,
-                rating VARCHAR(20),
-                summary TEXT,
-                created_at TIMESTAMP DEFAULT NOW()
-            )
-        """)
-        
-        # 插入测试股票数据
-        count = await conn.fetchval("SELECT COUNT(*) FROM stocks")
-        if count == 0:
-            test_stocks = [
-                ('000001', '平安银行', 'SZ', '银行', ['北上资金']),
-                ('000858', '五粮液', 'SZ', '白酒', ['白酒概念']),
-                ('300750', '宁德时代', 'SZ', '电池', ['锂电池']),
-                ('600519', '贵州茅台', 'SH', '白酒', ['白酒概念']),
-                ('600036', '招商银行', 'SH', '银行', ['北上资金']),
-                ('002415', '海康威视', 'SZ', '计算机', ['人工智能']),
-                ('601318', '中国平安', 'SH', '保险', ['保险概念']),
-            ]
-            for stock in test_stocks:
-                await conn.execute("""
-                    INSERT INTO stocks (stock_code, stock_name, market, industry, concept)
-                    VALUES ($1, $2, $3, $4, $5)
-                    ON CONFLICT DO NOTHING
-                """, stock[0], stock[1], stock[2], stock[3], stock[4])
-            logger.info("测试股票数据插入成功")
         
         logger.info("数据库初始化完成")
 
@@ -237,184 +294,86 @@ async def health_check():
     return {"status": "healthy", "service": "stock-watch"}
 
 
-
-# ========== 实时行情接口（用于首页）==========
+# ========== 实时行情接口（从九方智投获取）==========
 
 @app.get("/api/realtime/ranks")
 async def get_realtime_ranks(rank_type: str = Query("up", description="up/down")):
-    """获取实时涨跌幅榜单"""
+    """获取实时涨跌幅榜单（从九方智投）"""
+    sort_type = '0' if rank_type == 'up' else '1'
     try:
-        # 从数据库获取实时行情数据
-        pool = await get_db()
-        async with pool.acquire() as conn:
-            await conn.execute("SET search_path TO stock_watch")
-            order = "DESC" if rank_type == "up" else "ASC"
-            rows = await conn.fetch(f"""
-                SELECT r.stock_code, s.stock_name, r.last_price, r.change_percent, r.volume, r.amount
-                FROM realtime_quotes r
-                JOIN stocks s ON r.stock_code = s.stock_code
-                WHERE r.change_percent IS NOT NULL
-                ORDER BY r.change_percent {order}
-                LIMIT 20
-            """)
-            
-            return [
-                {
-                    "stock_code": row['stock_code'],
-                    "stock_name": row['stock_name'],
-                    "price": float(row['last_price']) if row['last_price'] else 0,
-                    "change_percent": float(row['change_percent']) if row['change_percent'] else 0,
-                    "volume": row['volume'],
-                    "amount": row['amount']
-                }
-                for row in rows
-            ]
+        ranks = await fetch_stock_rank(sort_type)
+        return {
+            "code": 200,
+            "message": "success",
+            "data": ranks,
+            "update_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "source": "九方智投"
+        }
     except Exception as e:
         logger.error(f"获取实时榜单错误: {e}")
-        return []
+        return {"code": 500, "message": str(e), "data": []}
 
 
 @app.get("/api/realtime/industry")
 async def get_realtime_industry():
-    """获取实时行业板块排行"""
+    """获取实时行业板块排行（从九方智投）"""
     try:
-        pool = await get_db()
-        async with pool.acquire() as conn:
-            await conn.execute("SET search_path TO stock_watch")
-            rows = await conn.fetch("""
-                SELECT industry_code, industry_name, change_percent
-                FROM industries
-                WHERE change_percent IS NOT NULL
-                ORDER BY change_percent DESC
-                LIMIT 30
-            """)
-            
-            return [
-                {
-                    "industry_code": row['industry_code'],
-                    "industry_name": row['industry_name'],
-                    "change_percent": float(row['change_percent']) if row['change_percent'] else 0
-                }
-                for row in rows
-            ]
+        industries = await fetch_sector_rank('HY')
+        # 格式化返回
+        formatted = []
+        for item in industries:
+            formatted.append({
+                "industry_code": item.get("sector_code", ""),
+                "industry_name": item.get("sector_name", ""),
+                "change_percent": item.get("change_percent", 0)
+            })
+        return {
+            "code": 200,
+            "message": "success",
+            "data": formatted,
+            "update_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "source": "九方智投"
+        }
     except Exception as e:
         logger.error(f"获取行业板块错误: {e}")
-        return []
+        return {"code": 500, "message": str(e), "data": []}
 
 
 @app.get("/api/realtime/concept")
 async def get_realtime_concept():
-    """获取实时概念板块排行"""
+    """获取实时概念板块排行（从九方智投）"""
     try:
-        pool = await get_db()
-        async with pool.acquire() as conn:
-            await conn.execute("SET search_path TO stock_watch")
-            rows = await conn.fetch("""
-                SELECT concept_code, concept_name, change_percent
-                FROM concepts
-                WHERE change_percent IS NOT NULL
-                ORDER BY change_percent DESC
-                LIMIT 30
-            """)
-            
-            return [
-                {
-                    "concept_code": row['concept_code'],
-                    "concept_name": row['concept_name'],
-                    "change_percent": float(row['change_percent']) if row['change_percent'] else 0
-                }
-                for row in rows
-            ]
+        concepts = await fetch_sector_rank('GN')
+        formatted = []
+        for item in concepts:
+            formatted.append({
+                "concept_code": item.get("sector_code", ""),
+                "concept_name": item.get("sector_name", ""),
+                "change_percent": item.get("change_percent", 0)
+            })
+        return {
+            "code": 200,
+            "message": "success",
+            "data": formatted,
+            "update_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "source": "九方智投"
+        }
     except Exception as e:
         logger.error(f"获取概念板块错误: {e}")
-        return []
+        return {"code": 500, "message": str(e), "data": []}
 
 
 @app.get("/api/market/limit-stats")
 async def get_limit_stats():
-    """获取涨跌停统计"""
-    try:
-        # 返回模拟数据，实际可从数据库获取
-        return {
-            "limit_up_count": 45,
-            "limit_down_count": 12,
-            "sentiment": 65
-        }
-    except Exception as e:
-        logger.error(f"获取涨跌停统计错误: {e}")
-        return {
-            "limit_up_count": 0,
-            "limit_down_count": 0,
-            "sentiment": 50
-        }
+    """获取涨跌停统计（模拟数据）"""
+    return {
+        "limit_up_count": 45,
+        "limit_down_count": 12,
+        "sentiment": 65
+    }
 
 
-
-
-
-# ========== 行情接口 ==========
-@app.get("/api/market/ranks")
-async def get_market_ranks(rank_type: str = Query("up"), limit: int = Query(20)):
-    """获取涨跌幅榜单"""
-    pool = await get_db()
-    async with pool.acquire() as conn:
-        await conn.execute("SET search_path TO stock_watch")
-        order = "DESC" if rank_type == "up" else "ASC"
-        rows = await conn.fetch(f"""
-            SELECT r.stock_code, s.stock_name, r.last_price, r.change_percent
-            FROM realtime_quotes r
-            JOIN stocks s ON r.stock_code = s.stock_code
-            WHERE r.change_percent IS NOT NULL
-            ORDER BY r.change_percent {order}
-            LIMIT $1
-        """, limit)
-        
-        return [{
-            "stock_code": row['stock_code'],
-            "stock_name": row['stock_name'],
-            "price": float(row['last_price']) if row['last_price'] else 0,
-            "change_percent": float(row['change_percent']) if row['change_percent'] else 0
-        } for row in rows]
-
-
-@app.get("/api/stock/detail")
-async def get_stock_detail(stock_code: str):
-    """获取个股详情"""
-    pool = await get_db()
-    async with pool.acquire() as conn:
-        await conn.execute("SET search_path TO stock_watch")
-        quote = await conn.fetchrow("""
-            SELECT r.*, s.stock_name, s.industry
-            FROM realtime_quotes r
-            JOIN stocks s ON r.stock_code = s.stock_code
-            WHERE r.stock_code = $1
-        """, stock_code)
-        
-        if not quote:
-            stock = await conn.fetchrow("SELECT * FROM stocks WHERE stock_code = $1", stock_code)
-            if not stock:
-                raise HTTPException(status_code=404, detail="Stock not found")
-            return {
-                "stock_code": stock['stock_code'],
-                "stock_name": stock['stock_name'],
-                "industry": stock['industry'],
-                "quote": {
-                    "last_price": 0,
-                    "change_percent": 0
-                }
-            }
-        
-        return {
-            "stock_code": quote['stock_code'],
-            "stock_name": quote['stock_name'],
-            "industry": quote['industry'],
-            "quote": {
-                "last_price": float(quote['last_price']) if quote['last_price'] else 0,
-                "change_percent": float(quote['change_percent']) if quote['change_percent'] else 0
-            }
-        }
-
-
+# ========== 个股搜索接口 ==========
 @app.get("/api/stock/search")
 async def search_stock(keyword: str):
     """搜索股票"""
@@ -444,19 +403,18 @@ async def get_watchlist(user_id: str):
     async with pool.acquire() as conn:
         await conn.execute("SET search_path TO stock_watch")
         rows = await conn.fetch("""
-            SELECT w.stock_code, s.stock_name, w.alert_threshold,
-                   r.last_price, r.change_percent
+            SELECT w.stock_code, s.stock_name, w.alert_threshold
             FROM watchlists w
             JOIN stocks s ON w.stock_code = s.stock_code
-            LEFT JOIN realtime_quotes r ON w.stock_code = r.stock_code
             WHERE w.user_id = $1
+            ORDER BY w.added_at
         """, user_id)
         
         return [{
             "stock_code": row['stock_code'],
             "stock_name": row['stock_name'],
-            "price": float(row['last_price']) if row['last_price'] else 0,
-            "change_percent": float(row['change_percent']) if row['change_percent'] else 0,
+            "price": 0,
+            "change_percent": 0,
             "alert_threshold": float(row['alert_threshold'])
         } for row in rows]
 
@@ -473,6 +431,15 @@ async def add_watchlist(request: Request):
         pool = await get_db()
         async with pool.acquire() as conn:
             await conn.execute("SET search_path TO stock_watch")
+            
+            # 如果股票不存在，先插入
+            stock_exists = await conn.fetchval("SELECT 1 FROM stocks WHERE stock_code = $1", stock_code)
+            if not stock_exists:
+                await conn.execute("""
+                    INSERT INTO stocks (stock_code, stock_name, market)
+                    VALUES ($1, $2, $3)
+                """, stock_code, stock_code, 'Unknown')
+            
             await conn.execute("""
                 INSERT INTO watchlists (user_id, stock_code, alert_threshold, alert_enabled)
                 VALUES ($1, $2, $3, $4)
@@ -521,17 +488,60 @@ async def set_alert(request: Request):
         return {"success": False, "message": str(e)}
 
 
-# ========== 九方智投研报接口 ==========
+# ========== 个股详情接口 ==========
+@app.get("/api/stock/detail")
+async def get_stock_detail(stock_code: str):
+    """获取个股详情"""
+    # 从实时数据中查找
+    try:
+        ranks = await fetch_stock_rank('0')
+        for item in ranks:
+            if item['stock_code'] == stock_code:
+                return {
+                    "stock_code": item['stock_code'],
+                    "stock_name": item['stock_name'],
+                    "quote": {
+                        "last_price": item['price'],
+                        "change_percent": item['change_percent'],
+                        "volume": item.get('volume', 0),
+                        "amount": item.get('amount', 0)
+                    }
+                }
+        
+        # 如果没找到，返回空数据
+        return {
+            "stock_code": stock_code,
+            "stock_name": stock_code,
+            "quote": {
+                "last_price": 0,
+                "change_percent": 0,
+                "volume": 0,
+                "amount": 0
+            }
+        }
+    except Exception as e:
+        logger.error(f"获取个股详情错误: {e}")
+        return {
+            "stock_code": stock_code,
+            "stock_name": stock_code,
+            "quote": {
+                "last_price": 0,
+                "change_percent": 0,
+                "volume": 0,
+                "amount": 0
+            }
+        }
+
+
+# ========== 研报接口 ==========
 @app.get("/api/research/jiufang")
 async def get_jiufang_research(
-    page: int = Query(1, ge=1, le=10),  # 改为从1开始
+    page: int = Query(0, ge=0, le=10),
     page_size: int = Query(50, ge=1, le=100)
 ):
     """获取九方智投最新研报"""
     try:
-        # 转换 page 为接口需要的格式（从0开始）
-        api_page = page - 1
-        reports = await fetch_jiufang_research(api_page, page_size)
+        reports = await fetch_research_reports(page, page_size)
         
         if reports:
             return {
@@ -543,110 +553,37 @@ async def get_jiufang_research(
                 "source": "九方智投"
             }
         else:
-            return await get_local_research(page, page_size)
+            return {
+                "code": 200,
+                "message": "success",
+                "data": [],
+                "total": 0,
+                "source": "暂无数据"
+            }
     except Exception as e:
         logger.error(f"获取九方智投研报异常: {e}")
-        return await get_local_research(page, page_size)
-
-
-async def get_local_research(page: int, page_size: int):
-    """从本地数据库获取研报"""
-    pool = await get_db()
-    async with pool.acquire() as conn:
-        await conn.execute("SET search_path TO stock_watch")
-        
-        offset = page * page_size
-        rows = await conn.fetch("""
-            SELECT id, title, publisher, publish_date, rating, summary, stock_code
-            FROM research_reports
-            ORDER BY publish_date DESC
-            LIMIT $1 OFFSET $2
-        """, page_size, offset)
-        
-        # 获取股票名称
-        reports = []
-        for row in rows:
-            stock = await conn.fetchrow("SELECT stock_name FROM stocks WHERE stock_code = $1", row['stock_code'])
-            reports.append({
-                "id": row['id'],
-                "stock_code": row['stock_code'],
-                "stock_name": stock['stock_name'] if stock else row['stock_code'],
-                "title": row['title'],
-                "publisher": row['publisher'],
-                "publish_date": row['publish_date'].strftime("%Y-%m-%d") if row['publish_date'] else "",
-                "rating": row['rating'],
-                "summary": row['summary']
-            })
-        
-        return {
-            "code": 200,
-            "message": "success",
-            "data": reports,
-            "total": len(reports),
-            "update_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "source": "数据库"
-        }
+        return {"code": 500, "message": str(e), "data": []}
 
 
 @app.get("/api/research/stock")
 async def get_stock_research(stock_code: str, limit: int = Query(20, ge=1, le=50)):
     """获取个股研报"""
-    pool = await get_db()
-    async with pool.acquire() as conn:
-        await conn.execute("SET search_path TO stock_watch")
-        
-        rows = await conn.fetch("""
-            SELECT title, publisher, publish_date, rating, summary
-            FROM research_reports
-            WHERE stock_code = $1
-            ORDER BY publish_date DESC
-            LIMIT $2
-        """, stock_code, limit)
-        
-        return [{
-            "title": row['title'],
-            "publisher": row['publisher'],
-            "publish_date": row['publish_date'].strftime("%Y-%m-%d") if row['publish_date'] else None,
-            "rating": row['rating'],
-            "summary": row['summary']
-        } for row in rows]
-
-
-@app.get("/api/research/latest")
-async def get_latest_research(limit: int = Query(50, ge=1, le=100)):
-    """获取最新研报（本地数据库）"""
-    pool = await get_db()
-    async with pool.acquire() as conn:
-        await conn.execute("SET search_path TO stock_watch")
-        
-        rows = await conn.fetch("""
-            SELECT r.id, r.title, r.publisher, r.publish_date, r.rating, 
-                   r.summary, r.stock_code, s.stock_name
-            FROM research_reports r
-            LEFT JOIN stocks s ON r.stock_code = s.stock_code
-            ORDER BY r.publish_date DESC
-            LIMIT $1
-        """, limit)
-        
-        return [{
-            "id": row['id'],
-            "title": row['title'],
-            "stock_code": row['stock_code'],
-            "stock_name": row['stock_name'] or row['stock_code'],
-            "publisher": row['publisher'],
-            "publish_date": row['publish_date'].strftime("%Y-%m-%d") if row['publish_date'] else None,
-            "rating": row['rating'],
-            "summary": row['summary']
-        } for row in rows]
+    try:
+        # 从九方智投获取个股研报（筛选）
+        reports = await fetch_research_reports(0, 100)
+        filtered = [r for r in reports if r['stock_code'] == stock_code][:limit]
+        return filtered
+    except Exception as e:
+        logger.error(f"获取个股研报错误: {e}")
+        return []
 
 
 # ========== 定时任务 ==========
 scheduler = BackgroundScheduler()
 
 def scheduled_data_fetch():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.close()
+    """定时采集数据（可选）"""
+    pass
 
 scheduler.add_job(scheduled_data_fetch, 'interval', minutes=10)
 scheduler.start()
