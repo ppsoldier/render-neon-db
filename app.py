@@ -2167,7 +2167,9 @@ def get_student_attendance_list():
         db = get_db()
         cur = db.cursor()
         
-        # PostgreSQL 兼容的查询：使用 string_to_array 和 ANY
+        # 查询条件：
+        # 1. student_id 直接匹配
+        # 2. student_ids 中包含该ID（格式如 "14" 或 "14,15" 或 "14,15,16"）
         sql = """
             SELECT 
                 cs.id,
@@ -2176,15 +2178,28 @@ def get_student_attendance_list():
                 cs.subject,
                 cs.classroom,
                 cs.status,
-                t.name as teacher_name,
-                s.name as student_name
+                t.name as teacher_name
             FROM course_schedule cs
             LEFT JOIN teacher t ON cs.teacher_id = t.id
-            CROSS JOIN student s
-            WHERE s.id = %s
-              AND (cs.student_id = %s OR cs.student_ids LIKE '%' || %s || '%')
+            WHERE cs.status != 'cancelled'
+              AND (
+                  cs.student_id = %s 
+                  OR cs.student_ids = %s
+                  OR cs.student_ids LIKE %s
+                  OR cs.student_ids LIKE %s
+                  OR cs.student_ids LIKE %s
+              )
         """
-        params = [student_id, student_id, student_id]
+        
+        # 构建匹配模式
+        student_id_str = str(student_id)
+        params = [
+            student_id,                           # cs.student_id = %s
+            student_id_str,                       # cs.student_ids = '14'
+            f'{student_id_str},%',                # cs.student_ids LIKE '14,%'
+            f'%,{student_id_str}',                # cs.student_ids LIKE '%,14'
+            f'%,{student_id_str},%'               # cs.student_ids LIKE '%,14,%'
+        ]
         
         if start_date:
             sql += " AND cs.class_date >= %s"
@@ -2195,8 +2210,15 @@ def get_student_attendance_list():
         
         sql += " ORDER BY cs.class_date DESC, cs.class_time"
         
+        print(f"查询学生ID: {student_id}")
+        print(f"SQL: {sql}")
+        print(f"参数: {params}")
+        
         cur.execute(sql, params)
         data = cur.fetchall()
+        
+        print(f"查询到 {len(data)} 条记录")
+        
         cur.close()
         db.close()
         
@@ -2205,7 +2227,7 @@ def get_student_attendance_list():
         result = []
         for row in data:
             class_date = row[1]
-            # 如果课程日期小于今天且状态不是cancelled，自动标记为已完成
+            # 如果课程日期小于今天，自动标记为已完成
             if class_date < today and row[5] != 'cancelled':
                 actual_status = 'completed'
             else:
@@ -2218,13 +2240,14 @@ def get_student_attendance_list():
                 "subject": row[3] or '',
                 "classroom": row[4] or '',
                 "status": actual_status,
-                "teacher_name": row[6] or '待分配',
-                "student_name": row[7] or ''
+                "teacher_name": row[6] or '待分配'
             })
         
         return jsonify({"code": 200, "data": result})
     except Exception as e:
         print(f"获取出勤记录错误: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"code": 500, "msg": str(e)}), 500
 
 
@@ -2242,14 +2265,30 @@ def get_student_attendance_statistics():
         db = get_db()
         cur = db.cursor()
         
+        student_id_str = str(student_id)
+        
         sql = """
             SELECT 
                 cs.class_date,
                 cs.status
             FROM course_schedule cs
-            WHERE (cs.student_id = %s OR cs.student_ids LIKE '%' || %s || '%')
+            WHERE cs.status != 'cancelled'
+              AND (
+                  cs.student_id = %s 
+                  OR cs.student_ids = %s
+                  OR cs.student_ids LIKE %s
+                  OR cs.student_ids LIKE %s
+                  OR cs.student_ids LIKE %s
+              )
         """
-        params = [student_id, student_id]
+        
+        params = [
+            student_id,
+            student_id_str,
+            f'{student_id_str},%',
+            f'%,{student_id_str}',
+            f'%,{student_id_str},%'
+        ]
         
         if start_date:
             sql += " AND cs.class_date >= %s"
@@ -2295,122 +2334,6 @@ def get_student_attendance_statistics():
         })
     except Exception as e:
         print(f"获取出勤统计错误: {str(e)}")
-        return jsonify({"code": 500, "msg": str(e)}), 500
-
-
-@app.route("/api/student/attendance/export", methods=["POST"])
-def export_attendance_report():
-    """导出学生出勤报表"""
-    try:
-        data = request.json
-        student_id = data.get('student_id')
-        start_date = data.get('start_date')
-        end_date = data.get('end_date')
-        
-        if not student_id:
-            return jsonify({"code": 400, "msg": "请选择学生"}), 400
-        
-        db = get_db()
-        cur = db.cursor()
-        
-        sql = """
-            SELECT 
-                s.name as student_name,
-                s.grade,
-                s.phone,
-                cs.class_date,
-                cs.class_time,
-                cs.subject,
-                cs.classroom,
-                t.name as teacher_name,
-                cs.status
-            FROM course_schedule cs
-            LEFT JOIN teacher t ON cs.teacher_id = t.id
-            CROSS JOIN student s
-            WHERE s.id = %s
-              AND (cs.student_id = %s OR cs.student_ids LIKE '%' || %s || '%')
-        """
-        params = [student_id, student_id, student_id]
-        
-        if start_date:
-            sql += " AND cs.class_date >= %s"
-            params.append(start_date)
-        if end_date:
-            sql += " AND cs.class_date <= %s"
-            params.append(end_date)
-        
-        sql += " ORDER BY cs.class_date, cs.class_time"
-        
-        cur.execute(sql, params)
-        data = cur.fetchall()
-        cur.close()
-        db.close()
-        
-        # 创建Excel文件
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = "学生出勤报表"
-        
-        # 设置表头
-        headers = ["学生姓名", "年级", "联系电话", "上课日期", "上课时间", "课程名称", "教室", "授课教师", "状态"]
-        ws.append(headers)
-        
-        # 设置表头样式
-        for cell in ws[1]:
-            cell.font = Font(bold=True, color="FFFFFF")
-            cell.fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
-            cell.alignment = Alignment(horizontal="center")
-        
-        # 写入数据
-        today = datetime.now().date()
-        for row in data:
-            class_date = row[3]
-            status = row[8]
-            
-            if class_date < today and status != 'cancelled':
-                status_text = '已完成'
-            elif status == 'cancelled':
-                status_text = '已取消'
-            else:
-                status_text = '待上课'
-            
-            ws.append([
-                row[0] or '',
-                row[1] or '',
-                row[2] or '',
-                str(row[3]) if row[3] else '',
-                row[4] or '',
-                row[5] or '',
-                row[6] or '',
-                row[7] or '',
-                status_text
-            ])
-        
-        # 调整列宽
-        for col in ws.columns:
-            max_length = 0
-            col_letter = col[0].column_letter
-            for cell in col:
-                try:
-                    if len(str(cell.value)) > max_length:
-                        max_length = len(str(cell.value))
-                except:
-                    pass
-            adjusted_width = min(max_length + 2, 20)
-            ws.column_dimensions[col_letter].width = adjusted_width
-        
-        output = io.BytesIO()
-        wb.save(output)
-        output.seek(0)
-        
-        return send_file(
-            output, 
-            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            as_attachment=True, 
-            download_name=f'学生出勤报表_{datetime.now().strftime("%Y%m%d")}.xlsx'
-        )
-    except Exception as e:
-        print(f"导出出勤报表错误: {str(e)}")
         return jsonify({"code": 500, "msg": str(e)}), 500
 
 
