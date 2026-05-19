@@ -409,12 +409,14 @@ async def set_alert(request: Request):
 # ========== 九方智投研报接口 ==========
 @app.get("/api/research/jiufang")
 async def get_jiufang_research(
-    page: int = Query(0, ge=0, le=10),
+    page: int = Query(1, ge=1, le=10),  # 改为从1开始
     page_size: int = Query(50, ge=1, le=100)
 ):
     """获取九方智投最新研报"""
     try:
-        reports = await fetch_jiufang_research(page, page_size)
+        # 转换 page 为接口需要的格式（从0开始）
+        api_page = page - 1
+        reports = await fetch_jiufang_research(api_page, page_size)
         
         if reports:
             return {
@@ -426,7 +428,6 @@ async def get_jiufang_research(
                 "source": "九方智投"
             }
         else:
-            # 如果获取失败，返回本地数据库研报
             return await get_local_research(page, page_size)
     except Exception as e:
         logger.error(f"获取九方智投研报异常: {e}")
