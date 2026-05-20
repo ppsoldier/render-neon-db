@@ -1771,69 +1771,79 @@ def get_student_attendance_statistics():
 
 @app.route("/api/student/attendance/export", methods=["POST"])
 def export_attendance_report():
-    """导出学生出勤报表"""
+    """导出学生出勤报表 - 支持多学生"""
     try:
         data = request.json
-        student_id = data.get('student_id')
+        student_ids = data.get('student_ids', [])
         start_date = data.get('start_date')
         end_date = data.get('end_date')
         
-        if not student_id:
+        if not student_ids:
             return jsonify({"code": 400, "msg": "请选择学生"}), 400
         
         db = get_db()
         cur = db.cursor()
         
-        student_id_str = str(student_id)
+        all_records = []
         
-        sql = """
-            SELECT 
-                s.name as student_name,
-                s.grade,
-                s.phone,
-                cs.class_date,
-                cs.class_time,
-                cs.subject,
-                cs.classroom,
-                t.name as teacher_name,
-                cs.status
-            FROM course_schedule cs
-            LEFT JOIN teacher t ON cs.teacher_id = t.id
-            CROSS JOIN student s
-            WHERE s.id = %s
-              AND cs.status != 'cancelled'
-              AND (
-                  cs.student_id = %s 
-                  OR cs.student_ids = %s
-                  OR cs.student_ids LIKE %s
-                  OR cs.student_ids LIKE %s
-                  OR cs.student_ids LIKE %s
-              )
-        """
+        for student_id in student_ids:
+            student_id_str = str(student_id)
+            
+            sql = """
+                SELECT 
+                    s.name as student_name,
+                    s.grade,
+                    s.phone,
+                    cs.class_date,
+                    cs.class_time,
+                    cs.subject,
+                    cs.classroom,
+                    t.name as teacher_name,
+                    cs.status
+                FROM course_schedule cs
+                LEFT JOIN teacher t ON cs.teacher_id = t.id
+                CROSS JOIN student s
+                WHERE s.id = %s
+                  AND cs.status != 'cancelled'
+                  AND (
+                      cs.student_id = %s 
+                      OR cs.student_ids = %s
+                      OR cs.student_ids LIKE %s
+                      OR cs.student_ids LIKE %s
+                      OR cs.student_ids LIKE %s
+                  )
+            """
+            
+            params = [student_id, student_id, student_id_str, f'{student_id_str},%', f'%,{student_id_str}', f'%,{student_id_str},%']
+            
+            if start_date:
+                sql += " AND cs.class_date >= %s"
+                params.append(start_date)
+            if end_date:
+                sql += " AND cs.class_date <= %s"
+                params.append(end_date)
+            
+            sql += " ORDER BY cs.class_date, cs.class_time"
+            
+            cur.execute(sql, params)
+            records = cur.fetchall()
+            
+            for row in records:
+                all_records.append(row)
         
-        params = [student_id, student_id, student_id_str, f'{student_id_str},%', f'%,{student_id_str}', f'%,{student_id_str},%']
-        
-        if start_date:
-            sql += " AND cs.class_date >= %s"
-            params.append(start_date)
-        if end_date:
-            sql += " AND cs.class_date <= %s"
-            params.append(end_date)
-        
-        sql += " ORDER BY cs.class_date, cs.class_time"
-        
-        cur.execute(sql, params)
-        data = cur.fetchall()
         cur.close()
         db.close()
         
+        # 创建Excel文件
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "学生出勤报表"
         
+        # 设置表头
         headers = ["学生姓名", "年级", "联系电话", "上课日期", "上课时间", "课程名称", "教室", "授课教师", "状态"]
         ws.append(headers)
         
+        # 设置表头样式
         for cell in ws[1]:
             cell.font = Font(bold=True, color="FFFFFF")
             cell.fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
@@ -1843,10 +1853,9 @@ def export_attendance_report():
         today_date = now.date()
         now_time_str = now.strftime("%H:%M")
         
-        for row in data:
+        for row in all_records:
             class_date = row[3]
             class_time = row[4]
-            status = row[8]
             
             start_time_str = class_time.split('-')[0].strip() if class_time else "00:00"
             
@@ -1854,8 +1863,6 @@ def export_attendance_report():
                 status_text = '已上课'
             elif class_date == today_date and start_time_str <= now_time_str:
                 status_text = '已上课'
-            elif status == 'cancelled':
-                status_text = '已取消'
             else:
                 status_text = '待上课'
             
@@ -1871,6 +1878,7 @@ def export_attendance_report():
                 status_text
             ])
         
+        # 调整列宽
         for col in ws.columns:
             max_length = 0
             col_letter = col[0].column_letter
@@ -1895,6 +1903,8 @@ def export_attendance_report():
         )
     except Exception as e:
         print(f"导出出勤报表错误: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"code": 500, "msg": str(e)}), 500
 
 # ==================== 仪表盘数据 ====================
