@@ -1769,6 +1769,7 @@ def get_student_attendance_statistics():
         print(f"获取出勤统计错误: {str(e)}")
         return jsonify({"code": 500, "msg": str(e)}), 500
 
+# ==================== 学生出勤报表导出接口 ====================
 @app.route("/api/student/attendance/export", methods=["POST"])
 def export_attendance_report():
     """导出学生出勤报表"""
