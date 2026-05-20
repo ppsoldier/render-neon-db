@@ -1393,7 +1393,7 @@ def export_schedule_excel():
         db = get_db()
         cur = db.cursor()
         
-        # 获取周课表数据
+        # 获取周课表数据 - 确保获取所有课程
         cur.execute("""
             SELECT 
                 s.id,
@@ -1421,10 +1421,12 @@ def export_schedule_excel():
         cur.close()
         db.close()
         
-        # 整理数据结构 - 支持多课程
+        # 整理数据结构 - 支持多课程（列表形式）
         weekdays = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
         time_slots = set()
-        schedule_data = {}  # 改为存储列表，支持多课程
+        schedule_data = {}
+        
+        print(f"查询到 {len(data)} 条课程记录")
         
         for row in data:
             weekday_idx = int(row[2])
@@ -1441,18 +1443,24 @@ def export_schedule_excel():
             
             key = f"{weekday_name}_{class_time}"
             
-            # 初始化列表
+            # 初始化为列表
             if key not in schedule_data:
                 schedule_data[key] = []
             
-            # 添加课程信息到列表
+            # 添加课程到列表
             schedule_data[key].append({
+                "id": row[0],
                 "subject": row[4] or '',
                 "teacher": row[7] or '',
                 "classroom": row[5] or '',
                 "students": '、'.join(student_names) if student_names else '集体课',
                 "status": '已完成' if row[6] == 'completed' else '待上课'
             })
+        
+        # 打印调试信息
+        for key, courses in schedule_data.items():
+            if len(courses) > 1:
+                print(f"{key} 有 {len(courses)} 门课程")
         
         # 排序时间段
         def get_start_time(time_str):
@@ -1492,37 +1500,34 @@ def export_schedule_excel():
             cell.alignment = center_alignment
             cell.border = thin_border
         
-        # 写入课程数据 - 支持多课程
+        # 写入课程数据
         row_num = 3
-        max_courses_per_cell = 0
-        
-        # 先计算每个单元格的最大课程数，用于设置行高
-        courses_count = {}
-        for time_slot in sorted_time_slots:
-            for col, weekday in enumerate(weekdays, 2):
-                key = f"{weekday}_{time_slot}"
-                if key in schedule_data:
-                    count = len(schedule_data[key])
-                    courses_count[f"{row_num}_{col}"] = count
-                    if count > max_courses_per_cell:
-                        max_courses_per_cell = count
-        
         for time_slot in sorted_time_slots:
             # 时间列
             cell = ws.cell(row=row_num, column=1, value=time_slot)
             cell.alignment = center_alignment
             cell.border = thin_border
             
+            # 记录当前行每个单元格的课程数量，用于设置行高
+            max_courses_in_row = 0
+            
             for col, weekday in enumerate(weekdays, 2):
                 key = f"{weekday}_{time_slot}"
                 if key in schedule_data and len(schedule_data[key]) > 0:
-                    # 构建多课程文本
-                    course_texts = []
-                    for idx, course in enumerate(schedule_data[key], 1):
-                        course_text = f"【课程{idx}】{course['subject']}\n教师：{course['teacher']}\n教室：{course['classroom']}\n学生：{course['students']}"
-                        course_texts.append(course_text)
+                    courses = schedule_data[key]
+                    max_courses_in_row = max(max_courses_in_row, len(courses))
                     
-                    cell_value = '\n\n'.join(course_texts)
+                    # 构建多课程文本
+                    course_lines = []
+                    for idx, course in enumerate(courses, 1):
+                        course_lines.append(f"【{idx}】{course['subject']}")
+                        course_lines.append(f"   教师：{course['teacher']}")
+                        course_lines.append(f"   教室：{course['classroom']}")
+                        course_lines.append(f"   学生：{course['students']}")
+                        if idx < len(courses):
+                            course_lines.append("")  # 课程间空行
+                    
+                    cell_value = '\n'.join(course_lines)
                     cell = ws.cell(row=row_num, column=col, value=cell_value)
                     cell.alignment = left_alignment
                 else:
@@ -1530,28 +1535,18 @@ def export_schedule_excel():
                     cell.alignment = center_alignment
                 cell.border = thin_border
             
-            row_num += 1
-        
-        # 设置行高
-        ws.row_dimensions[1].height = 30
-        ws.row_dimensions[2].height = 25
-        
-        # 根据课程数量动态设置行高
-        for row in range(3, row_num):
-            base_height = 50
-            max_courses = 0
-            for col in range(2, len(weekdays) + 2):
-                key = f"{row}_{col}"
-                if key in courses_count:
-                    max_courses = max(max_courses, courses_count[key])
-            if max_courses > 0:
-                ws.row_dimensions[row].height = base_height + (max_courses - 1) * 40
+            # 根据课程数量设置行高
+            if max_courses_in_row > 0:
+                ws.row_dimensions[row_num].height = 30 + (max_courses_in_row - 1) * 35
             else:
-                ws.row_dimensions[row].height = base_height
+                ws.row_dimensions[row_num].height = 25
+            
+            row_num += 1
         
         # 设置列宽
         for col in range(1, len(weekdays) + 2):
-            ws.column_dimensions[chr(64 + col)].width = 22
+            col_letter = chr(64 + col)
+            ws.column_dimensions[col_letter].width = 24
         
         # 保存到内存
         output = io.BytesIO()
@@ -1566,8 +1561,12 @@ def export_schedule_excel():
         )
     except Exception as e:
         print(f"导出课表错误: {str(e)}")
+        import traceback
         traceback.print_exc()
         return jsonify({"code": 500, "msg": str(e)}), 500
+
+
+
 # ==================== 学生课时统计（基于排课表）====================
 @app.route("/api/student/attendance/list", methods=["GET"])
 def get_student_attendance_list():
