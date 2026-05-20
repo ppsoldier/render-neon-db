@@ -1671,103 +1671,103 @@ def get_student_attendance_list():
         print(f"获取出勤记录错误: {str(e)}")
         return jsonify({"code": 500, "msg": str(e)}), 500
 
-@app.route("/api/student/attendance/statistics", methods=["GET"])
-def get_student_attendance_statistics():
-    """获取学生出勤统计"""
-    try:
-        student_id = request.args.get('student_id', type=int)
-        start_date = request.args.get('start_date')
-        end_date = request.args.get('end_date')
+# @app.route("/api/student/attendance/statistics", methods=["GET"])
+# def get_student_attendance_statistics():
+#     """获取学生出勤统计"""
+#     try:
+#         student_id = request.args.get('student_id', type=int)
+#         start_date = request.args.get('start_date')
+#         end_date = request.args.get('end_date')
         
-        if not student_id:
-            return jsonify({"code": 400, "msg": "请选择学生"}), 400
+#         if not student_id:
+#             return jsonify({"code": 400, "msg": "请选择学生"}), 400
         
-        db = get_db()
-        cur = db.cursor()
+#         db = get_db()
+#         cur = db.cursor()
         
-        student_id_str = str(student_id)
+#         student_id_str = str(student_id)
         
-        sql = """
-            SELECT 
-                cs.class_date,
-                cs.class_time,
-                cs.status
-            FROM course_schedule cs
-            WHERE cs.status != 'cancelled'
-              AND (
-                  cs.student_id = %s 
-                  OR cs.student_ids = %s
-                  OR cs.student_ids LIKE %s
-                  OR cs.student_ids LIKE %s
-                  OR cs.student_ids LIKE %s
-              )
-        """
+#         sql = """
+#             SELECT 
+#                 cs.class_date,
+#                 cs.class_time,
+#                 cs.status
+#             FROM course_schedule cs
+#             WHERE cs.status != 'cancelled'
+#               AND (
+#                   cs.student_id = %s 
+#                   OR cs.student_ids = %s
+#                   OR cs.student_ids LIKE %s
+#                   OR cs.student_ids LIKE %s
+#                   OR cs.student_ids LIKE %s
+#               )
+#         """
         
-        params = [
-            student_id,
-            student_id_str,
-            f'{student_id_str},%',
-            f'%,{student_id_str}',
-            f'%,{student_id_str},%'
-        ]
+#         params = [
+#             student_id,
+#             student_id_str,
+#             f'{student_id_str},%',
+#             f'%,{student_id_str}',
+#             f'%,{student_id_str},%'
+#         ]
         
-        if start_date:
-            sql += " AND cs.class_date >= %s"
-            params.append(start_date)
-        if end_date:
-            sql += " AND cs.class_date <= %s"
-            params.append(end_date)
+#         if start_date:
+#             sql += " AND cs.class_date >= %s"
+#             params.append(start_date)
+#         if end_date:
+#             sql += " AND cs.class_date <= %s"
+#             params.append(end_date)
         
-        cur.execute(sql, params)
-        data = cur.fetchall()
-        cur.close()
-        db.close()
+#         cur.execute(sql, params)
+#         data = cur.fetchall()
+#         cur.close()
+#         db.close()
         
-        now = datetime.now()
-        today_date = now.date()
-        now_time_str = now.strftime("%H:%M")
+#         now = datetime.now()
+#         today_date = now.date()
+#         now_time_str = now.strftime("%H:%M")
         
-        total_classes = 0
-        completed_classes = 0
-        upcoming_classes = 0
+#         total_classes = 0
+#         completed_classes = 0
+#         upcoming_classes = 0
         
-        for row in data:
-            class_date = row[0]
-            class_time = row[1]
-            status = row[2]
+#         for row in data:
+#             class_date = row[0]
+#             class_time = row[1]
+#             status = row[2]
             
-            if status == 'cancelled':
-                continue
+#             if status == 'cancelled':
+#                 continue
             
-            total_classes += 1
+#             total_classes += 1
             
-            start_time_str = class_time.split('-')[0].strip() if class_time else "00:00"
+#             start_time_str = class_time.split('-')[0].strip() if class_time else "00:00"
             
-            if class_date < today_date:
-                completed_classes += 1
-            elif class_date == today_date and start_time_str <= now_time_str:
-                completed_classes += 1
-            else:
-                upcoming_classes += 1
+#             if class_date < today_date:
+#                 completed_classes += 1
+#             elif class_date == today_date and start_time_str <= now_time_str:
+#                 completed_classes += 1
+#             else:
+#                 upcoming_classes += 1
         
-        total_hours = total_classes * 2
-        completed_hours = completed_classes * 2
-        upcoming_hours = upcoming_classes * 2
+#         total_hours = total_classes * 2
+#         completed_hours = completed_classes * 2
+#         upcoming_hours = upcoming_classes * 2
         
-        return jsonify({
-            "code": 200,
-            "data": {
-                "total_classes": total_classes,
-                "completed_classes": completed_classes,
-                "upcoming_classes": upcoming_classes,
-                "total_hours": total_hours,
-                "completed_hours": completed_hours,
-                "upcoming_hours": upcoming_hours
-            }
-        })
-    except Exception as e:
-        print(f"获取出勤统计错误: {str(e)}")
-        return jsonify({"code": 500, "msg": str(e)}), 500
+#         return jsonify({
+#             "code": 200,
+#             "data": {
+#                 "total_classes": total_classes,
+#                 "completed_classes": completed_classes,
+#                 "upcoming_classes": upcoming_classes,
+#                 "total_hours": total_hours,
+#                 "completed_hours": completed_hours,
+#                 "upcoming_hours": upcoming_hours
+#             }
+#         })
+#     except Exception as e:
+#         print(f"获取出勤统计错误: {str(e)}")
+#         return jsonify({"code": 500, "msg": str(e)}), 500
 
 # ==================== 学生出勤报表导出接口 ====================
 @app.route("/api/student/attendance/export", methods=["POST"])
