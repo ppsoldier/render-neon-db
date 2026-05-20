@@ -1381,7 +1381,7 @@ def copy_week_schedule():
 
 @app.route("/api/schedule/export/excel", methods=["POST"])
 def export_schedule_excel():
-    """导出周课表为Excel"""
+    """导出周课表为Excel - 支持多课程"""
     try:
         data = request.json
         start_date = data.get('start_date')
@@ -1409,7 +1409,7 @@ def export_schedule_excel():
             LEFT JOIN teacher t ON s.teacher_id = t.id
             WHERE s.class_date BETWEEN %s AND %s
               AND (s.status IS NULL OR s.status != 'cancelled')
-            ORDER BY s.class_date, s.class_time
+            ORDER BY s.class_date, s.class_time, s.id
         """, (start_date, end_date))
         
         data = cur.fetchall()
@@ -1421,10 +1421,10 @@ def export_schedule_excel():
         cur.close()
         db.close()
         
-        # 整理数据结构
+        # 整理数据结构 - 支持多课程
         weekdays = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
         time_slots = set()
-        schedule_data = {}
+        schedule_data = {}  # 改为存储列表，支持多课程
         
         for row in data:
             weekday_idx = int(row[2])
@@ -1440,13 +1440,19 @@ def export_schedule_excel():
                 student_names = [students_map.get(sid, '') for sid in student_ids if students_map.get(sid)]
             
             key = f"{weekday_name}_{class_time}"
-            schedule_data[key] = {
+            
+            # 初始化列表
+            if key not in schedule_data:
+                schedule_data[key] = []
+            
+            # 添加课程信息到列表
+            schedule_data[key].append({
                 "subject": row[4] or '',
                 "teacher": row[7] or '',
                 "classroom": row[5] or '',
                 "students": '、'.join(student_names) if student_names else '集体课',
                 "status": '已完成' if row[6] == 'completed' else '待上课'
-            }
+            })
         
         # 排序时间段
         def get_start_time(time_str):
@@ -1458,10 +1464,11 @@ def export_schedule_excel():
         ws = wb.active
         ws.title = f"周课表_{start_date}_至_{end_date}"
         
-        # 设置表头样式
+        # 设置样式
         header_fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
         header_font = Font(bold=True, color="FFFFFF", size=12)
         center_alignment = Alignment(horizontal="center", vertical="center")
+        left_alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
         thin_border = Border(
             left=Side(style='thin'),
             right=Side(style='thin'),
@@ -1485,8 +1492,21 @@ def export_schedule_excel():
             cell.alignment = center_alignment
             cell.border = thin_border
         
-        # 写入课程数据
+        # 写入课程数据 - 支持多课程
         row_num = 3
+        max_courses_per_cell = 0
+        
+        # 先计算每个单元格的最大课程数，用于设置行高
+        courses_count = {}
+        for time_slot in sorted_time_slots:
+            for col, weekday in enumerate(weekdays, 2):
+                key = f"{weekday}_{time_slot}"
+                if key in schedule_data:
+                    count = len(schedule_data[key])
+                    courses_count[f"{row_num}_{col}"] = count
+                    if count > max_courses_per_cell:
+                        max_courses_per_cell = count
+        
         for time_slot in sorted_time_slots:
             # 时间列
             cell = ws.cell(row=row_num, column=1, value=time_slot)
@@ -1495,11 +1515,16 @@ def export_schedule_excel():
             
             for col, weekday in enumerate(weekdays, 2):
                 key = f"{weekday}_{time_slot}"
-                if key in schedule_data:
-                    course = schedule_data[key]
-                    cell_value = f"{course['subject']}\n{course['teacher']}\n{course['classroom']}\n{course['students']}"
+                if key in schedule_data and len(schedule_data[key]) > 0:
+                    # 构建多课程文本
+                    course_texts = []
+                    for idx, course in enumerate(schedule_data[key], 1):
+                        course_text = f"【课程{idx}】{course['subject']}\n教师：{course['teacher']}\n教室：{course['classroom']}\n学生：{course['students']}"
+                        course_texts.append(course_text)
+                    
+                    cell_value = '\n\n'.join(course_texts)
                     cell = ws.cell(row=row_num, column=col, value=cell_value)
-                    cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                    cell.alignment = left_alignment
                 else:
                     cell = ws.cell(row=row_num, column=col, value="")
                     cell.alignment = center_alignment
@@ -1510,12 +1535,23 @@ def export_schedule_excel():
         # 设置行高
         ws.row_dimensions[1].height = 30
         ws.row_dimensions[2].height = 25
+        
+        # 根据课程数量动态设置行高
         for row in range(3, row_num):
-            ws.row_dimensions[row].height = 80
+            base_height = 50
+            max_courses = 0
+            for col in range(2, len(weekdays) + 2):
+                key = f"{row}_{col}"
+                if key in courses_count:
+                    max_courses = max(max_courses, courses_count[key])
+            if max_courses > 0:
+                ws.row_dimensions[row].height = base_height + (max_courses - 1) * 40
+            else:
+                ws.row_dimensions[row].height = base_height
         
         # 设置列宽
         for col in range(1, len(weekdays) + 2):
-            ws.column_dimensions[chr(64 + col)].width = 18
+            ws.column_dimensions[chr(64 + col)].width = 22
         
         # 保存到内存
         output = io.BytesIO()
@@ -1532,7 +1568,6 @@ def export_schedule_excel():
         print(f"导出课表错误: {str(e)}")
         traceback.print_exc()
         return jsonify({"code": 500, "msg": str(e)}), 500
-
 # ==================== 学生课时统计（基于排课表）====================
 @app.route("/api/student/attendance/list", methods=["GET"])
 def get_student_attendance_list():
