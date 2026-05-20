@@ -1771,24 +1771,24 @@ def get_student_attendance_statistics():
 
 @app.route("/api/student/attendance/export", methods=["POST"])
 def export_attendance_report():
-    """导出学生出勤报表 - 支持多学生"""
+    """导出学生出勤报表"""
     try:
         data = request.json
         student_ids = data.get('student_ids', [])
         start_date = data.get('start_date')
         end_date = data.get('end_date')
         
+        # 1. 校验参数
         if not student_ids:
             return jsonify({"code": 400, "msg": "请选择学生"}), 400
         
         db = get_db()
         cur = db.cursor()
-        
         all_records = []
         
+        # 2. 循环查询每个学生的数据
         for student_id in student_ids:
             student_id_str = str(student_id)
-            
             sql = """
                 SELECT 
                     s.name as student_name,
@@ -1813,8 +1813,8 @@ def export_attendance_report():
                       OR cs.student_ids LIKE %s
                   )
             """
-            
-            params = [student_id, student_id, student_id_str, f'{student_id_str},%', f'%,{student_id_str}', f'%,{student_id_str},%']
+            params = [student_id, student_id, student_id_str, 
+                      f'{student_id_str},%', f'%,{student_id_str}', f'%,{student_id_str},%']
             
             if start_date:
                 sql += " AND cs.class_date >= %s"
@@ -1824,39 +1824,33 @@ def export_attendance_report():
                 params.append(end_date)
             
             sql += " ORDER BY cs.class_date, cs.class_time"
-            
             cur.execute(sql, params)
             records = cur.fetchall()
-            
             for row in records:
                 all_records.append(row)
         
         cur.close()
         db.close()
         
-        # 创建Excel文件
+        # 3. 生成 Excel 文件
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "学生出勤报表"
-        
-        # 设置表头
         headers = ["学生姓名", "年级", "联系电话", "上课日期", "上课时间", "课程名称", "教室", "授课教师", "状态"]
         ws.append(headers)
         
-        # 设置表头样式
+        # 设置样式
         for cell in ws[1]:
             cell.font = Font(bold=True, color="FFFFFF")
             cell.fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
             cell.alignment = Alignment(horizontal="center")
         
-        now = datetime.now()
-        today_date = now.date()
-        now_time_str = now.strftime("%H:%M")
+        today_date = datetime.now().date()
+        now_time_str = datetime.now().strftime("%H:%M")
         
         for row in all_records:
             class_date = row[3]
             class_time = row[4]
-            
             start_time_str = class_time.split('-')[0].strip() if class_time else "00:00"
             
             if class_date < today_date:
@@ -1867,15 +1861,9 @@ def export_attendance_report():
                 status_text = '待上课'
             
             ws.append([
-                row[0] or '',
-                row[1] or '',
-                row[2] or '',
-                str(row[3]) if row[3] else '',
-                row[4] or '',
-                row[5] or '',
-                row[6] or '',
-                row[7] or '',
-                status_text
+                row[0] or '', row[1] or '', row[2] or '',
+                str(row[3]) if row[3] else '', row[4] or '',
+                row[5] or '', row[6] or '', row[7] or '', status_text
             ])
         
         # 调整列宽
@@ -1888,13 +1876,12 @@ def export_attendance_report():
                         max_length = len(str(cell.value))
                 except:
                     pass
-            adjusted_width = min(max_length + 2, 20)
-            ws.column_dimensions[col_letter].width = adjusted_width
+            ws.column_dimensions[col_letter].width = min(max_length + 2, 25)
         
+        # 4. 返回文件
         output = io.BytesIO()
         wb.save(output)
         output.seek(0)
-        
         return send_file(
             output, 
             mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -1906,6 +1893,7 @@ def export_attendance_report():
         import traceback
         traceback.print_exc()
         return jsonify({"code": 500, "msg": str(e)}), 500
+        
 
 # ==================== 仪表盘数据 ====================
 @app.route("/api/dashboard/stats")
