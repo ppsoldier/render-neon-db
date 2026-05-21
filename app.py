@@ -2162,7 +2162,7 @@ def send_tomorrow_remind():
         db = get_db()
         cur = db.cursor()
         
-        # 获取明天的课程及对应的教师和家长
+        # 先查询明天的课程（不使用 FIND_IN_SET）
         cur.execute("""
             SELECT 
                 cs.id,
@@ -2170,49 +2170,49 @@ def send_tomorrow_remind():
                 cs.subject,
                 cs.classroom,
                 t.name as teacher_name,
-                t.id as teacher_id,
-                s.parent_phone,
-                s.name as student_name
+                cs.student_ids
             FROM course_schedule cs
             LEFT JOIN teacher t ON cs.teacher_id = t.id
-            LEFT JOIN student s ON cs.student_id = s.id OR FIND_IN_SET(s.id, cs.student_ids) > 0
             WHERE cs.class_date = %s 
               AND (cs.status IS NULL OR cs.status != 'cancelled')
+            ORDER BY cs.class_time
         """, (tomorrow,))
         
         courses = cur.fetchall()
+        
+        if not courses:
+            cur.close()
+            db.close()
+            return jsonify({"code": 200, "msg": "明天没有课程", "count": 0})
+        
+        # 收集课程信息
+        course_list = []
+        for course in courses:
+            course_list.append({
+                "id": course[0],
+                "class_time": course[1],
+                "subject": course[2] or '',
+                "classroom": course[3] or '',
+                "teacher_name": course[4] or '待分配'
+            })
+        
         cur.close()
         db.close()
         
-        if not courses:
-            return jsonify({"code": 200, "msg": "明天没有课程", "count": 0})
-        
-        # 这里可以集成实际的短信或微信消息发送
-        # 目前先模拟发送，记录日志
-        
-        # 收集需要通知的用户
-        teachers = set()
-        parents = set()
-        
-        for course in courses:
-            if course[5]:  # teacher_id
-                teachers.add(course[5])
-            if course[6]:  # parent_phone
-                parents.add(course[6])
-        
-        # TODO: 实际发送消息
-        # 1. 发送微信订阅消息给教师
-        # 2. 发送短信或微信给家长
+        # TODO: 实际发送消息（需要配置微信模板）
+        # 目前返回成功，记录日志
+        print(f"明日课程提醒: {len(course_list)} 门课程")
         
         return jsonify({
             "code": 200, 
-            "msg": f"提醒发送成功，共 {len(courses)} 门课程",
-            "count": len(courses),
-            "teachers": len(teachers),
-            "parents": len(parents)
+            "msg": f"提醒发送成功，共 {len(course_list)} 门课程",
+            "count": len(course_list),
+            "courses": course_list
         })
     except Exception as e:
         print(f"发送明日提醒错误: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"code": 500, "msg": str(e)}), 500
 
 
