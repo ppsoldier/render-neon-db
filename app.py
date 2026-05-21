@@ -2159,12 +2159,12 @@ def subscribe_remind():
         print(f"订阅错误: {str(e)}")
         return jsonify({"code": 500, "msg": str(e)}), 500
 
-@app.route("/api/test/env", methods=["GET"])
-def test_env():
+@app.route("/api/test/token", methods=["GET"])
+def test_token():
+    access_token = get_access_token()
     return jsonify({
-        "wechat_app_id": os.environ.get('WECHAT_APP_ID', 'NOT_SET'),
-        "wechat_app_secret": 'SET' if os.environ.get('WECHAT_APP_SECRET') else 'NOT_SET',
-        "all_vars": list(os.environ.keys())
+        "access_token": access_token[:20] + "..." if access_token else None,
+        "success": access_token is not None
     })
 
 
