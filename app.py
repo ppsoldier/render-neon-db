@@ -1565,6 +1565,56 @@ def export_schedule_excel():
         traceback.print_exc()
         return jsonify({"code": 500, "msg": str(e)}), 500
 
+# ==================== 排课管理模块 - 明日课程 ====================
+
+@app.route("/api/schedule/tomorrow", methods=["GET"])
+def schedule_tomorrow():
+    """获取明天的课程（用于提醒）"""
+    try:
+        tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+        
+        db = get_db()
+        cur = db.cursor()
+        
+        # 查询明天的课程，同时获取教师和学生信息
+        cur.execute("""
+            SELECT 
+                cs.id,
+                cs.class_time,
+                cs.subject,
+                cs.classroom,
+                t.name as teacher_name,
+                GROUP_CONCAT(s.name) as student_names
+            FROM course_schedule cs
+            LEFT JOIN teacher t ON cs.teacher_id = t.id
+            LEFT JOIN student s ON cs.student_id = s.id OR FIND_IN_SET(s.id, cs.student_ids) > 0
+            WHERE cs.class_date = %s 
+              AND (cs.status IS NULL OR cs.status != 'cancelled')
+            GROUP BY cs.id, cs.class_time, cs.subject, cs.classroom, t.name
+            ORDER BY cs.class_time
+        """, (tomorrow,))
+        
+        data = cur.fetchall()
+        cur.close()
+        db.close()
+        
+        result = []
+        for row in data:
+            result.append({
+                "id": row[0],
+                "class_time": row[1],
+                "subject": row[2] or '',
+                "classroom": row[3] or '',
+                "teacher_name": row[4] or '待分配',
+                "student_names": row[5] or '集体课'
+            })
+        
+        return jsonify({"code": 200, "data": result, "date": tomorrow})
+    except Exception as e:
+        print(f"获取明日课程错误: {str(e)}")
+        return jsonify({"code": 500, "msg": str(e)}), 500
+
+
 # 学生课时统计
 @app.route("/api/student/attendance/statistics", methods=["GET"])
 def get_student_attendance_statistics():
