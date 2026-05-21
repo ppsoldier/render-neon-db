@@ -2013,12 +2013,10 @@ def send_tomorrow_remind():
                 cs.class_time,
                 cs.subject,
                 cs.classroom,
-                COALESCE(t.name, '待分配') as teacher_name,
-                t.id as teacher_id,
+                cs.teacher_id,
                 cs.student_ids
             FROM course_schedule cs
-            LEFT JOIN teacher t ON cs.teacher_id = t.id
-            WHERE DATE(cs.class_date) = %s
+            WHERE cs.class_date = %s
               AND (cs.status IS NULL OR cs.status != 'cancelled')
             ORDER BY cs.class_time
         """, (tomorrow,))
@@ -2042,16 +2040,18 @@ def send_tomorrow_remind():
         teacher_sent = 0
         
         for course in courses:
-            course_id = course[0]
             class_time = course[1]
             subject = course[2] or '课程'
-            teacher_id = course[5]
-            student_ids_str = course[6] or ''
+            teacher_id = course[4]
+            student_ids_str = course[5] or ''
             
-            # 发送给教师
+            print(f"处理课程: {subject}, 教师ID: {teacher_id}, 学生IDs: {student_ids_str}")
+            
+            # ========== 1. 发送给教师 ==========
             if teacher_id:
                 cur.execute("SELECT openid FROM \"user\" WHERE teacher_id = %s", (teacher_id,))
                 teacher_user = cur.fetchone()
+                print(f"教师查询结果: {teacher_user}")
                 if teacher_user and teacher_user[0]:
                     send_data = {
                         "touser": teacher_user[0],
@@ -2065,18 +2065,22 @@ def send_tomorrow_remind():
                     url = f"https://api.weixin.qq.com/cgi-bin/message/subscribe/send?access_token={access_token}"
                     response = requests.post(url, json=send_data, timeout=10)
                     result = response.json()
+                    print(f"教师发送结果: {result}")
                     if result.get('errcode') == 0:
                         teacher_sent += 1
             
-            # 发送给学生家长
+            # ========== 2. 发送给学生家长 ==========
             if student_ids_str:
                 student_ids = [int(x) for x in student_ids_str.split(',') if x]
+                print(f"学生ID列表: {student_ids}")
                 for sid in student_ids:
                     cur.execute("SELECT name, parent_phone FROM student WHERE id = %s", (sid,))
                     student = cur.fetchone()
+                    print(f"学生查询结果: {student}")
                     if student and student[1]:
                         cur.execute("SELECT openid FROM \"user\" WHERE phone = %s", (student[1],))
                         parent_user = cur.fetchone()
+                        print(f"家长openid查询结果: {parent_user}")
                         if parent_user and parent_user[0]:
                             send_data = {
                                 "touser": parent_user[0],
@@ -2090,6 +2094,7 @@ def send_tomorrow_remind():
                             url = f"https://api.weixin.qq.com/cgi-bin/message/subscribe/send?access_token={access_token}"
                             response = requests.post(url, json=send_data, timeout=10)
                             result = response.json()
+                            print(f"家长发送结果: {result}")
                             if result.get('errcode') == 0:
                                 parent_sent += 1
         
@@ -2104,6 +2109,8 @@ def send_tomorrow_remind():
         })
     except Exception as e:
         print(f"发送错误: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"code": 500, "msg": str(e)}), 500
 
 
