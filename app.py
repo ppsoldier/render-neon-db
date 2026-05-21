@@ -1901,8 +1901,8 @@ import requests
 import json
 
 # 微信小程序配置
-WECHAT_APP_ID = os.environ.get('WECHAT_APP_ID', 'your_app_id')
-WECHAT_APP_SECRET = os.environ.get('WECHAT_APP_SECRET', 'your_app_secret')
+WECHAT_APP_ID = os.environ.get('WECHAT_APP_ID', 'wx7f3bff31a3dbfd0c')
+WECHAT_APP_SECRET = os.environ.get('WECHAT_APP_SECRET', '2fc74bd701def4528596ccf79bbe2a5e')
 
 def get_access_token():
     """获取微信access_token"""
