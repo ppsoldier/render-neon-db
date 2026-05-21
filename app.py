@@ -2004,7 +2004,7 @@ def get_access_token():
 
 @app.route("/api/remind/send-tomorrow", methods=["POST"])
 def send_tomorrow_remind():
-    """发送明天的课程提醒"""
+    """发送明天的课程提醒（真实推送）"""
     try:
         tomorrow = (datetime.now().date() + timedelta(days=1)).strftime("%Y-%m-%d")
         
@@ -2030,30 +2030,30 @@ def send_tomorrow_remind():
         """, (tomorrow,))
         
         courses = cur.fetchall()
-        cur.close()
-        db.close()
         
         if not courses:
+            cur.close()
+            db.close()
             return jsonify({"code": 200, "msg": "明天没有课程", "count": 0})
         
         # 获取access_token
         access_token = get_access_token()
         if not access_token:
+            cur.close()
+            db.close()
             return jsonify({"code": 500, "msg": "获取access_token失败"}), 500
         
+        TEMPLATE_ID = "qsPScuGxWPjB69boSJvaIleKJFSLJl-d6NRTLypPuYo"
         sent_count = 0
-        send_results = []
         
         for course in courses:
-            # 获取家长的openid（需要用户表中有openid）
-            # TODO: 根据parent_phone查询openid
-            parent_openid = None
-            
-            # 临时：如果有手机号，用模拟openid测试
-            if course[6]:
-                print(f"准备发送给家长 {course[6]}，学生 {course[5]}，课程 {course[2]}")
+            parent_phone = course[6]
+            if parent_phone:
+                # 根据家长手机号查询openid
+                cur.execute("SELECT openid FROM \"user\" WHERE phone = %s", (parent_phone,))
+                user = cur.fetchone()
+                parent_openid = user[0] if user else None
                 
-                # 如果有真实的openid，取消注释下面的代码
                 if parent_openid:
                     send_data = {
                         "touser": parent_openid,
@@ -2067,21 +2067,23 @@ def send_tomorrow_remind():
                     url = f"https://api.weixin.qq.com/cgi-bin/message/subscribe/send?access_token={access_token}"
                     response = requests.post(url, json=send_data, timeout=10)
                     result = response.json()
+                    print(f"发送结果: {result}")
                     if result.get('errcode') == 0:
                         sent_count += 1
-                        send_results.append({"success": True, "subject": course[2]})
-                    else:
-                        send_results.append({"success": False, "subject": course[2], "error": result})
+        
+        cur.close()
+        db.close()
         
         return jsonify({
             "code": 200,
             "msg": f"发送完成，成功 {sent_count} 条",
             "count": len(courses),
-            "sent": sent_count,
-            "results": send_results
+            "sent": sent_count
         })
     except Exception as e:
         print(f"发送错误: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"code": 500, "msg": str(e)}), 500
 
 
