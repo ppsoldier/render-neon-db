@@ -2170,7 +2170,15 @@ def subscribe_remind():
         return jsonify({"code": 500, "msg": str(e)}), 500
 
 
-
+@app.route("/api/test/env", methods=["GET"])
+def test_env():
+    """测试环境变量"""
+    return jsonify({
+        "WECHAT_APP_ID": os.environ.get('WECHAT_APP_ID', 'NOT_SET'),
+        "WECHAT_APP_SECRET": "SET" if os.environ.get('WECHAT_APP_SECRET') else 'NOT_SET',
+        "DB_HOST": os.environ.get('DB_HOST', 'NOT_SET')
+    })
+    
 # ==================== 仪表盘数据 ====================
 @app.route("/api/dashboard/stats")
 def dashboard_stats():
