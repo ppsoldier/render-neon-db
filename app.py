@@ -1999,7 +1999,7 @@ def send_remind():
                 if teacher_user:
                     send_data = {
                         "touser": teacher_user[0],
-                        "template_id": "your_teacher_template_id",
+                        "template_id": "qsPScuGxWPjB69boSJvaIleKJFSLJl-d6NRTLypPuYo",
                         "data": {
                             "thing1": {"value": course[3]},
                             "time2": {"value": f"{course[1]} {course[2]}"},
@@ -2015,7 +2015,7 @@ def send_remind():
             if course[7]:  # parent_openid
                 send_data = {
                     "touser": course[7],
-                    "template_id": "your_parent_template_id",
+                    "template_id": "qsPScuGxWPjB69boSJvaIleKJFSLJl-d6NRTLypPuYo",
                     "data": {
                         "thing1": {"value": course[3]},
                         "time2": {"value": f"{course[1]} {course[2]}"},
