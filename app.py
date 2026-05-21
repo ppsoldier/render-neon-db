@@ -1964,26 +1964,13 @@ def export_attendance_report():
         traceback.print_exc()
         return jsonify({"code": 500, "msg": str(e)}), 500
         
-# ==================== 微信提醒模块 ====================
-
-# ==================== 微信提醒模块 ====================
+# ==================== 微信提醒模块（完整版）====================
 
 import requests
 import json
 
-# 从环境变量读取配置
 WECHAT_APP_ID = os.environ.get('WECHAT_APP_ID')
 WECHAT_APP_SECRET = os.environ.get('WECHAT_APP_SECRET')
-
-# 临时：如果环境变量没读到，手动设置
-if not WECHAT_APP_ID:
-    WECHAT_APP_ID = "wx7f3bff31a3dbfd0c"
-if not WECHAT_APP_SECRET:
-    WECHAT_APP_SECRET = "74e6b9ccbf7495205aa5e1da0a30135e"
-
-# 你的模板ID（替换为真实的）
-TEMPLATE_ID = "你的模板ID"  # TODO: 替换为真实模板ID
-
 
 def get_access_token():
     """获取微信access_token"""
@@ -2001,39 +1988,201 @@ def get_access_token():
         print(f"获取access_token错误: {str(e)}")
         return None
 
-# ==================== 用户订阅接口 ====================
+
+@app.route("/api/remind/send-tomorrow", methods=["POST"])
+def send_tomorrow_remind():
+    """发送明天的课程提醒（支持多学生、教师提醒）"""
+    try:
+        tomorrow = (datetime.now().date() + timedelta(days=1)).strftime("%Y-%m-%d")
+        date_obj = datetime.strptime(tomorrow, "%Y-%m-%d")
+        formatted_date = date_obj.strftime("%Y年%m月%d日")
+        
+        db = get_db()
+        cur = db.cursor()
+        
+        # 查询明天的课程
+        cur.execute("""
+            SELECT 
+                cs.id,
+                cs.class_time,
+                cs.subject,
+                cs.classroom,
+                COALESCE(t.name, '待分配') as teacher_name,
+                t.id as teacher_id,
+                cs.student_ids
+            FROM course_schedule cs
+            LEFT JOIN teacher t ON cs.teacher_id = t.id
+            WHERE DATE(cs.class_date) = %s
+              AND (cs.status IS NULL OR cs.status != 'cancelled')
+            ORDER BY cs.class_time
+        """, (tomorrow,))
+        
+        courses = cur.fetchall()
+        
+        if not courses:
+            cur.close()
+            db.close()
+            return jsonify({"code": 200, "msg": "明天没有课程", "count": 0})
+        
+        access_token = get_access_token()
+        if not access_token:
+            cur.close()
+            db.close()
+            return jsonify({"code": 500, "msg": "获取access_token失败"}), 500
+        
+        TEMPLATE_ID = "qsPScuGxWPjB69boSJvaIleKJFSLJl-d6NRTLypPuYo"
+        
+        parent_sent = 0
+        teacher_sent = 0
+        send_details = []
+        
+        for course in courses:
+            course_id = course[0]
+            class_time = course[1]
+            subject = course[2] or '课程'
+            classroom = course[3] or ''
+            teacher_name = course[4]
+            teacher_id = course[5]
+            student_ids_str = course[6] or ''
+            
+            print(f"\n处理课程: {subject}, 时间: {class_time}")
+            
+            # ========== 1. 发送给教师 ==========
+            if teacher_id:
+                # 查询教师的openid
+                cur.execute("SELECT openid FROM \"user\" WHERE teacher_id = %s", (teacher_id,))
+                teacher_user = cur.fetchone()
+                if teacher_user and teacher_user[0]:
+                    send_data = {
+                        "touser": teacher_user[0],
+                        "template_id": TEMPLATE_ID,
+                        "data": {
+                            "thing1": {"value": f"{subject}(授课)"},
+                            "time3": {"value": formatted_date},
+                            "thing5": {"value": "教师"}
+                        }
+                    }
+                    url = f"https://api.weixin.qq.com/cgi-bin/message/subscribe/send?access_token={access_token}"
+                    response = requests.post(url, json=send_data, timeout=10)
+                    result = response.json()
+                    print(f"  教师发送结果: {result}")
+                    if result.get('errcode') == 0:
+                        teacher_sent += 1
+                        send_details.append(f"✅ 教师{teacher_name}发送成功")
+                    else:
+                        send_details.append(f"❌ 教师{teacher_name}发送失败: {result.get('errmsg')}")
+                else:
+                    send_details.append(f"⚠️ 教师{teacher_name}未找到openid")
+            
+            # ========== 2. 发送给所有关联的学生家长 ==========
+            if student_ids_str:
+                student_ids = [int(x) for x in student_ids_str.split(',') if x]
+                print(f"  关联学生ID: {student_ids}")
+                
+                for student_id in student_ids:
+                    # 查询学生信息及家长手机号
+                    cur.execute("""
+                        SELECT id, name, parent_name, parent_phone 
+                        FROM student WHERE id = %s
+                    """, (student_id,))
+                    student = cur.fetchone()
+                    
+                    if not student:
+                        continue
+                    
+                    parent_phone = student[3]
+                    student_name = student[1]
+                    
+                    if parent_phone:
+                        # 根据手机号查询用户openid
+                        cur.execute("SELECT openid FROM \"user\" WHERE phone = %s", (parent_phone,))
+                        parent_user = cur.fetchone()
+                        
+                        if parent_user and parent_user[0]:
+                            send_data = {
+                                "touser": parent_user[0],
+                                "template_id": TEMPLATE_ID,
+                                "data": {
+                                    "thing1": {"value": subject},
+                                    "time3": {"value": formatted_date},
+                                    "thing5": {"value": student_name}
+                                }
+                            }
+                            url = f"https://api.weixin.qq.com/cgi-bin/message/subscribe/send?access_token={access_token}"
+                            response = requests.post(url, json=send_data, timeout=10)
+                            result = response.json()
+                            print(f"  家长({student_name})发送结果: {result}")
+                            if result.get('errcode') == 0:
+                                parent_sent += 1
+                                send_details.append(f"✅ {student_name}家长发送成功")
+                            else:
+                                send_details.append(f"❌ {student_name}家长发送失败: {result.get('errmsg')}")
+                        else:
+                            send_details.append(f"⚠️ 学生{student_name}家长手机号{parent_phone}未注册或未获取openid")
+                    else:
+                        send_details.append(f"⚠️ 学生{student_name}未填写家长手机号")
+            else:
+                # 兼容旧的单学生模式
+                cur.execute("""
+                    SELECT s.id, s.name, s.parent_name, s.parent_phone
+                    FROM course_schedule cs
+                    LEFT JOIN student s ON cs.student_id = s.id
+                    WHERE cs.id = %s
+                """, (course_id,))
+                single_student = cur.fetchone()
+                if single_student and single_student[3]:
+                    cur.execute("SELECT openid FROM \"user\" WHERE phone = %s", (single_student[3],))
+                    parent_user = cur.fetchone()
+                    if parent_user and parent_user[0]:
+                        send_data = {
+                            "touser": parent_user[0],
+                            "template_id": TEMPLATE_ID,
+                            "data": {
+                                "thing1": {"value": subject},
+                                "time3": {"value": formatted_date},
+                                "thing5": {"value": single_student[1]}
+                            }
+                        }
+                        url = f"https://api.weixin.qq.com/cgi-bin/message/subscribe/send?access_token={access_token}"
+                        response = requests.post(url, json=send_data, timeout=10)
+                        result = response.json()
+                        if result.get('errcode') == 0:
+                            parent_sent += 1
+                            send_details.append(f"✅ {single_student[1]}家长发送成功")
+        
+        cur.close()
+        db.close()
+        
+        return jsonify({
+            "code": 200,
+            "msg": f"发送完成：教师{teacher_sent}人，家长{parent_sent}人",
+            "total_courses": len(courses),
+            "teacher_sent": teacher_sent,
+            "parent_sent": parent_sent,
+            "details": send_details
+        })
+    except Exception as e:
+        print(f"发送错误: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"code": 500, "msg": str(e)}), 500
+
+
 @app.route("/api/remind/subscribe", methods=["POST"])
 def subscribe_remind():
-    """记录用户的订阅状态"""
+    """记录用户订阅状态"""
     try:
         data = request.json
         openid = data.get('openid')
         template_id = data.get('template_id')
         user_type = data.get('user_type', 'parent')
         
-        # 如果没有传openid，尝试从当前登录用户获取（如果你的登录接口有保存openid）
         if not openid:
-            # 这里可以根据你的用户认证逻辑获取openid，例如从token中解析
-            # 为简化，先返回错误
             return jsonify({"code": 400, "msg": "缺少openid"}), 400
         
         db = get_db()
         cur = db.cursor()
         
-        # 确保订阅记录表存在
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS subscribe_record (
-                id SERIAL PRIMARY KEY,
-                openid VARCHAR(100) NOT NULL,
-                template_id VARCHAR(100) NOT NULL,
-                user_type VARCHAR(20),
-                status VARCHAR(20) DEFAULT 'active',
-                subscribe_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(openid, template_id)
-            )
-        """)
-        
-        # 插入或更新订阅记录
         cur.execute("""
             INSERT INTO subscribe_record (openid, template_id, user_type, status, subscribe_time)
             VALUES (%s, %s, %s, 'active', NOW())
@@ -2049,8 +2198,6 @@ def subscribe_remind():
     except Exception as e:
         print(f"订阅错误: {str(e)}")
         return jsonify({"code": 500, "msg": str(e)}), 500
-
-
 @app.route("/api/remind/send-tomorrow", methods=["POST"])
 def send_tomorrow_remind():
     """发送明天的课程提醒"""
