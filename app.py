@@ -2016,18 +2016,16 @@ def get_access_token():
 
 @app.route("/api/remind/send-tomorrow", methods=["POST"])
 def send_tomorrow_remind():
+    """发送明天的课程提醒"""
     try:
-        # 使用北京时间
+        # 获取北京时间
         beijing_now = get_beijing_time()
         tomorrow = (beijing_now + timedelta(days=1)).strftime("%Y-%m-%d")
         formatted_date = beijing_now.strftime("%Y年%m月%d日")
         
-        print(f"发送提醒 - 北京时间: {beijing_now}, 明天: {tomorrow}")
-        
         db = get_db()
         cur = db.cursor()
         
-        # 查询明天的课程
         cur.execute("""
             SELECT 
                 cs.id,
@@ -2041,8 +2039,6 @@ def send_tomorrow_remind():
         """, (tomorrow,))
         
         courses = cur.fetchall()
-        
-        debug_info = []
         
         if not courses:
             cur.close()
@@ -2060,41 +2056,35 @@ def send_tomorrow_remind():
         parent_sent = 0
         teacher_sent = 0
         
-        # 在发送消息的部分修改时间格式
-for course in courses:
-    class_time = course[1]  # "09:30-10:30"
-    subject = course[2] or '课程'
-    teacher_id = course[3]
-    student_ids_str = course[4] or ''
-    
-    # 只取开始时间（避免 time3 格式错误）
-    start_time = class_time.split('-')[0] if class_time else "09:00"
-    full_time_str = f"{formatted_date} {start_time}"  # "2026年05月23日 09:30"
-    
-    # 发送给教师
-    if teacher_id:
-        cur.execute("SELECT openid FROM \"user\" WHERE teacher_id = %s", (teacher_id,))
-        teacher_user = cur.fetchone()
-        if teacher_user and teacher_user[0]:
-            send_data = {
-                "touser": teacher_user[0],
-                "template_id": TEMPLATE_ID,
-                "data": {
-                    "thing1": {"value": subject},
-                    "time3": {"value": full_time_str},  # 只包含日期+开始时间
-                    "thing5": {"value": "教师"}
+        for course in courses:
+            class_time = course[1]
+            subject = course[2] or '课程'
+            teacher_id = course[3]
+            student_ids_str = course[4] or ''
+            
+            # 只取开始时间
+            start_time = class_time.split('-')[0] if class_time else "09:00"
+            full_time_str = f"{formatted_date} {start_time}"
+            
+            # 发送给教师
+            if teacher_id:
+                cur.execute("SELECT openid FROM \"user\" WHERE teacher_id = %s", (teacher_id,))
+                teacher_user = cur.fetchone()
+                if teacher_user and teacher_user[0]:
+                    send_data = {
+                        "touser": teacher_user[0],
+                        "template_id": TEMPLATE_ID,
+                        "data": {
+                            "thing1": {"value": subject},
+                            "time3": {"value": full_time_str},
+                            "thing5": {"value": "教师"}
                         }
                     }
                     url = f"https://api.weixin.qq.com/cgi-bin/message/subscribe/send?access_token={access_token}"
                     response = requests.post(url, json=send_data, timeout=10)
                     result = response.json()
-                    debug_info.append(f"教师发送结果: {result}")
                     if result.get('errcode') == 0:
                         teacher_sent += 1
-                else:
-                    debug_info.append(f"教师未找到openid")
-            else:
-                debug_info.append(f"课程没有关联教师")
             
             # 发送给家长
             if student_ids_str:
@@ -2102,11 +2092,9 @@ for course in courses:
                 for sid in student_ids:
                     cur.execute("SELECT name, parent_phone FROM student WHERE id = %s", (sid,))
                     student = cur.fetchone()
-                    debug_info.append(f"学生{sid}查询结果: {student}")
                     if student and student[1]:
                         cur.execute("SELECT openid FROM \"user\" WHERE phone = %s", (student[1],))
                         parent_user = cur.fetchone()
-                        debug_info.append(f"家长openid查询结果: {parent_user}")
                         if parent_user and parent_user[0]:
                             send_data = {
                                 "touser": parent_user[0],
@@ -2120,15 +2108,8 @@ for course in courses:
                             url = f"https://api.weixin.qq.com/cgi-bin/message/subscribe/send?access_token={access_token}"
                             response = requests.post(url, json=send_data, timeout=10)
                             result = response.json()
-                            debug_info.append(f"家长发送结果: {result}")
                             if result.get('errcode') == 0:
                                 parent_sent += 1
-                        else:
-                            debug_info.append(f"家长未找到openid")
-                    else:
-                        debug_info.append(f"学生{sid}没有家长手机号")
-            else:
-                debug_info.append(f"课程没有关联学生")
         
         cur.close()
         db.close()
@@ -2137,8 +2118,7 @@ for course in courses:
             "code": 200,
             "msg": f"发送完成：教师{teacher_sent}人，家长{parent_sent}人",
             "teacher_sent": teacher_sent,
-            "parent_sent": parent_sent,
-            "debug": debug_info
+            "parent_sent": parent_sent
         })
     except Exception as e:
         print(f"发送错误: {str(e)}")
