@@ -1964,19 +1964,13 @@ def export_attendance_report():
         traceback.print_exc()
         return jsonify({"code": 500, "msg": str(e)}), 500
         
-# ==================== 微信提醒模块 ====================
+# ==================== 微信提醒模块（最终修复版）====================
 
 import requests
 import json
 
 WECHAT_APP_ID = os.environ.get('WECHAT_APP_ID')
 WECHAT_APP_SECRET = os.environ.get('WECHAT_APP_SECRET')
-
-# 临时写死（仅用于测试，确认环境变量生效后删除）
-if not WECHAT_APP_ID:
-    WECHAT_APP_ID = "wx7f3bff31a3dbfd0c"  # 改为正确的值
-if not WECHAT_APP_SECRET:
-    WECHAT_APP_SECRET = "74e6b9ccbf7495205aa5e1da0a30135e"
 
 def get_access_token():
     """获取微信access_token"""
@@ -1985,7 +1979,7 @@ def get_access_token():
         response = requests.get(url, timeout=10)
         data = response.json()
         if 'access_token' in data:
-            print(f"获取access_token成功")
+            print("获取access_token成功")
             return data['access_token']
         else:
             print(f"获取access_token失败: {data}")
@@ -1997,14 +1991,16 @@ def get_access_token():
 
 @app.route("/api/remind/send-tomorrow", methods=["POST"])
 def send_tomorrow_remind():
-    """发送明天的课程提醒（包含具体上课时间）"""
+    """发送明天的课程提醒（支持具体时间）"""
     try:
-        tomorrow = (datetime.now().date() + timedelta(days=1)).strftime("%Y-%m-%d")
+        tomorrow_date = datetime.now().date() + timedelta(days=1)
+        tomorrow_str = tomorrow_date.strftime("%Y-%m-%d")
+        formatted_datetime = tomorrow_date.strftime("%Y年%m月%d日")
         
         db = get_db()
         cur = db.cursor()
         
-        # 查询明天的课程
+        # 1. 查询明天的课程
         cur.execute("""
             SELECT 
                 cs.id,
@@ -2017,7 +2013,7 @@ def send_tomorrow_remind():
             WHERE cs.class_date = %s
               AND (cs.status IS NULL OR cs.status != 'cancelled')
             ORDER BY cs.class_time
-        """, (tomorrow,))
+        """, (tomorrow_str,))
         
         courses = cur.fetchall()
         
@@ -2026,6 +2022,7 @@ def send_tomorrow_remind():
             db.close()
             return jsonify({"code": 200, "msg": "明天没有课程", "count": 0})
         
+        # 2. 获取 access_token
         access_token = get_access_token()
         if not access_token:
             cur.close()
@@ -2034,23 +2031,19 @@ def send_tomorrow_remind():
         
         TEMPLATE_ID = "qsPScuGxWPjB69boSJvaIleKJFSLJl-d6NRTLypPuYo"
         
-        # 解析日期，生成中文格式
-        date_obj = datetime.strptime(tomorrow, "%Y-%m-%d")
-        formatted_date = date_obj.strftime("%Y年%m月%d日")
-        
         parent_sent = 0
         teacher_sent = 0
         
         for course in courses:
-            class_time = course[1]      # 例如 "09:30-10:30"
+            class_time = course[1]      # "09:30-10:30"
             subject = course[2] or '课程'
             teacher_id = course[4]
             student_ids_str = course[5] or ''
             
-            # 组合日期+时间（格式：2026年05月22日 09:30-10:30）
-            full_datetime = f"{formatted_date} {class_time}"
+            # 组合完整的日期+时间
+            full_time_str = f"{formatted_datetime} {class_time}"
             
-            # ========== 1. 发送给教师 ==========
+            # --- 发送给教师 ---
             if teacher_id:
                 cur.execute("SELECT openid FROM \"user\" WHERE teacher_id = %s", (teacher_id,))
                 teacher_user = cur.fetchone()
@@ -2060,7 +2053,7 @@ def send_tomorrow_remind():
                         "template_id": TEMPLATE_ID,
                         "data": {
                             "thing1": {"value": f"{subject}"},
-                            "time3": {"value": full_datetime},
+                            "time3": {"value": full_time_str},
                             "thing5": {"value": "教师"}
                         }
                     }
@@ -2070,7 +2063,7 @@ def send_tomorrow_remind():
                     if result.get('errcode') == 0:
                         teacher_sent += 1
             
-            # ========== 2. 发送给学生家长 ==========
+            # --- 发送给学生家长 ---
             if student_ids_str:
                 student_ids = [int(x) for x in student_ids_str.split(',') if x]
                 for sid in student_ids:
@@ -2085,7 +2078,7 @@ def send_tomorrow_remind():
                                 "template_id": TEMPLATE_ID,
                                 "data": {
                                     "thing1": {"value": subject},
-                                    "time3": {"value": full_datetime},
+                                    "time3": {"value": full_time_str},
                                     "thing5": {"value": student[0]}
                                 }
                             }
@@ -2126,6 +2119,7 @@ def subscribe_remind():
         db = get_db()
         cur = db.cursor()
         
+        # 确保表存在
         cur.execute("""
             CREATE TABLE IF NOT EXISTS subscribe_record (
                 id SERIAL PRIMARY KEY,
@@ -2153,20 +2147,6 @@ def subscribe_remind():
     except Exception as e:
         print(f"订阅错误: {str(e)}")
         return jsonify({"code": 500, "msg": str(e)}), 500
-
-
-
-
-
-
-@app.route("/api/test/token", methods=["GET"])
-def test_token():
-    """测试获取access_token"""
-    access_token = get_access_token()
-    return jsonify({
-        "success": access_token is not None,
-        "access_token": access_token[:30] + "..." if access_token else None
-    })
 
 
 
