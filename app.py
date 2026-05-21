@@ -2053,8 +2053,9 @@ def subscribe_remind():
 
 @app.route("/api/remind/send-tomorrow", methods=["POST"])
 def send_tomorrow_remind():
-    """发送明天的课程提醒（测试版）"""
+    """发送明天的课程提醒"""
     try:
+        print("=== 开始发送提醒 ===")
         tomorrow = (datetime.now().date() + timedelta(days=1)).strftime("%Y-%m-%d")
         
         db = get_db()
@@ -2083,27 +2084,23 @@ def send_tomorrow_remind():
         if not courses:
             return jsonify({"code": 200, "msg": "明天没有课程", "count": 0})
         
-        # 获取access_token
         access_token = get_access_token()
         if not access_token:
             return jsonify({"code": 500, "msg": "获取access_token失败"}), 500
         
         TEMPLATE_ID = "qsPScuGxWPjB69boSJvaIleKJFSLJl-d6NRTLypPuYo"
-        
-        # 测试用的openid（你的管理员openid）
         TEST_OPENID = "obkBW3RCw6dkhA7e8146HPUnnEDA"
         
         sent_count = 0
         
         for course in courses:
-            # 直接使用测试openid发送
             send_data = {
                 "touser": TEST_OPENID,
                 "template_id": TEMPLATE_ID,
                 "data": {
-                    "课程名称": {"value": course[2] or '课程'},
-                    "确认上课时间": {"value": f"{tomorrow} {course[1]}"},
-                    "学员姓名": {"value": course[5] or '您的孩子'}
+                    "thing1": {"value": course[2] or '课程'},           # 课程名称
+                    "time3": {"value": f"{tomorrow} {course[1]}"},     # 确认上课时间
+                    "thing5": {"value": course[5] or '您的孩子'}        # 学员姓名
                 }
             }
             
