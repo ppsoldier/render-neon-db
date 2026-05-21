@@ -2091,22 +2091,19 @@ def send_tomorrow_remind():
         TEMPLATE_ID = "qsPScuGxWPjB69boSJvaIleKJFSLJl-d6NRTLypPuYo"
         TEST_OPENID = "obkBW3RCw6dkhA7e8146HPUnnEDA"
         
-        # 格式化日期为中文
+        # 格式化日期
         date_obj = datetime.strptime(tomorrow, "%Y-%m-%d")
         formatted_date = date_obj.strftime("%Y年%m月%d日")
         
         sent_count = 0
         
         for course in courses:
-            # 格式化时间
-            full_time = f"{formatted_date} {course[1]}"
-            
             send_data = {
                 "touser": TEST_OPENID,
                 "template_id": TEMPLATE_ID,
                 "data": {
                     "thing1": {"value": course[2] or '课程'},
-                    "time3": {"value": full_time},
+                    "time3": {"value": formatted_date},  # 只发日期
                     "thing5": {"value": course[5] or '您的孩子'}
                 }
             }
@@ -2129,9 +2126,12 @@ def send_tomorrow_remind():
         })
     except Exception as e:
         print(f"发送错误: {str(e)}")
-        import traceback
-        traceback.print_exc()
         return jsonify({"code": 500, "msg": str(e)}), 500
+
+
+
+
+
 
 @app.route("/api/test/token", methods=["GET"])
 def test_token():
