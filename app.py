@@ -2001,7 +2001,6 @@ def send_tomorrow_remind():
         db = get_db()
         cur = db.cursor()
         
-        # 查询明天的课程
         cur.execute("""
             SELECT 
                 cs.id,
@@ -2038,10 +2037,9 @@ def send_tomorrow_remind():
             teacher_id = course[3]
             student_ids_str = course[4] or ''
             
-            # 组合完整时间
             full_time_str = f"{formatted_date} {class_time}"
             
-            # ========== 1. 发送给教师 ==========
+            # 发送给教师
             if teacher_id:
                 cur.execute("SELECT openid FROM \"user\" WHERE teacher_id = %s", (teacher_id,))
                 teacher_user = cur.fetchone()
@@ -2061,7 +2059,7 @@ def send_tomorrow_remind():
                     if result.get('errcode') == 0:
                         teacher_sent += 1
             
-            # ========== 2. 发送给家长 ==========
+            # 发送给家长
             if student_ids_str:
                 student_ids = [int(x) for x in student_ids_str.split(',') if x]
                 for sid in student_ids:
@@ -2097,8 +2095,6 @@ def send_tomorrow_remind():
         })
     except Exception as e:
         print(f"发送错误: {str(e)}")
-        import traceback
-        traceback.print_exc()
         return jsonify({"code": 500, "msg": str(e)}), 500
 
 
