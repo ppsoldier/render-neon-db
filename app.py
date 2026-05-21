@@ -2014,6 +2014,10 @@ import json
 WECHAT_APP_ID = os.environ.get('WECHAT_APP_ID')
 WECHAT_APP_SECRET = os.environ.get('WECHAT_APP_SECRET')
 
+# 临时写死（仅用于测试）
+WECHAT_APP_ID = "wx7f3bff31a3dbfd0c"
+WECHAT_APP_SECRET = "74e6b9ccbf7495205aa5e1da0a30135e"
+
 def get_access_token():
     """获取微信access_token"""
     try:
