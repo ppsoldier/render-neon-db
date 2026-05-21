@@ -1997,11 +1997,9 @@ def get_access_token():
 
 @app.route("/api/remind/send-tomorrow", methods=["POST"])
 def send_tomorrow_remind():
-    """发送明天的课程提醒"""
+    """发送明天的课程提醒（包含具体上课时间）"""
     try:
         tomorrow = (datetime.now().date() + timedelta(days=1)).strftime("%Y-%m-%d")
-        date_obj = datetime.strptime(tomorrow, "%Y-%m-%d")
-        formatted_date = date_obj.strftime("%Y年%m月%d日")
         
         db = get_db()
         cur = db.cursor()
@@ -2036,65 +2034,64 @@ def send_tomorrow_remind():
         
         TEMPLATE_ID = "qsPScuGxWPjB69boSJvaIleKJFSLJl-d6NRTLypPuYo"
         
+        # 解析日期，生成中文格式
+        date_obj = datetime.strptime(tomorrow, "%Y-%m-%d")
+        formatted_date = date_obj.strftime("%Y年%m月%d日")
+        
         parent_sent = 0
         teacher_sent = 0
         
         for course in courses:
-            class_time = course[1]
+            class_time = course[1]      # 例如 "09:30-10:30"
             subject = course[2] or '课程'
             teacher_id = course[4]
             student_ids_str = course[5] or ''
             
-            print(f"处理课程: {subject}, 教师ID: {teacher_id}, 学生IDs: {student_ids_str}")
+            # 组合日期+时间（格式：2026年05月22日 09:30-10:30）
+            full_datetime = f"{formatted_date} {class_time}"
             
             # ========== 1. 发送给教师 ==========
             if teacher_id:
                 cur.execute("SELECT openid FROM \"user\" WHERE teacher_id = %s", (teacher_id,))
                 teacher_user = cur.fetchone()
-                print(f"教师查询结果: {teacher_user}")
                 if teacher_user and teacher_user[0]:
                     send_data = {
                         "touser": teacher_user[0],
                         "template_id": TEMPLATE_ID,
                         "data": {
-                            "thing1": {"value": f"{subject}(授课)"},
-                            "time3": {"value": formatted_date},
+                            "thing1": {"value": f"{subject}"},
+                            "time3": {"value": full_datetime},
                             "thing5": {"value": "教师"}
                         }
                     }
                     url = f"https://api.weixin.qq.com/cgi-bin/message/subscribe/send?access_token={access_token}"
                     response = requests.post(url, json=send_data, timeout=10)
                     result = response.json()
-                    print(f"教师发送结果: {result}")
                     if result.get('errcode') == 0:
                         teacher_sent += 1
             
             # ========== 2. 发送给学生家长 ==========
             if student_ids_str:
                 student_ids = [int(x) for x in student_ids_str.split(',') if x]
-                print(f"学生ID列表: {student_ids}")
                 for sid in student_ids:
                     cur.execute("SELECT name, parent_phone FROM student WHERE id = %s", (sid,))
                     student = cur.fetchone()
-                    print(f"学生查询结果: {student}")
                     if student and student[1]:
                         cur.execute("SELECT openid FROM \"user\" WHERE phone = %s", (student[1],))
                         parent_user = cur.fetchone()
-                        print(f"家长openid查询结果: {parent_user}")
                         if parent_user and parent_user[0]:
                             send_data = {
                                 "touser": parent_user[0],
                                 "template_id": TEMPLATE_ID,
                                 "data": {
                                     "thing1": {"value": subject},
-                                    "time3": {"value": formatted_date},
+                                    "time3": {"value": full_datetime},
                                     "thing5": {"value": student[0]}
                                 }
                             }
                             url = f"https://api.weixin.qq.com/cgi-bin/message/subscribe/send?access_token={access_token}"
                             response = requests.post(url, json=send_data, timeout=10)
                             result = response.json()
-                            print(f"家长发送结果: {result}")
                             if result.get('errcode') == 0:
                                 parent_sent += 1
         
