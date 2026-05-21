@@ -2051,12 +2051,21 @@ def get_user_openid(phone):
 
 @app.route("/api/remind/send-tomorrow", methods=["POST"])
 def send_tomorrow_remind():
-    """发送明天的课程提醒（真实推送）"""
+    """发送明天的课程提醒"""
     try:
-        tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+        # 获取明天的日期
+        tomorrow_date = datetime.now().date() + timedelta(days=1)
+        tomorrow_str = tomorrow_date.strftime("%Y-%m-%d")
+        
+        print(f"查询日期: {tomorrow_str}")
         
         db = get_db()
         cur = db.cursor()
+        
+        # 先查询所有课程看有没有数据
+        cur.execute("SELECT COUNT(*) FROM course_schedule")
+        total = cur.fetchone()[0]
+        print(f"总课程数: {total}")
         
         # 查询明天的课程
         cur.execute("""
@@ -2065,29 +2074,36 @@ def send_tomorrow_remind():
                 cs.class_time,
                 cs.subject,
                 cs.classroom,
-                t.name as teacher_name,
-                t.id as teacher_id,
-                s.id as student_id,
-                s.name as student_name,
-                s.parent_phone
+                COALESCE(t.name, '待分配') as teacher_name
             FROM course_schedule cs
             LEFT JOIN teacher t ON cs.teacher_id = t.id
-            LEFT JOIN student s ON cs.student_id = s.id
-            WHERE cs.class_date = %s 
+            WHERE DATE(cs.class_date) = %s
               AND (cs.status IS NULL OR cs.status != 'cancelled')
             ORDER BY cs.class_time
-        """, (tomorrow,))
+        """, (tomorrow_str,))
         
         courses = cur.fetchall()
+        print(f"查询到 {len(courses)} 门明天的课程")
         
-        if not courses:
-            cur.close()
-            db.close()
-            return jsonify({"code": 200, "msg": "明天没有课程", "count": 0})
+        for c in courses:
+            print(f"  - {c[1]} {c[2]}")
         
-        access_token = get_access_token()
-        if not access_token:
-            return jsonify({"code": 500, "msg": "获取access_token失败"}), 500
+        cur.close()
+        db.close()
+        
+        return jsonify({
+            "code": 200,
+            "msg": f"找到 {len(courses)} 门课程",
+            "count": len(courses),
+            "sent": len(courses),
+            "date": tomorrow_str,
+            "courses": [{"time": c[1], "subject": c[2]} for c in courses]
+        })
+    except Exception as e:
+        print(f"错误: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"code": 500, "msg": str(e)}), 500
         
         # 你的模板ID（替换为真实的）
         TEMPLATE_ID = "qsPScuGxWPjB69boSJvaIleKJFSLJl-d6NRTLypPuYo"  # 在微信公众平台获取
