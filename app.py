@@ -264,53 +264,7 @@ def login():
         return jsonify({"code": 403, "msg": "账号或密码错误"})
     except Exception as e:
         print(f"登录错误: {str(e)}")
-        return jsonify({"code": 500, "msg": str(e)}), 500
-
-@app.route("/api/remind/subscribe", methods=["POST"])
-def subscribe_remind():
-    """记录用户订阅状态"""
-    try:
-        data = request.json
-        openid = data.get('openid')
-        template_id = data.get('template_id')
-        user_type = data.get('user_type', 'parent')
-        
-        if not openid:
-            return jsonify({"code": 400, "msg": "缺少openid"}), 400
-        
-        db = get_db()
-        cur = db.cursor()
-        
-        # 创建订阅记录表（如果不存在）
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS subscribe_record (
-                id SERIAL PRIMARY KEY,
-                openid VARCHAR(100) NOT NULL,
-                template_id VARCHAR(100) NOT NULL,
-                user_type VARCHAR(20),
-                status VARCHAR(20) DEFAULT 'active',
-                subscribe_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(openid, template_id)
-            )
-        """)
-        
-        # 插入或更新订阅记录
-        cur.execute("""
-            INSERT INTO subscribe_record (openid, template_id, user_type, status, subscribe_time)
-            VALUES (%s, %s, %s, 'active', NOW())
-            ON CONFLICT (openid, template_id) 
-            DO UPDATE SET status = 'active', subscribe_time = NOW()
-        """, (openid, template_id, user_type))
-        
-        db.commit()
-        cur.close()
-        db.close()
-        
-        return jsonify({"code": 200, "msg": "订阅成功"})
-    except Exception as e:
-        print(f"订阅错误: {str(e)}")
-        return jsonify({"code": 500, "msg": str(e)}), 500
-
+        return jsonify({"code": 500, "msg": str(e)}), 500        
 
 @app.route("/api/user/list")
 def user_list():
@@ -2046,6 +2000,55 @@ def get_access_token():
     except Exception as e:
         print(f"获取access_token错误: {str(e)}")
         return None
+
+# ==================== 用户订阅接口 ====================
+@app.route("/api/remind/subscribe", methods=["POST"])
+def subscribe_remind():
+    """记录用户的订阅状态"""
+    try:
+        data = request.json
+        openid = data.get('openid')
+        template_id = data.get('template_id')
+        user_type = data.get('user_type', 'parent')
+        
+        # 如果没有传openid，尝试从当前登录用户获取（如果你的登录接口有保存openid）
+        if not openid:
+            # 这里可以根据你的用户认证逻辑获取openid，例如从token中解析
+            # 为简化，先返回错误
+            return jsonify({"code": 400, "msg": "缺少openid"}), 400
+        
+        db = get_db()
+        cur = db.cursor()
+        
+        # 确保订阅记录表存在
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS subscribe_record (
+                id SERIAL PRIMARY KEY,
+                openid VARCHAR(100) NOT NULL,
+                template_id VARCHAR(100) NOT NULL,
+                user_type VARCHAR(20),
+                status VARCHAR(20) DEFAULT 'active',
+                subscribe_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(openid, template_id)
+            )
+        """)
+        
+        # 插入或更新订阅记录
+        cur.execute("""
+            INSERT INTO subscribe_record (openid, template_id, user_type, status, subscribe_time)
+            VALUES (%s, %s, %s, 'active', NOW())
+            ON CONFLICT (openid, template_id) 
+            DO UPDATE SET status = 'active', subscribe_time = NOW()
+        """, (openid, template_id, user_type))
+        
+        db.commit()
+        cur.close()
+        db.close()
+        
+        return jsonify({"code": 200, "msg": "订阅成功"})
+    except Exception as e:
+        print(f"订阅错误: {str(e)}")
+        return jsonify({"code": 500, "msg": str(e)}), 500
 
 
 @app.route("/api/remind/send-tomorrow", methods=["POST"])
