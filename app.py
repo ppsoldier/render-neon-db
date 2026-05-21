@@ -2060,30 +2060,29 @@ def send_tomorrow_remind():
         parent_sent = 0
         teacher_sent = 0
         
-        for course in courses:
-            class_time = course[1]
-            subject = course[2] or '课程'
-            teacher_id = course[3]
-            student_ids_str = course[4] or ''
-            
-            full_time_str = f"{formatted_date} {class_time}"
-            
-            debug_info.append(f"课程: {subject}, 教师ID: {teacher_id}, 学生IDs: {student_ids_str}")
-            
-            # 发送给教师
-            if teacher_id:
-                cur.execute("SELECT openid FROM \"user\" WHERE teacher_id = %s", (teacher_id,))
-                teacher_user = cur.fetchone()
-                debug_info.append(f"教师查询结果: {teacher_user}")
-                if teacher_user and teacher_user[0]:
-                    debug_info.append(f"找到教师openid: {teacher_user[0][:20]}...")
-                    send_data = {
-                        "touser": teacher_user[0],
-                        "template_id": TEMPLATE_ID,
-                        "data": {
-                            "thing1": {"value": subject},
-                            "time3": {"value": full_time_str},
-                            "thing5": {"value": "教师"}
+        # 在发送消息的部分修改时间格式
+for course in courses:
+    class_time = course[1]  # "09:30-10:30"
+    subject = course[2] or '课程'
+    teacher_id = course[3]
+    student_ids_str = course[4] or ''
+    
+    # 只取开始时间（避免 time3 格式错误）
+    start_time = class_time.split('-')[0] if class_time else "09:00"
+    full_time_str = f"{formatted_date} {start_time}"  # "2026年05月23日 09:30"
+    
+    # 发送给教师
+    if teacher_id:
+        cur.execute("SELECT openid FROM \"user\" WHERE teacher_id = %s", (teacher_id,))
+        teacher_user = cur.fetchone()
+        if teacher_user and teacher_user[0]:
+            send_data = {
+                "touser": teacher_user[0],
+                "template_id": TEMPLATE_ID,
+                "data": {
+                    "thing1": {"value": subject},
+                    "time3": {"value": full_time_str},  # 只包含日期+开始时间
+                    "thing5": {"value": "教师"}
                         }
                     }
                     url = f"https://api.weixin.qq.com/cgi-bin/message/subscribe/send?access_token={access_token}"
