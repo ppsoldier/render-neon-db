@@ -1964,13 +1964,14 @@ def export_attendance_report():
         traceback.print_exc()
         return jsonify({"code": 500, "msg": str(e)}), 500
         
-# ==================== 微信提醒模块（最终修复版）====================
+# ==================== 微信提醒模块 ====================
 
 import requests
 import json
 
-WECHAT_APP_ID = os.environ.get('WECHAT_APP_ID')
-WECHAT_APP_SECRET = os.environ.get('WECHAT_APP_SECRET')
+# 临时写死 AppID 和 AppSecret（测试用）
+WECHAT_APP_ID = "wx7f3bff31a3dbfd0c"
+WECHAT_APP_SECRET = "74e6b9ccbf7495205aa5e1da0a30135e"
 
 def get_access_token():
     """获取微信access_token"""
