@@ -1972,6 +1972,12 @@ import json
 WECHAT_APP_ID = os.environ.get('WECHAT_APP_ID')
 WECHAT_APP_SECRET = os.environ.get('WECHAT_APP_SECRET')
 
+# 临时写死（仅用于测试，确认环境变量生效后删除）
+if not WECHAT_APP_ID:
+    WECHAT_APP_ID = "wx7f3bff31a3dbfd0c"  # 改为正确的值
+if not WECHAT_APP_SECRET:
+    WECHAT_APP_SECRET = "74e6b9ccbf7495205aa5e1da0a30135e"
+
 def get_access_token():
     """获取微信access_token"""
     try:
