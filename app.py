@@ -2091,18 +2091,27 @@ def send_tomorrow_remind():
         TEMPLATE_ID = "qsPScuGxWPjB69boSJvaIleKJFSLJl-d6NRTLypPuYo"
         TEST_OPENID = "obkBW3RCw6dkhA7e8146HPUnnEDA"
         
+        # 格式化日期为中文
+        date_obj = datetime.strptime(tomorrow, "%Y-%m-%d")
+        formatted_date = date_obj.strftime("%Y年%m月%d日")
+        
         sent_count = 0
         
         for course in courses:
+            # 格式化时间
+            full_time = f"{formatted_date} {course[1]}"
+            
             send_data = {
                 "touser": TEST_OPENID,
                 "template_id": TEMPLATE_ID,
                 "data": {
-                    "thing1": {"value": course[2] or '课程'},           # 课程名称
-                    "time3": {"value": f"{tomorrow} {course[1]}"},     # 确认上课时间
-                    "thing5": {"value": course[5] or '您的孩子'}        # 学员姓名
+                    "thing1": {"value": course[2] or '课程'},
+                    "time3": {"value": full_time},
+                    "thing5": {"value": course[5] or '您的孩子'}
                 }
             }
+            
+            print(f"发送数据: {send_data}")
             
             url = f"https://api.weixin.qq.com/cgi-bin/message/subscribe/send?access_token={access_token}"
             response = requests.post(url, json=send_data, timeout=10)
@@ -2120,6 +2129,8 @@ def send_tomorrow_remind():
         })
     except Exception as e:
         print(f"发送错误: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"code": 500, "msg": str(e)}), 500
 
 @app.route("/api/test/token", methods=["GET"])
