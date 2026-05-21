@@ -1610,7 +1610,9 @@ def export_schedule_excel():
 def schedule_tomorrow():
     """获取明天的课程"""
     try:
-        tomorrow = (datetime.now().date() + timedelta(days=1)).strftime("%Y-%m-%d")
+        # 使用本地时间计算明天
+        tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+        print(f"明天日期: {tomorrow}")
         
         db = get_db()
         cur = db.cursor()
@@ -1624,7 +1626,7 @@ def schedule_tomorrow():
                 COALESCE(t.name, '待分配') as teacher_name
             FROM course_schedule cs
             LEFT JOIN teacher t ON cs.teacher_id = t.id
-            WHERE DATE(cs.class_date) = %s
+            WHERE cs.class_date = %s
               AND (cs.status IS NULL OR cs.status != 'cancelled')
             ORDER BY cs.class_time
         """, (tomorrow,))
