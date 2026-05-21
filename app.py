@@ -2167,6 +2167,16 @@ def test_token():
         "success": access_token is not None
     })
 
+@app.route("/api/test/env-debug", methods=["GET"])
+def test_env_debug():
+    app_id = os.environ.get('WECHAT_APP_ID', 'NOT_SET')
+    app_secret = os.environ.get('WECHAT_APP_SECRET', 'NOT_SET')
+    return jsonify({
+        "WECHAT_APP_ID": app_id[:4] + "***" if app_id != 'NOT_SET' else 'NOT_SET',
+        "WECHAT_APP_SECRET": "SET" if app_secret != 'NOT_SET' else 'NOT_SET',
+        "app_id_length": len(app_id) if app_id != 'NOT_SET' else 0
+    })
+
 
 # ==================== 仪表盘数据 ====================
 @app.route("/api/dashboard/stats")
