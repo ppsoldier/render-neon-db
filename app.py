@@ -2,12 +2,28 @@ from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 import pg8000
 import os
-from datetime import datetime, timedelta
+# 在 app.py 中修改日期获取方式
+from datetime import datetime, timedelta, timezone
 import io
 import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 import json
 import traceback
+
+# 方法一：使用本地时间
+def get_tomorrow():
+    # 获取当前本地时间
+    now = datetime.now()
+    tomorrow = now + timedelta(days=1)
+    return tomorrow.strftime("%Y-%m-%d")
+
+# 方法二：使用 UTC + 时区偏移
+def get_tomorrow_utc():
+    # 使用 UTC 时间 + 8小时
+    utc_now = datetime.utcnow()
+    local_now = utc_now + timedelta(hours=8)
+    tomorrow = local_now + timedelta(days=1)
+    return tomorrow.strftime("%Y-%m-%d")
 
 app = Flask(__name__)
 CORS(app)
