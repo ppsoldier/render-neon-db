@@ -1992,7 +1992,7 @@ def get_access_token():
 
 @app.route("/api/remind/send-tomorrow", methods=["POST"])
 def send_tomorrow_remind():
-    """发送明天的课程提醒"""
+    """发送明天的课程提醒（调试版）"""
     try:
         tomorrow = (datetime.now().date() + timedelta(days=1)).strftime("%Y-%m-%d")
         date_obj = datetime.strptime(tomorrow, "%Y-%m-%d")
@@ -2001,6 +2001,7 @@ def send_tomorrow_remind():
         db = get_db()
         cur = db.cursor()
         
+        # 查询明天的课程
         cur.execute("""
             SELECT 
                 cs.id,
@@ -2014,6 +2015,8 @@ def send_tomorrow_remind():
         """, (tomorrow,))
         
         courses = cur.fetchall()
+        
+        debug_info = []
         
         if not courses:
             cur.close()
@@ -2039,11 +2042,15 @@ def send_tomorrow_remind():
             
             full_time_str = f"{formatted_date} {class_time}"
             
+            debug_info.append(f"课程: {subject}, 教师ID: {teacher_id}, 学生IDs: {student_ids_str}")
+            
             # 发送给教师
             if teacher_id:
                 cur.execute("SELECT openid FROM \"user\" WHERE teacher_id = %s", (teacher_id,))
                 teacher_user = cur.fetchone()
+                debug_info.append(f"教师查询结果: {teacher_user}")
                 if teacher_user and teacher_user[0]:
+                    debug_info.append(f"找到教师openid: {teacher_user[0][:20]}...")
                     send_data = {
                         "touser": teacher_user[0],
                         "template_id": TEMPLATE_ID,
@@ -2056,8 +2063,13 @@ def send_tomorrow_remind():
                     url = f"https://api.weixin.qq.com/cgi-bin/message/subscribe/send?access_token={access_token}"
                     response = requests.post(url, json=send_data, timeout=10)
                     result = response.json()
+                    debug_info.append(f"教师发送结果: {result}")
                     if result.get('errcode') == 0:
                         teacher_sent += 1
+                else:
+                    debug_info.append(f"教师未找到openid")
+            else:
+                debug_info.append(f"课程没有关联教师")
             
             # 发送给家长
             if student_ids_str:
@@ -2065,9 +2077,11 @@ def send_tomorrow_remind():
                 for sid in student_ids:
                     cur.execute("SELECT name, parent_phone FROM student WHERE id = %s", (sid,))
                     student = cur.fetchone()
+                    debug_info.append(f"学生{sid}查询结果: {student}")
                     if student and student[1]:
                         cur.execute("SELECT openid FROM \"user\" WHERE phone = %s", (student[1],))
                         parent_user = cur.fetchone()
+                        debug_info.append(f"家长openid查询结果: {parent_user}")
                         if parent_user and parent_user[0]:
                             send_data = {
                                 "touser": parent_user[0],
@@ -2081,8 +2095,15 @@ def send_tomorrow_remind():
                             url = f"https://api.weixin.qq.com/cgi-bin/message/subscribe/send?access_token={access_token}"
                             response = requests.post(url, json=send_data, timeout=10)
                             result = response.json()
+                            debug_info.append(f"家长发送结果: {result}")
                             if result.get('errcode') == 0:
                                 parent_sent += 1
+                        else:
+                            debug_info.append(f"家长未找到openid")
+                    else:
+                        debug_info.append(f"学生{sid}没有家长手机号")
+            else:
+                debug_info.append(f"课程没有关联学生")
         
         cur.close()
         db.close()
@@ -2091,10 +2112,13 @@ def send_tomorrow_remind():
             "code": 200,
             "msg": f"发送完成：教师{teacher_sent}人，家长{parent_sent}人",
             "teacher_sent": teacher_sent,
-            "parent_sent": parent_sent
+            "parent_sent": parent_sent,
+            "debug": debug_info
         })
     except Exception as e:
         print(f"发送错误: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"code": 500, "msg": str(e)}), 500
 
 
