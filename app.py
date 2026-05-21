@@ -229,18 +229,42 @@ def login():
     """用户登录"""
     try:
         d = request.json
+        code = d.get('code')  # 微信登录code
+        phone = d.get('phone')
+        password = d.get('password')
+        
+        # 如果传了code，获取openid
+        openid = None
+        if code:
+            # 调用微信接口获取openid
+            url = f"https://api.weixin.qq.com/sns/jscode2session?appid={WECHAT_APP_ID}&secret={WECHAT_APP_SECRET}&js_code={code}&grant_type=authorization_code"
+            response = requests.get(url, timeout=10)
+            wx_data = response.json()
+            openid = wx_data.get('openid')
+            print(f"获取到openid: {openid}")
+        
         db = get_db()
         cur = db.cursor()
-        cur.execute("SELECT id, name, role FROM \"user\" WHERE phone=%s AND password=%s",
-                    (d.get('phone'), d.get('password')))
+        cur.execute("SELECT id, name, role, openid FROM \"user\" WHERE phone=%s AND password=%s",
+                    (phone, password))
         user = cur.fetchone()
+        
+        if user:
+            # 更新openid
+            if openid and not user[3]:
+                cur.execute("UPDATE \"user\" SET openid = %s WHERE id = %s", (openid, user[0]))
+                db.commit()
+            
+            cur.close()
+            db.close()
+            return jsonify({"code": 200, "data": {"id": user[0], "name": user[1], "role": user[2]}})
+        
         cur.close()
         db.close()
-        if user:
-            return jsonify({"code": 200, "data": {"id": user[0], "name": user[1], "role": user[2]}})
         return jsonify({"code": 403, "msg": "账号或密码错误"})
     except Exception as e:
-        return jsonify({"code": 500, "msg": f"登录失败: {str(e)}"}), 500
+        print(f"登录错误: {str(e)}")
+        return jsonify({"code": 500, "msg": str(e)}), 500
 
 @app.route("/api/user/list")
 def user_list():
@@ -1942,21 +1966,30 @@ def export_attendance_report():
         
 # ==================== 微信提醒模块 ====================
 
+# ==================== 微信提醒模块 ====================
+
 import requests
 import json
 
+# 从环境变量读取配置
 WECHAT_APP_ID = os.environ.get('WECHAT_APP_ID')
 WECHAT_APP_SECRET = os.environ.get('WECHAT_APP_SECRET')
 
-# 临时写死（仅用于测试）
-WECHAT_APP_ID = "wx7f3bff31a3dbfd0c"
-WECHAT_APP_SECRET = "74e6b9ccbf7495205aa5e1da0a30135e"
+# 临时：如果环境变量没读到，手动设置
+if not WECHAT_APP_ID:
+    WECHAT_APP_ID = "wx7f3bff31a3dbfd0c"
+if not WECHAT_APP_SECRET:
+    WECHAT_APP_SECRET = "74e6b9ccbf7495205aa5e1da0a30135e"
+
+# 你的模板ID（替换为真实的）
+TEMPLATE_ID = "你的模板ID"  # TODO: 替换为真实模板ID
+
 
 def get_access_token():
     """获取微信access_token"""
     try:
         url = f"https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid={WECHAT_APP_ID}&secret={WECHAT_APP_SECRET}"
-        response = requests.get(url)
+        response = requests.get(url, timeout=10)
         data = response.json()
         if 'access_token' in data:
             print(f"获取access_token成功")
@@ -1966,20 +1999,6 @@ def get_access_token():
             return None
     except Exception as e:
         print(f"获取access_token错误: {str(e)}")
-        return None
-
-def get_user_openid(phone):
-    """根据手机号获取用户openid（需要用户已登录）"""
-    try:
-        db = get_db()
-        cur = db.cursor()
-        cur.execute("SELECT openid FROM users WHERE phone = %s", (phone,))
-        result = cur.fetchone()
-        cur.close()
-        db.close()
-        return result[0] if result else None
-    except Exception as e:
-        print(f"获取openid错误: {str(e)}")
         return None
 
 
@@ -1992,16 +2011,19 @@ def send_tomorrow_remind():
         db = get_db()
         cur = db.cursor()
         
-        # 使用和 schedule/tomorrow 一样的查询
+        # 查询明天的课程及学生家长信息
         cur.execute("""
             SELECT 
                 cs.id,
                 cs.class_time,
                 cs.subject,
                 cs.classroom,
-                COALESCE(t.name, '待分配') as teacher_name
+                COALESCE(t.name, '待分配') as teacher_name,
+                s.name as student_name,
+                s.parent_phone
             FROM course_schedule cs
             LEFT JOIN teacher t ON cs.teacher_id = t.id
+            LEFT JOIN student s ON cs.student_id = s.id
             WHERE DATE(cs.class_date) = %s
               AND (cs.status IS NULL OR cs.status != 'cancelled')
             ORDER BY cs.class_time
@@ -2014,109 +2036,67 @@ def send_tomorrow_remind():
         if not courses:
             return jsonify({"code": 200, "msg": "明天没有课程", "count": 0})
         
-        # 模拟发送成功（因为微信配置问题暂时用模拟）
-        return jsonify({
-            "code": 200,
-            "msg": f"提醒发送成功，共 {len(courses)} 门课程",
-            "count": len(courses),
-            "sent": len(courses),
-            "courses": [{"subject": c[2], "class_time": c[1]} for c in courses]
-        })
-    except Exception as e:
-        print(f"错误: {str(e)}")
-        return jsonify({"code": 500, "msg": str(e)}), 500
-        
-        # 你的模板ID（替换为真实的）
-        TEMPLATE_ID = "qsPScuGxWPjB69boSJvaIleKJFSLJl-d6NRTLypPuYo"  # 在微信公众平台获取
+        # 获取access_token
+        access_token = get_access_token()
+        if not access_token:
+            return jsonify({"code": 500, "msg": "获取access_token失败"}), 500
         
         sent_count = 0
+        send_results = []
         
         for course in courses:
-            # 获取家长的openid
-            if course[8]:  # parent_phone
-                parent_openid = get_user_openid(course[8])
+            # 获取家长的openid（需要用户表中有openid）
+            # TODO: 根据parent_phone查询openid
+            parent_openid = None
+            
+            # 临时：如果有手机号，用模拟openid测试
+            if course[6]:
+                print(f"准备发送给家长 {course[6]}，学生 {course[5]}，课程 {course[2]}")
+                
+                # 如果有真实的openid，取消注释下面的代码
                 if parent_openid:
-                    # 根据你的模板字段发送
                     send_data = {
                         "touser": parent_openid,
                         "template_id": TEMPLATE_ID,
                         "data": {
                             "课程名称": {"value": course[2] or '课程'},
                             "确认上课时间": {"value": f"{tomorrow} {course[1]}"},
-                            "学员姓名": {"value": course[7] or '您的孩子'}
+                            "学员姓名": {"value": course[5] or '您的孩子'}
                         }
                     }
                     url = f"https://api.weixin.qq.com/cgi-bin/message/subscribe/send?access_token={access_token}"
-                    response = requests.post(url, json=send_data)
+                    response = requests.post(url, json=send_data, timeout=10)
                     result = response.json()
                     if result.get('errcode') == 0:
                         sent_count += 1
-                        print(f"发送成功: {course[7]} - {course[2]}")
+                        send_results.append({"success": True, "subject": course[2]})
                     else:
-                        print(f"发送失败: {result}")
-        
-        cur.close()
-        db.close()
+                        send_results.append({"success": False, "subject": course[2], "error": result})
         
         return jsonify({
-            "code": 200, 
-            "msg": f"提醒发送完成，成功 {sent_count} 条",
+            "code": 200,
+            "msg": f"发送完成，成功 {sent_count} 条",
             "count": len(courses),
-            "sent": sent_count
+            "sent": sent_count,
+            "results": send_results
         })
     except Exception as e:
-        print(f"发送明日提醒错误: {str(e)}")
+        print(f"发送错误: {str(e)}")
         return jsonify({"code": 500, "msg": str(e)}), 500
 
-
-@app.route("/api/remind/subscribe", methods=["POST"])
-def subscribe_remind():
-    """记录用户订阅状态"""
-    try:
-        data = request.json
-        openid = data.get('openid')
-        template_id = data.get('template_id')
-        user_type = data.get('user_type')  # teacher, parent
-        
-        if not openid:
-            return jsonify({"code": 400, "msg": "缺少openid"}), 400
-        
-        db = get_db()
-        cur = db.cursor()
-        
-        cur.execute("""
-            INSERT INTO subscribe_record (openid, template_id, user_type, status, created_at)
-            VALUES (%s, %s, %s, 'active', NOW())
-            ON CONFLICT (openid, template_id) 
-            DO UPDATE SET status = 'active', updated_at = NOW()
-        """, (openid, template_id, user_type))
-        
-        db.commit()
-        cur.close()
-        db.close()
-        
-        return jsonify({"code": 200, "msg": "订阅记录成功"})
-    except Exception as e:
-        print(f"订阅错误: {str(e)}")
-        return jsonify({"code": 500, "msg": str(e)}), 500
 
 @app.route("/api/test/token", methods=["GET"])
 def test_token():
+    """测试获取access_token"""
     access_token = get_access_token()
     return jsonify({
-        "access_token": access_token[:20] + "..." if access_token else None,
-        "success": access_token is not None
+        "success": access_token is not None,
+        "access_token": access_token[:30] + "..." if access_token else None
     })
 
-@app.route("/api/test/env-debug", methods=["GET"])
-def test_env_debug():
-    app_id = os.environ.get('WECHAT_APP_ID', 'NOT_SET')
-    app_secret = os.environ.get('WECHAT_APP_SECRET', 'NOT_SET')
-    return jsonify({
-        "WECHAT_APP_ID": app_id[:4] + "***" if app_id != 'NOT_SET' else 'NOT_SET',
-        "WECHAT_APP_SECRET": "SET" if app_secret != 'NOT_SET' else 'NOT_SET',
-        "app_id_length": len(app_id) if app_id != 'NOT_SET' else 0
-    })
+
+
+
 
 
 # ==================== 仪表盘数据 ====================
