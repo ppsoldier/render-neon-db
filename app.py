@@ -2159,6 +2159,13 @@ def subscribe_remind():
         print(f"订阅错误: {str(e)}")
         return jsonify({"code": 500, "msg": str(e)}), 500
 
+@app.route("/api/test/env", methods=["GET"])
+def test_env():
+    return jsonify({
+        "app_id_exists": bool(os.environ.get('WECHAT_APP_ID')),
+        "app_secret_exists": bool(os.environ.get('WECHAT_APP_SECRET'))
+    })
+
 
 # ==================== 仪表盘数据 ====================
 @app.route("/api/dashboard/stats")
