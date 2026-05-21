@@ -2162,8 +2162,9 @@ def subscribe_remind():
 @app.route("/api/test/env", methods=["GET"])
 def test_env():
     return jsonify({
-        "app_id_exists": bool(os.environ.get('WECHAT_APP_ID')),
-        "app_secret_exists": bool(os.environ.get('WECHAT_APP_SECRET'))
+        "wechat_app_id": os.environ.get('WECHAT_APP_ID', 'NOT_SET'),
+        "wechat_app_secret": 'SET' if os.environ.get('WECHAT_APP_SECRET') else 'NOT_SET',
+        "all_vars": list(os.environ.keys())
     })
 
 
