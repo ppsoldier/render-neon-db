@@ -1992,13 +1992,16 @@ def get_access_token():
 
 @app.route("/api/remind/send-tomorrow", methods=["POST"])
 def send_tomorrow_remind():
+    """发送明天的课程提醒"""
     try:
         tomorrow = (datetime.now().date() + timedelta(days=1)).strftime("%Y-%m-%d")
-        formatted_date = datetime.strptime(tomorrow, "%Y-%m-%d").strftime("%Y年%m月%d日")
+        date_obj = datetime.strptime(tomorrow, "%Y-%m-%d")
+        formatted_date = date_obj.strftime("%Y年%m月%d日")
         
         db = get_db()
         cur = db.cursor()
         
+        # 查询明天的课程
         cur.execute("""
             SELECT 
                 cs.id,
@@ -2013,31 +2016,89 @@ def send_tomorrow_remind():
         
         courses = cur.fetchall()
         
-        result_data = []
+        if not courses:
+            cur.close()
+            db.close()
+            return jsonify({"code": 200, "msg": "明天没有课程", "count": 0})
+        
+        access_token = get_access_token()
+        if not access_token:
+            cur.close()
+            db.close()
+            return jsonify({"code": 500, "msg": "获取access_token失败"}), 500
+        
+        TEMPLATE_ID = "qsPScuGxWPjB69boSJvaIleKJFSLJl-d6NRTLypPuYo"
+        
+        parent_sent = 0
+        teacher_sent = 0
+        
         for course in courses:
-            subject = course[2]
+            class_time = course[1]
+            subject = course[2] or '课程'
             teacher_id = course[3]
             student_ids_str = course[4] or ''
             
-            # 测试用固定 openid
-            TEST_OPENID = "obkBW3RCw6dkhA7e8146HPUnnEDA"
+            # 组合完整时间
+            full_time_str = f"{formatted_date} {class_time}"
             
-            result_data.append({
-                "subject": subject,
-                "teacher_id": teacher_id,
-                "student_ids": student_ids_str,
-                "test_openid": TEST_OPENID
-            })
+            # ========== 1. 发送给教师 ==========
+            if teacher_id:
+                cur.execute("SELECT openid FROM \"user\" WHERE teacher_id = %s", (teacher_id,))
+                teacher_user = cur.fetchone()
+                if teacher_user and teacher_user[0]:
+                    send_data = {
+                        "touser": teacher_user[0],
+                        "template_id": TEMPLATE_ID,
+                        "data": {
+                            "thing1": {"value": subject},
+                            "time3": {"value": full_time_str},
+                            "thing5": {"value": "教师"}
+                        }
+                    }
+                    url = f"https://api.weixin.qq.com/cgi-bin/message/subscribe/send?access_token={access_token}"
+                    response = requests.post(url, json=send_data, timeout=10)
+                    result = response.json()
+                    if result.get('errcode') == 0:
+                        teacher_sent += 1
+            
+            # ========== 2. 发送给家长 ==========
+            if student_ids_str:
+                student_ids = [int(x) for x in student_ids_str.split(',') if x]
+                for sid in student_ids:
+                    cur.execute("SELECT name, parent_phone FROM student WHERE id = %s", (sid,))
+                    student = cur.fetchone()
+                    if student and student[1]:
+                        cur.execute("SELECT openid FROM \"user\" WHERE phone = %s", (student[1],))
+                        parent_user = cur.fetchone()
+                        if parent_user and parent_user[0]:
+                            send_data = {
+                                "touser": parent_user[0],
+                                "template_id": TEMPLATE_ID,
+                                "data": {
+                                    "thing1": {"value": subject},
+                                    "time3": {"value": full_time_str},
+                                    "thing5": {"value": student[0]}
+                                }
+                            }
+                            url = f"https://api.weixin.qq.com/cgi-bin/message/subscribe/send?access_token={access_token}"
+                            response = requests.post(url, json=send_data, timeout=10)
+                            result = response.json()
+                            if result.get('errcode') == 0:
+                                parent_sent += 1
         
         cur.close()
         db.close()
         
         return jsonify({
             "code": 200,
-            "courses": result_data,
-            "debug": "使用测试openid模式"
+            "msg": f"发送完成：教师{teacher_sent}人，家长{parent_sent}人",
+            "teacher_sent": teacher_sent,
+            "parent_sent": parent_sent
         })
     except Exception as e:
+        print(f"发送错误: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"code": 500, "msg": str(e)}), 500
 
 
