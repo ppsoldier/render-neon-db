@@ -25,6 +25,10 @@ def get_tomorrow_utc():
     tomorrow = local_now + timedelta(days=1)
     return tomorrow.strftime("%Y-%m-%d")
 
+# 获取北京时间
+def get_beijing_time():
+    return datetime.utcnow() + timedelta(hours=8)
+
 app = Flask(__name__)
 CORS(app)
 
@@ -1610,9 +1614,10 @@ def export_schedule_excel():
 def schedule_tomorrow():
     """获取明天的课程"""
     try:
-        # 使用本地时间计算明天
-        tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
-        print(f"明天日期: {tomorrow}")
+        # 使用北京时间计算明天
+        beijing_now = get_beijing_time()
+        tomorrow = (beijing_now + timedelta(days=1)).strftime("%Y-%m-%d")
+        print(f"北京时间: {beijing_now}, 明天: {tomorrow}")
         
         db = get_db()
         cur = db.cursor()
@@ -1651,6 +1656,7 @@ def schedule_tomorrow():
     except Exception as e:
         print(f"获取明日课程错误: {str(e)}")
         return jsonify({"code": 500, "msg": str(e)}), 500
+        
 
 # 学生课时统计
 @app.route("/api/student/attendance/statistics", methods=["GET"])
@@ -2010,11 +2016,13 @@ def get_access_token():
 
 @app.route("/api/remind/send-tomorrow", methods=["POST"])
 def send_tomorrow_remind():
-    """发送明天的课程提醒（调试版）"""
     try:
-        tomorrow = (datetime.now().date() + timedelta(days=1)).strftime("%Y-%m-%d")
-        date_obj = datetime.strptime(tomorrow, "%Y-%m-%d")
-        formatted_date = date_obj.strftime("%Y年%m月%d日")
+        # 使用北京时间
+        beijing_now = get_beijing_time()
+        tomorrow = (beijing_now + timedelta(days=1)).strftime("%Y-%m-%d")
+        formatted_date = beijing_now.strftime("%Y年%m月%d日")
+        
+        print(f"发送提醒 - 北京时间: {beijing_now}, 明天: {tomorrow}")
         
         db = get_db()
         cur = db.cursor()
