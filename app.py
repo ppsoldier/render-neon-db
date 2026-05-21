@@ -2089,8 +2089,8 @@ def send_tomorrow_remind():
         results = []
         
         # 你的订阅消息模板ID（需要在微信公众平台申请）
-        TEACHER_TEMPLATE_ID = "你的教师模板ID"  # 替换为真实的模板ID
-        PARENT_TEMPLATE_ID = "你的家长模板ID"  # 替换为真实的模板ID
+        TEACHER_TEMPLATE_ID = "qsPScuGxWPjB69boSJvaIleKJFSLJl-d6NRTLypPuYo"  # 替换为真实的模板ID
+        PARENT_TEMPLATE_ID = "c-cS3_aKIJzf71brIr_XBFh4tRg2hj2Oz2C1LYwwI8A"  # 替换为真实的模板ID
         
         for course in courses:
             course_data = {
