@@ -2728,6 +2728,46 @@ def schedule_list():
         return jsonify({"code": 500, "msg": str(e)}), 500
 
 
+@app.route("/api/schedule/auto-confirm", methods=["POST"])
+def auto_confirm_courses():
+    """自动确认今天及以前已结束的课程"""
+    try:
+        db = get_db()
+        cur = db.cursor()
+        
+        # 获取北京时间
+        from datetime import datetime, timedelta
+        beijing_now = datetime.utcnow() + timedelta(hours=8)
+        today = beijing_now.strftime("%Y-%m-%d")
+        current_time = beijing_now.strftime("%H:%M")
+        
+        # 确认今天开始时间已过的课程
+        cur.execute("""
+            UPDATE course_schedule 
+            SET status = 'completed' 
+            WHERE class_date <= %s
+              AND (class_date < %s OR class_time <= %s)
+              AND (status IS NULL OR status != 'completed')
+              AND status != 'cancelled'
+        """, (today, today, current_time))
+        
+        updated_count = cur.rowcount
+        db.commit()
+        cur.close()
+        db.close()
+        
+        return jsonify({
+            "code": 200,
+            "msg": f"成功确认 {updated_count} 门课程",
+            "count": updated_count
+        })
+    except Exception as e:
+        print(f"自动确认错误: {str(e)}")
+        return jsonify({"code": 500, "msg": str(e)}), 500
+
+
+
+
 
 
 
