@@ -2081,23 +2081,14 @@ def scheduled_send_remind():
             print(f"[定时任务] 执行错误: {str(e)}")
 
 def send_tomorrow_remind_internal():
-    """简化测试版"""
-    print("=" * 50)
-    print("[测试] send_tomorrow_remind_internal 开始执行")
-    print("=" * 50)
-    
     try:
-        from datetime import datetime, timedelta
-        
         beijing_now = datetime.utcnow() + timedelta(hours=8)
         tomorrow = (beijing_now + timedelta(days=1)).strftime("%Y-%m-%d")
-        
-        print(f"[测试] 明天日期: {tomorrow}")
+        formatted_date = beijing_now.strftime("%Y年%m月%d日")
         
         db = get_db()
         cur = db.cursor()
         
-        # 查询明天的课程
         cur.execute("""
             SELECT 
                 cs.id,
@@ -2111,28 +2102,94 @@ def send_tomorrow_remind_internal():
         """, (tomorrow,))
         
         courses = cur.fetchall()
-        print(f"[测试] 找到 {len(courses)} 门课程")
-        
         if not courses:
             cur.close()
             db.close()
             return {"code": 200, "msg": "明天没有课程", "count": 0}
         
-        # 打印课程详情
+        access_token = get_access_token()
+        if not access_token:
+            cur.close()
+            db.close()
+            return {"code": 500, "msg": "获取access_token失败"}
+        
+        TEMPLATE_USER = "hEY6ukiBlTm79MQ4GL0heVpS0YDcHaiVWZAz3StSj0s"
+        
+        parent_sent = 0
+        teacher_sent = 0
+        
         for course in courses:
-            print(f"[测试] 课程ID: {course[0]}, 时间: {course[1]}, 科目: {course[2]}, 教师ID: {course[3]}, 学生IDs: {course[4]}")
+            class_time = course[1]
+            subject = course[2] or '课程'
+            teacher_id = course[3]
+            student_ids_str = course[4] or ''
+            
+            start_time = class_time.split('-')[0] if class_time else "09:00"
+            full_time_str = f"{formatted_date} {start_time}"
+            
+            # ========== 教师 ==========
+            if teacher_id:
+                cur.execute("SELECT openid FROM \"user\" WHERE teacher_id = %s AND openid IS NOT NULL", (teacher_id,))
+                teacher_user = cur.fetchone()
+                print(f"[教师查询] teacher_id={teacher_id}, result={teacher_user}")
+                if teacher_user and teacher_user[0]:
+                    send_data = {
+                        "touser": teacher_user[0],
+                        "template_id": TEMPLATE_USER,
+                        "data": {
+                            "date1": {"value": full_time_str},
+                            "thing6": {"value": subject},
+                            "short_thing20": {"value": "教师"}
+                        }
+                    }
+                    url = f"https://api.weixin.qq.com/cgi-bin/message/subscribe/send?access_token={access_token}"
+                    response = requests.post(url, json=send_data, timeout=10)
+                    result = response.json()
+                    print(f"[教师发送结果] {result}")
+                    if result.get('errcode') == 0:
+                        teacher_sent += 1
+                    elif result.get('errcode') == 43101:
+                        print("[教师] 用户未订阅模板")
+            
+            # ========== 家长 ==========
+            if student_ids_str:
+                student_ids = [int(x) for x in student_ids_str.split(',') if x]
+                for sid in student_ids:
+                    cur.execute("SELECT name, parent_phone FROM student WHERE id = %s", (sid,))
+                    student = cur.fetchone()
+                    if student and student[1]:
+                        cur.execute("SELECT openid FROM \"user\" WHERE phone = %s AND openid IS NOT NULL", (student[1],))
+                        parent_user = cur.fetchone()
+                        print(f"[家长查询] student={student[0]}, phone={student[1]}, openid={parent_user}")
+                        if parent_user and parent_user[0]:
+                            send_data = {
+                                "touser": parent_user[0],
+                                "template_id": TEMPLATE_USER,
+                                "data": {
+                                    "date1": {"value": full_time_str},
+                                    "thing6": {"value": subject},
+                                    "short_thing20": {"value": student[0]}
+                                }
+                            }
+                            url = f"https://api.weixin.qq.com/cgi-bin/message/subscribe/send?access_token={access_token}"
+                            response = requests.post(url, json=send_data, timeout=10)
+                            result = response.json()
+                            print(f"[家长发送结果] {result}")
+                            if result.get('errcode') == 0:
+                                parent_sent += 1
+                            elif result.get('errcode') == 43101:
+                                print(f"[家长] {student[0]}未订阅模板")
         
         cur.close()
         db.close()
-        
         return {
             "code": 200,
-            "msg": f"测试成功，找到 {len(courses)} 门课程",
-            "course_count": len(courses),
-            "courses": [{"id": c[0], "time": c[1], "subject": c[2]} for c in courses]
+            "msg": f"课前提醒发送完成：教师{teacher_sent}人，家长{parent_sent}人",
+            "teacher_sent": teacher_sent,
+            "parent_sent": parent_sent
         }
     except Exception as e:
-        print(f"[测试] 错误: {str(e)}")
+        print(f"课前提醒错误: {str(e)}")
         import traceback
         traceback.print_exc()
         return {"code": 500, "msg": str(e)}
