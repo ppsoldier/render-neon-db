@@ -2309,6 +2309,14 @@ def start_scheduler():
 
 
 
+@app.route("/api/remind/test-schedule", methods=["GET"])
+def test_schedule():
+    """测试定时任务"""
+    result = send_tomorrow_remind_internal()
+    return jsonify(result)
+
+
+
 
 
 # ==================== 仪表盘数据 ====================
