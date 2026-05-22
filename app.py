@@ -2940,6 +2940,102 @@ def get_rooms_list():
     except Exception as e:
         return jsonify({"code": 200, "data": ['A101', 'A102', 'A103', 'B201', 'B202', 'C301']}), 200
 
+@app.route("/api/teacher/salary/export", methods=["POST"])
+def teacher_salary_export():
+    """导出教师课酬报表"""
+    try:
+        data = request.json
+        teacher_ids = data.get('teacher_ids', [])
+        month = data.get('month')
+        
+        db = get_db()
+        cur = db.cursor()
+        
+        # 获取课酬数据
+        if teacher_ids:
+            placeholders = ','.join(['%s'] * len(teacher_ids))
+            sql = f"""
+                SELECT 
+                    t.name,
+                    t.phone,
+                    t.subject,
+                    t.class_fee,
+                    COUNT(CASE WHEN s.status = 'completed' THEN 1 END) as completed_classes,
+                    COALESCE(SUM(CASE WHEN s.status = 'completed' THEN s.duration ELSE 0 END), 0) as total_hours,
+                    COALESCE(SUM(CASE WHEN s.status = 'completed' THEN s.duration * t.class_fee ELSE 0 END), 0) as total_amount
+                FROM teacher t
+                LEFT JOIN course_schedule s ON t.id = s.teacher_id
+                WHERE t.id IN ({placeholders})
+                GROUP BY t.id, t.name, t.phone, t.subject, t.class_fee
+            """
+            cur.execute(sql, teacher_ids)
+        else:
+            cur.execute("""
+                SELECT 
+                    name, phone, subject, class_fee,
+                    0 as completed_classes, 0 as total_hours, 0 as total_amount
+                FROM teacher
+                WHERE status = 'active'
+            """)
+        
+        data = cur.fetchall()
+        cur.close()
+        db.close()
+        
+        # 创建Excel文件
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "教师课酬统计"
+        
+        headers = ["教师姓名", "手机号", "教学科目", "课时费(元/小时)", "完成课时数", "授课总时长(小时)", "应发课酬(元)"]
+        ws.append(headers)
+        
+        for cell in ws[1]:
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+            cell.alignment = Alignment(horizontal="center")
+        
+        for row in data:
+            ws.append([
+                row[0] or '',
+                row[1] or '',
+                row[2] or '',
+                float(row[3]) if row[3] else 0,
+                row[4] or 0,
+                float(row[5]) if row[5] else 0,
+                float(row[6]) if row[6] else 0
+            ])
+        
+        for col in ws.columns:
+            max_length = 0
+            col_letter = col[0].column_letter
+            for cell in col:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
+            adjusted_width = min(max_length + 2, 25)
+            ws.column_dimensions[col_letter].width = adjusted_width
+        
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+        
+        return send_file(
+            output, 
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            as_attachment=True, 
+            download_name=f'教师课酬统计_{month or "全部"}.xlsx'
+        )
+    except Exception as e:
+        print(f"导出课酬报表错误: {str(e)}")
+        return jsonify({"code": 500, "msg": str(e)}), 500
+
+
+
+
+
 # ------------------- 启动应用 -------------------
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8080))
