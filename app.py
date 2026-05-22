@@ -2711,6 +2711,20 @@ def test_confirm():
 
 
 
+@app.route("/api/test/time", methods=["GET"])
+def test_time():
+    """测试服务器时间"""
+    from datetime import datetime, timedelta
+    utc_now = datetime.utcnow()
+    beijing_now = utc_now + timedelta(hours=8)
+    return jsonify({
+        "utc_now": utc_now.strftime("%Y-%m-%d %H:%M:%S"),
+        "beijing_now": beijing_now.strftime("%Y-%m-%d %H:%M:%S"),
+        "today": beijing_now.strftime("%Y-%m-%d")
+    })
+
+
+
 
 
 
