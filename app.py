@@ -3039,6 +3039,7 @@ def teacher_salary_export():
         traceback.print_exc()
         return jsonify({"code": 500, "msg": str(e)}), 500
 
+# ==================== 上课记录导出接口 ====================
 @app.route("/api/schedule/export/attendance", methods=["POST"])
 def export_attendance_record():
     """导出上课记录"""
@@ -3054,7 +3055,7 @@ def export_attendance_record():
         db = get_db()
         cur = db.cursor()
         
-        # 查询该月份的所有已确认课程
+        # 查询该月份的所有已确认课程（兼容 PostgreSQL，不使用 GROUP_CONCAT）
         cur.execute("""
             SELECT 
                 cs.class_date,
@@ -3062,25 +3063,28 @@ def export_attendance_record():
                 cs.subject,
                 cs.classroom,
                 t.name as teacher_name,
-                GROUP_CONCAT(DISTINCT s.name) as student_names
+                cs.student_ids
             FROM course_schedule cs
             LEFT JOIN teacher t ON cs.teacher_id = t.id
-            LEFT JOIN student s ON cs.student_id = s.id OR FIND_IN_SET(s.id, cs.student_ids) > 0
             WHERE cs.class_date >= %s
               AND cs.class_date < %s
               AND cs.status = 'completed'
-            GROUP BY cs.id, cs.class_date, cs.class_time, cs.subject, cs.classroom, t.name
             ORDER BY cs.class_date, cs.class_time
         """, (start_date, end_date))
         
-        data = cur.fetchall()
+        courses = cur.fetchall()
+        
+        # 获取学生名称映射
+        cur.execute("SELECT id, name FROM student")
+        students_map = {row[0]: row[1] for row in cur.fetchall()}
+        
         cur.close()
         db.close()
         
         # 创建Excel文件
         wb = openpyxl.Workbook()
         ws = wb.active
-        ws.title = f"上课记录_{month}"
+        ws.title = f"上课记录_{month or '汇总'}"
         
         # 设置表头
         headers = ["上课日期", "上课时间", "课程名称", "教室", "授课教师", "上课学生"]
@@ -3093,14 +3097,21 @@ def export_attendance_record():
             cell.alignment = Alignment(horizontal="center")
         
         # 写入数据
-        for row in data:
+        for course in courses:
+            # 解析学生名称
+            student_names = []
+            if course[5]:  # student_ids
+                student_ids = [int(x) for x in course[5].split(',') if x]
+                student_names = [students_map.get(sid, '') for sid in student_ids if students_map.get(sid)]
+            students_str = '、'.join(student_names) if student_names else '集体课'
+            
             ws.append([
-                str(row[0]) if row[0] else '',
-                row[1] or '',
-                row[2] or '',
-                row[3] or '',
-                row[4] or '待分配',
-                row[5] or '集体课'
+                str(course[0]) if course[0] else '',
+                course[1] or '',
+                course[2] or '',
+                course[3] or '',
+                course[4] or '待分配',
+                students_str
             ])
         
         # 调整列宽
@@ -3116,6 +3127,7 @@ def export_attendance_record():
             adjusted_width = min(max_length + 2, 20)
             ws.column_dimensions[col_letter].width = adjusted_width
         
+        # 保存并返回文件
         output = io.BytesIO()
         wb.save(output)
         output.seek(0)
@@ -3124,7 +3136,7 @@ def export_attendance_record():
             output, 
             mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
             as_attachment=True, 
-            download_name=f'上课记录_{month}.xlsx'
+            download_name=f'上课记录_{month or "汇总"}.xlsx'
         )
     except Exception as e:
         print(f"导出上课记录错误: {str(e)}")
