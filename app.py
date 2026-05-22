@@ -2671,6 +2671,65 @@ def batch_confirm_schedule():
         return jsonify({"code": 500, "msg": str(e)}), 500
 
 
+@app.route("/api/schedule/list", methods=["GET"])
+def schedule_list():
+    """获取排课列表（支持日期筛选）"""
+    try:
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+        
+        db = get_db()
+        cur = db.cursor()
+        
+        sql = """
+            SELECT 
+                cs.id,
+                cs.class_date,
+                cs.class_time,
+                cs.subject,
+                cs.classroom,
+                cs.status,
+                t.name as teacher_name
+            FROM course_schedule cs
+            LEFT JOIN teacher t ON cs.teacher_id = t.id
+            WHERE 1=1
+        """
+        params = []
+        
+        if start_date:
+            sql += " AND cs.class_date >= %s"
+            params.append(start_date)
+        if end_date:
+            sql += " AND cs.class_date <= %s"
+            params.append(end_date)
+        
+        sql += " ORDER BY cs.class_date DESC, cs.class_time"
+        
+        cur.execute(sql, params)
+        data = cur.fetchall()
+        cur.close()
+        db.close()
+        
+        result = []
+        for row in data:
+            result.append({
+                "id": row[0],
+                "class_date": str(row[1]),
+                "class_time": row[2],
+                "subject": row[3] or '',
+                "classroom": row[4] or '',
+                "status": row[5] or 'scheduled',
+                "teacher_name": row[6] or '待分配'
+            })
+        
+        return jsonify({"code": 200, "data": result})
+    except Exception as e:
+        print(f"获取排课列表错误: {str(e)}")
+        return jsonify({"code": 500, "msg": str(e)}), 500
+
+
+
+
 
 
 
