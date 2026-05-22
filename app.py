@@ -2334,6 +2334,129 @@ def start_scheduler():
 #     return jsonify(result)
 
 
+
+@app.route("/api/remind/send-today-confirm", methods=["POST"])
+def send_today_confirm():
+    """发送今日课程确认提醒（管理员）"""
+    try:
+        beijing_now = get_beijing_time()
+        today = beijing_now.strftime("%Y-%m-%d")
+        formatted_date = beijing_now.strftime("%Y年%m月%d日")
+        
+        db = get_db()
+        cur = db.cursor()
+        
+        # 查询今天已经完成的课程（当前时间之后的课程不算）
+        cur.execute("""
+            SELECT 
+                cs.id,
+                cs.class_time,
+                cs.subject,
+                cs.classroom,
+                cs.teacher_id,
+                cs.student_ids,
+                cs.status
+            FROM course_schedule cs
+            WHERE cs.class_date = %s
+              AND (cs.status IS NULL OR cs.status = 'scheduled')
+            ORDER BY cs.class_time
+        """, (today,))
+        
+        courses = cur.fetchall()
+        
+        if not courses:
+            cur.close()
+            db.close()
+            return jsonify({"code": 200, "msg": "今天没有待确认的课程", "count": 0})
+        
+        access_token = get_access_token()
+        if not access_token:
+            cur.close()
+            db.close()
+            return jsonify({"code": 500, "msg": "获取access_token失败"}), 500
+        
+        TEMPLATE_ADMIN = "qsPScuGxWPjB69boSJvaIleKJFSLJl-d6NRTLypPuYo"
+        
+        # 获取管理员openid
+        cur.execute("SELECT openid FROM \"user\" WHERE role = 'admin' LIMIT 1")
+        admin_user = cur.fetchone()
+        admin_openid = admin_user[0] if admin_user else None
+        
+        if not admin_openid:
+            cur.close()
+            db.close()
+            return jsonify({"code": 500, "msg": "未找到管理员"}), 500
+        
+        confirm_count = 0
+        
+        for course in courses:
+            course_id = course[0]
+            class_time = course[1]
+            subject = course[2] or '课程'
+            student_ids_str = course[5] or ''
+            
+            start_time = class_time.split('-')[0] if class_time else "09:00"
+            full_time_str = f"{formatted_date} {start_time}"
+            
+            # 获取学生名称
+            student_names = []
+            if student_ids_str:
+                student_ids = [int(x) for x in student_ids_str.split(',') if x]
+                for sid in student_ids:
+                    cur.execute("SELECT name FROM student WHERE id = %s", (sid,))
+                    student = cur.fetchone()
+                    if student:
+                        student_names.append(student[0])
+            students_str = '、'.join(student_names) if student_names else '集体课'
+            
+            # 构建确认链接（小程序路径）
+            confirm_url = f"pages/schedule/calendar/calendar?confirm_id={course_id}"
+            
+            send_data = {
+                "touser": admin_openid,
+                "template_id": TEMPLATE_ADMIN,
+                "data": {
+                    "thing1": {"value": subject},
+                    "time3": {"value": full_time_str},
+                    "thing5": {"value": students_str}
+                },
+                "miniprogram": {
+                    "appid": "wx7f3bff31a3dbfd0c",
+                    "pagepath": confirm_url
+                }
+            }
+            url = f"https://api.weixin.qq.com/cgi-bin/message/subscribe/send?access_token={access_token}"
+            response = requests.post(url, json=send_data, timeout=10)
+            result = response.json()
+            if result.get('errcode') == 0:
+                confirm_count += 1
+        
+        cur.close()
+        db.close()
+        
+        return jsonify({
+            "code": 200,
+            "msg": f"已发送 {confirm_count} 条课程确认提醒",
+            "count": confirm_count
+        })
+    except Exception as e:
+        print(f"发送确认提醒错误: {str(e)}")
+        return jsonify({"code": 500, "msg": str(e)}), 500
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # ==================== 仪表盘数据 ====================
 @app.route("/api/dashboard/stats")
 def dashboard_stats():
