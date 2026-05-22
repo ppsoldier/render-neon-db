@@ -2189,7 +2189,7 @@ def scheduled_send_remind():
 
 # 内部调用版本（不依赖request上下文）
 def send_tomorrow_remind_internal():
-    """内部发送提醒函数"""
+    """内部发送明日课程提醒（教师/家长）"""
     try:
         beijing_now = get_beijing_time()
         tomorrow = (beijing_now + timedelta(days=1)).strftime("%Y-%m-%d")
@@ -2203,6 +2203,7 @@ def send_tomorrow_remind_internal():
                 cs.id,
                 cs.class_time,
                 cs.subject,
+                cs.classroom,
                 cs.teacher_id,
                 cs.student_ids
             FROM course_schedule cs
@@ -2223,7 +2224,7 @@ def send_tomorrow_remind_internal():
             db.close()
             return {"code": 500, "msg": "获取access_token失败"}
         
-        TEMPLATE_ID = "qsPScuGxWPjB69boSJvaIleKJFSLJl-d6NRTLypPuYo"
+        TEMPLATE_USER = "hEY6ukiBlTm79MQ4GL0heVpS0YDcHaiVWZAz3StSj0s"
         
         parent_sent = 0
         teacher_sent = 0
@@ -2231,8 +2232,8 @@ def send_tomorrow_remind_internal():
         for course in courses:
             class_time = course[1]
             subject = course[2] or '课程'
-            teacher_id = course[3]
-            student_ids_str = course[4] or ''
+            teacher_id = course[4]
+            student_ids_str = course[5] or ''
             
             start_time = class_time.split('-')[0] if class_time else "09:00"
             full_time_str = f"{formatted_date} {start_time}"
@@ -2244,11 +2245,11 @@ def send_tomorrow_remind_internal():
                 if teacher_user and teacher_user[0]:
                     send_data = {
                         "touser": teacher_user[0],
-                        "template_id": TEMPLATE_ID,
+                        "template_id": TEMPLATE_USER,
                         "data": {
-                            "thing1": {"value": subject},
-                            "time3": {"value": full_time_str},
-                            "thing5": {"value": "教师"}
+                            "date1": {"value": full_time_str},
+                            "thing6": {"value": subject},
+                            "short_thing20": {"value": "教师"}
                         }
                     }
                     url = f"https://api.weixin.qq.com/cgi-bin/message/subscribe/send?access_token={access_token}"
@@ -2269,11 +2270,11 @@ def send_tomorrow_remind_internal():
                         if parent_user and parent_user[0]:
                             send_data = {
                                 "touser": parent_user[0],
-                                "template_id": TEMPLATE_ID,
+                                "template_id": TEMPLATE_USER,
                                 "data": {
-                                    "thing1": {"value": subject},
-                                    "time3": {"value": full_time_str},
-                                    "thing5": {"value": student[0]}
+                                    "date1": {"value": full_time_str},
+                                    "thing6": {"value": subject},
+                                    "short_thing20": {"value": student[0]}
                                 }
                             }
                             url = f"https://api.weixin.qq.com/cgi-bin/message/subscribe/send?access_token={access_token}"
@@ -2287,13 +2288,20 @@ def send_tomorrow_remind_internal():
         
         return {
             "code": 200,
-            "msg": f"发送完成：教师{teacher_sent}人，家长{parent_sent}人",
+            "msg": f"课前提醒发送完成：教师{teacher_sent}人，家长{parent_sent}人",
             "teacher_sent": teacher_sent,
             "parent_sent": parent_sent
         }
     except Exception as e:
-        print(f"发送错误: {str(e)}")
+        print(f"课前提醒发送错误: {str(e)}")
         return {"code": 500, "msg": str(e)}
+
+
+
+
+
+
+
 
 # 启动定时任务
 # ==================== 定时任务模块 ====================
@@ -2472,7 +2480,7 @@ def send_today_confirm_internal():
             db.close()
             return {"code": 500, "msg": "获取access_token失败"}
         
-        TEMPLATE_ID = "hEY6ukiBlTm79MQ4GL0heVpS0YDcHaiVWZAz3StSj0s"
+        TEMPLATE_ADMIN = "qsPScuGxWPjB69boSJvaIleKJFSLJl-d6NRTLypPuYo"
         
         # 获取管理员openid
         cur.execute("SELECT openid FROM \"user\" WHERE role = 'admin' AND openid IS NOT NULL LIMIT 1")
@@ -2508,11 +2516,11 @@ def send_today_confirm_internal():
             
             send_data = {
                 "touser": admin_openid,
-                "template_id": TEMPLATE_ID,
+                "template_id": TEMPLATE_ADMIN,
                 "data": {
-                    "date1": {"value": full_time_str},
-                    "thing6": {"value": subject},
-                    "short_thing20": {"value": students_str}
+                    "thing1": {"value": subject},
+                    "time3": {"value": full_time_str},
+                    "thing5": {"value": students_str}
                 },
                 "miniprogram": {
                     "appid": WECHAT_APP_ID,
