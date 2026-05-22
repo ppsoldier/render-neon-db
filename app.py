@@ -2393,30 +2393,70 @@ def send_today_confirm_internal():
 
 
 
+# 在 start_scheduler 中添加自动确认任务
 def start_scheduler():
-    """启动定时任务"""
     scheduler = BackgroundScheduler()
     
-    # 每天早上 9:00 发送明日课程提醒（给教师和家长）
+    # 每天早上 9:00 发送明日课程提醒
     scheduler.add_job(
         func=scheduled_send_remind,
         trigger=CronTrigger(hour=9, minute=0, timezone='Asia/Shanghai'),
         id='daily_remind',
         replace_existing=True
     )
-    print("定时任务已注册：每天 09:00 发送明日课程提醒")
     
-    # 每天晚上 20:00 发送今日课程确认提醒（给管理员）
+    # 每天晚上 20:00 发送今日课程确认提醒
     scheduler.add_job(
         func=scheduled_send_confirm,
         trigger=CronTrigger(hour=20, minute=0, timezone='Asia/Shanghai'),
         id='daily_confirm',
         replace_existing=True
     )
-    print("定时任务已注册：每天 20:00 发送今日课程确认提醒")
+    
+    # 每天晚上 23:50 自动确认当天的课程
+    scheduler.add_job(
+        func=auto_confirm_today_courses,
+        trigger=CronTrigger(hour=23, minute=50, timezone='Asia/Shanghai'),
+        id='auto_confirm',
+        replace_existing=True
+    )
     
     scheduler.start()
-    print("定时任务调度器已启动")
+    print("定时任务已启动")
+
+def auto_confirm_today_courses():
+    """自动确认当天已结束的课程"""
+    with app.app_context():
+        print(f"[自动确认] 开始执行 - {datetime.now()}")
+        try:
+            db = get_db()
+            cur = db.cursor()
+            
+            # 获取今天的日期
+            beijing_now = get_beijing_time()
+            today = beijing_now.strftime("%Y-%m-%d")
+            
+            # 获取当前时间
+            current_time = beijing_now.strftime("%H:%M")
+            
+            # 自动确认今天开始时间已过的课程
+            cur.execute("""
+                UPDATE course_schedule 
+                SET status = 'completed' 
+                WHERE class_date = %s
+                  AND class_time <= %s
+                  AND (status IS NULL OR status != 'completed')
+                  AND status != 'cancelled'
+            """, (today, current_time))
+            
+            updated_count = cur.rowcount
+            db.commit()
+            cur.close()
+            db.close()
+            
+            print(f"[自动确认] 成功自动确认 {updated_count} 门课程")
+        except Exception as e:
+            print(f"[自动确认] 错误: {str(e)}")
 
 
 
