@@ -3039,7 +3039,98 @@ def teacher_salary_export():
         traceback.print_exc()
         return jsonify({"code": 500, "msg": str(e)}), 500
 
-
+@app.route("/api/schedule/export/attendance", methods=["POST"])
+def export_attendance_record():
+    """导出上课记录"""
+    try:
+        data = request.json
+        start_date = data.get('start_date')
+        end_date = data.get('end_date')
+        month = data.get('month')
+        
+        if not start_date or not end_date:
+            return jsonify({"code": 400, "msg": "缺少日期参数"}), 400
+        
+        db = get_db()
+        cur = db.cursor()
+        
+        # 查询该月份的所有已确认课程
+        cur.execute("""
+            SELECT 
+                cs.class_date,
+                cs.class_time,
+                cs.subject,
+                cs.classroom,
+                t.name as teacher_name,
+                GROUP_CONCAT(DISTINCT s.name) as student_names
+            FROM course_schedule cs
+            LEFT JOIN teacher t ON cs.teacher_id = t.id
+            LEFT JOIN student s ON cs.student_id = s.id OR FIND_IN_SET(s.id, cs.student_ids) > 0
+            WHERE cs.class_date >= %s
+              AND cs.class_date < %s
+              AND cs.status = 'completed'
+            GROUP BY cs.id, cs.class_date, cs.class_time, cs.subject, cs.classroom, t.name
+            ORDER BY cs.class_date, cs.class_time
+        """, (start_date, end_date))
+        
+        data = cur.fetchall()
+        cur.close()
+        db.close()
+        
+        # 创建Excel文件
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = f"上课记录_{month}"
+        
+        # 设置表头
+        headers = ["上课日期", "上课时间", "课程名称", "教室", "授课教师", "上课学生"]
+        ws.append(headers)
+        
+        # 设置表头样式
+        for cell in ws[1]:
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+            cell.alignment = Alignment(horizontal="center")
+        
+        # 写入数据
+        for row in data:
+            ws.append([
+                str(row[0]) if row[0] else '',
+                row[1] or '',
+                row[2] or '',
+                row[3] or '',
+                row[4] or '待分配',
+                row[5] or '集体课'
+            ])
+        
+        # 调整列宽
+        for col in ws.columns:
+            max_length = 0
+            col_letter = col[0].column_letter
+            for cell in col:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
+            adjusted_width = min(max_length + 2, 20)
+            ws.column_dimensions[col_letter].width = adjusted_width
+        
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+        
+        return send_file(
+            output, 
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            as_attachment=True, 
+            download_name=f'上课记录_{month}.xlsx'
+        )
+    except Exception as e:
+        print(f"导出上课记录错误: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"code": 500, "msg": str(e)}), 500
 
 
 
