@@ -2596,12 +2596,25 @@ def batch_confirm_schedule():
         db = get_db()
         cur = db.cursor()
         
+        # 先查询待确认课程的信息
         placeholders = ','.join(['%s'] * len(course_ids))
+        cur.execute(f"""
+            SELECT id, subject, class_date 
+            FROM course_schedule 
+            WHERE id IN ({placeholders})
+        """, course_ids)
+        
+        courses = cur.fetchall()
+        
+        # 批量更新状态
         cur.execute(f"""
             UPDATE course_schedule 
             SET status = 'completed' 
             WHERE id IN ({placeholders})
+              AND (status IS NULL OR status != 'completed')
         """, course_ids)
+        
+        updated_count = cur.rowcount
         
         db.commit()
         cur.close()
@@ -2609,12 +2622,13 @@ def batch_confirm_schedule():
         
         return jsonify({
             "code": 200,
-            "msg": f"成功确认 {len(course_ids)} 门课程"
+            "msg": f"成功确认 {updated_count} 门课程",
+            "count": updated_count,
+            "total": len(course_ids)
         })
     except Exception as e:
         print(f"批量确认错误: {str(e)}")
         return jsonify({"code": 500, "msg": str(e)}), 500
-
 
 
 
