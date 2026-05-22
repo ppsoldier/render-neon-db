@@ -2436,6 +2436,7 @@ def send_tomorrow_remind_internal():
 
 
 def send_today_confirm_internal():
+    """内部发送今日课程确认提醒（给管理员）"""
     try:
         db = get_db()
         cur = db.cursor()
@@ -2444,8 +2445,6 @@ def send_today_confirm_internal():
         db_today = cur.fetchone()[0]
         today = db_today.strftime("%Y-%m-%d")
         formatted_date = db_today.strftime("%Y年%m月%d日")
-        
-        print(f"[调试] 数据库今天: {today}")
         
         cur.execute("""
             SELECT 
@@ -2460,7 +2459,6 @@ def send_today_confirm_internal():
         """, (today,))
         
         courses = cur.fetchall()
-        print(f"[调试] 找到 {len(courses)} 条待确认课程")
         
         if not courses:
             cur.close()
@@ -2468,19 +2466,16 @@ def send_today_confirm_internal():
             return {"code": 200, "msg": "今天没有待确认的课程", "count": 0}
         
         access_token = get_access_token()
-        print(f"[调试] access_token: {access_token[:20] if access_token else 'None'}...")
-        
         if not access_token:
             cur.close()
             db.close()
             return {"code": 500, "msg": "获取access_token失败"}
         
-        TEMPLATE_ADMIN = "qsPScuGxWPjB69boSJvaIleKJFSLJl-d6NRTLypPuYo"
+        TEMPLATE_ID = "hEY6ukiBlTm79MQ4GL0heVpS0YDcHaiVWZAz3StSj0s"
         
         # 获取管理员openid
         cur.execute("SELECT openid FROM \"user\" WHERE role = 'admin' AND openid IS NOT NULL LIMIT 1")
         admin_user = cur.fetchone()
-        print(f"[调试] 管理员openid: {admin_user[0] if admin_user else 'None'}")
         
         if not admin_user or not admin_user[0]:
             cur.close()
@@ -2510,15 +2505,13 @@ def send_today_confirm_internal():
                         student_names.append(student[0])
             students_str = '、'.join(student_names) if student_names else '集体课'
             
-            print(f"[调试] 准备发送: {subject}, 学生: {students_str}, 时间: {full_time_str}")
-            
             send_data = {
                 "touser": admin_openid,
-                "template_id": TEMPLATE_ADMIN,
+                "template_id": TEMPLATE_ID,
                 "data": {
-                    "thing1": {"value": subject},
-                    "time3": {"value": full_time_str},
-                    "thing5": {"value": students_str}
+                    "date1": {"value": full_time_str},
+                    "thing6": {"value": subject},
+                    "short_thing20": {"value": students_str}
                 },
                 "miniprogram": {
                     "appid": WECHAT_APP_ID,
@@ -2529,13 +2522,8 @@ def send_today_confirm_internal():
             url = f"https://api.weixin.qq.com/cgi-bin/message/subscribe/send?access_token={access_token}"
             response = requests.post(url, json=send_data, timeout=10)
             result = response.json()
-            print(f"[调试] 微信返回: {result}")
-            
             if result.get('errcode') == 0:
                 confirm_count += 1
-                print(f"[调试] 发送成功")
-            else:
-                print(f"[调试] 发送失败: {result.get('errmsg')}")
         
         cur.close()
         db.close()
@@ -2547,9 +2535,10 @@ def send_today_confirm_internal():
         }
     except Exception as e:
         print(f"课后确认提醒发送错误: {str(e)}")
-        import traceback
-        traceback.print_exc()
         return {"code": 500, "msg": str(e)}
+
+
+
 
 
 def start_scheduler():
