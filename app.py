@@ -2440,7 +2440,6 @@ def send_today_confirm_internal():
         db = get_db()
         cur = db.cursor()
         
-        # 使用数据库的当前日期
         cur.execute("SELECT CURRENT_DATE")
         db_today = cur.fetchone()[0]
         today = db_today.strftime("%Y-%m-%d")
@@ -2448,7 +2447,6 @@ def send_today_confirm_internal():
         
         print(f"[调试] 数据库今天: {today}")
         
-        # 查询今天的课程
         cur.execute("""
             SELECT 
                 cs.id,
@@ -2459,7 +2457,6 @@ def send_today_confirm_internal():
             FROM course_schedule cs
             WHERE cs.class_date = %s
               AND (cs.status IS NULL OR cs.status = 'scheduled')
-            ORDER BY cs.class_time
         """, (today,))
         
         courses = cur.fetchall()
@@ -2468,10 +2465,11 @@ def send_today_confirm_internal():
         if not courses:
             cur.close()
             db.close()
-            return {"code": 200, "msg": "今天没有待确认的课程", "count": 0}        
-     
+            return {"code": 200, "msg": "今天没有待确认的课程", "count": 0}
         
         access_token = get_access_token()
+        print(f"[调试] access_token: {access_token[:20] if access_token else 'None'}...")
+        
         if not access_token:
             cur.close()
             db.close()
@@ -2480,15 +2478,16 @@ def send_today_confirm_internal():
         TEMPLATE_ADMIN = "qsPScuGxWPjB69boSJvaIleKJFSLJl-d6NRTLypPuYo"
         
         # 获取管理员openid
-        cur.execute("SELECT openid FROM \"user\" WHERE role = 'admin' LIMIT 1")
+        cur.execute("SELECT openid FROM \"user\" WHERE role = 'admin' AND openid IS NOT NULL LIMIT 1")
         admin_user = cur.fetchone()
-        admin_openid = admin_user[0] if admin_user else None
+        print(f"[调试] 管理员openid: {admin_user[0] if admin_user else 'None'}")
         
-        if not admin_openid:
+        if not admin_user or not admin_user[0]:
             cur.close()
             db.close()
             return {"code": 500, "msg": "未找到管理员"}
         
+        admin_openid = admin_user[0]
         confirm_count = 0
         
         for course in courses:
@@ -2511,6 +2510,8 @@ def send_today_confirm_internal():
                         student_names.append(student[0])
             students_str = '、'.join(student_names) if student_names else '集体课'
             
+            print(f"[调试] 准备发送: {subject}, 学生: {students_str}, 时间: {full_time_str}")
+            
             send_data = {
                 "touser": admin_openid,
                 "template_id": TEMPLATE_ADMIN,
@@ -2524,11 +2525,17 @@ def send_today_confirm_internal():
                     "pagepath": f"pages/schedule/calendar/calendar?confirm_id={course_id}"
                 }
             }
+            
             url = f"https://api.weixin.qq.com/cgi-bin/message/subscribe/send?access_token={access_token}"
             response = requests.post(url, json=send_data, timeout=10)
             result = response.json()
+            print(f"[调试] 微信返回: {result}")
+            
             if result.get('errcode') == 0:
                 confirm_count += 1
+                print(f"[调试] 发送成功")
+            else:
+                print(f"[调试] 发送失败: {result.get('errmsg')}")
         
         cur.close()
         db.close()
