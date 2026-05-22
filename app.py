@@ -2286,7 +2286,7 @@ def send_tomorrow_remind_internal():
 
 
 def send_today_confirm_internal():
-    """内部发送今日课程确认提醒（给管理员）"""
+    """发送今日课程确认提醒（带确认链接）"""
     try:
         db = get_db()
         cur = db.cursor()
@@ -2306,6 +2306,7 @@ def send_today_confirm_internal():
             FROM course_schedule cs
             WHERE cs.class_date = %s
               AND (cs.status IS NULL OR cs.status = 'scheduled')
+            ORDER BY cs.class_time
         """, (today,))
         
         courses = cur.fetchall()
@@ -2321,7 +2322,7 @@ def send_today_confirm_internal():
             db.close()
             return {"code": 500, "msg": "获取access_token失败"}
         
-        TEMPLATE_ADMIN = "qsPScuGxWPjB69boSJvaIleKJFSLJl-d6NRTLypPuYo"
+        TEMPLATE_ADMIN = "hEY6ukiBlTm79MQ4GL0heVpS0YDcHaiVWZAz3StSj0s"
         
         # 获取管理员openid
         cur.execute("SELECT openid FROM \"user\" WHERE role = 'admin' AND openid IS NOT NULL LIMIT 1")
@@ -2355,13 +2356,14 @@ def send_today_confirm_internal():
                         student_names.append(student[0])
             students_str = '、'.join(student_names) if student_names else '集体课'
             
+            # 发送带确认链接的消息
             send_data = {
                 "touser": admin_openid,
                 "template_id": TEMPLATE_ADMIN,
                 "data": {
-                    "thing1": {"value": subject},
-                    "time3": {"value": full_time_str},
-                    "thing5": {"value": students_str}
+                    "date1": {"value": full_time_str},
+                    "thing6": {"value": subject},
+                    "short_thing20": {"value": students_str}
                 },
                 "miniprogram": {
                     "appid": WECHAT_APP_ID,
@@ -2528,6 +2530,8 @@ def send_today_confirm():
 
 
 
+# ==================== 课程确认功能 ====================
+
 @app.route("/api/schedule/confirm", methods=["POST"])
 def confirm_schedule():
     """管理员确认课程完成"""
@@ -2535,9 +2539,27 @@ def confirm_schedule():
         data = request.json
         course_id = data.get('course_id')
         
+        if not course_id:
+            return jsonify({"code": 400, "msg": "缺少课程ID"}), 400
+        
         db = get_db()
         cur = db.cursor()
         
+        # 检查课程是否存在
+        cur.execute("SELECT id, subject, status FROM course_schedule WHERE id = %s", (course_id,))
+        course = cur.fetchone()
+        
+        if not course:
+            cur.close()
+            db.close()
+            return jsonify({"code": 404, "msg": "课程不存在"}), 404
+        
+        if course[2] == 'completed':
+            cur.close()
+            db.close()
+            return jsonify({"code": 400, "msg": "课程已完成确认"}), 400
+        
+        # 更新状态为已完成
         cur.execute("""
             UPDATE course_schedule 
             SET status = 'completed' 
@@ -2548,31 +2570,50 @@ def confirm_schedule():
         cur.close()
         db.close()
         
-        return jsonify({"code": 200, "msg": "确认成功"})
+        return jsonify({
+            "code": 200, 
+            "msg": "确认成功",
+            "data": {
+                "course_id": course_id,
+                "subject": course[1]
+            }
+        })
     except Exception as e:
+        print(f"确认课程错误: {str(e)}")
         return jsonify({"code": 500, "msg": str(e)}), 500
 
 
-
-@app.route("/api/remind/test-confirm", methods=["GET"])
-def test_confirm():
-    """手动测试课后确认提醒"""
-    result = send_today_confirm_internal()
-    return jsonify(result)
-
-
-
-@app.route("/api/test/time", methods=["GET"])
-def test_time():
-    """测试服务器时间"""
-    from datetime import datetime, timedelta
-    utc_now = datetime.utcnow()
-    beijing_now = utc_now + timedelta(hours=8)
-    return jsonify({
-        "utc_now": utc_now.strftime("%Y-%m-%d %H:%M:%S"),
-        "beijing_now": beijing_now.strftime("%Y-%m-%d %H:%M:%S"),
-        "today": beijing_now.strftime("%Y-%m-%d")
-    })
+@app.route("/api/schedule/confirm/batch", methods=["POST"])
+def batch_confirm_schedule():
+    """批量确认课程完成"""
+    try:
+        data = request.json
+        course_ids = data.get('course_ids', [])
+        
+        if not course_ids:
+            return jsonify({"code": 400, "msg": "请选择课程"}), 400
+        
+        db = get_db()
+        cur = db.cursor()
+        
+        placeholders = ','.join(['%s'] * len(course_ids))
+        cur.execute(f"""
+            UPDATE course_schedule 
+            SET status = 'completed' 
+            WHERE id IN ({placeholders})
+        """, course_ids)
+        
+        db.commit()
+        cur.close()
+        db.close()
+        
+        return jsonify({
+            "code": 200,
+            "msg": f"成功确认 {len(course_ids)} 门课程"
+        })
+    except Exception as e:
+        print(f"批量确认错误: {str(e)}")
+        return jsonify({"code": 500, "msg": str(e)}), 500
 
 
 
