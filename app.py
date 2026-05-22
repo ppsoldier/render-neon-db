@@ -2436,16 +2436,19 @@ def send_tomorrow_remind_internal():
 
 
 def send_today_confirm_internal():
-    """内部发送今日课程确认提醒（给管理员）"""
     try:
-        beijing_now = get_beijing_time()
-        today = beijing_now.strftime("%Y-%m-%d")
-        formatted_date = beijing_now.strftime("%Y年%m月%d日")
-        
         db = get_db()
         cur = db.cursor()
         
-        # 查询今天还未确认的课程
+        # 使用数据库的当前日期
+        cur.execute("SELECT CURRENT_DATE")
+        db_today = cur.fetchone()[0]
+        today = db_today.strftime("%Y-%m-%d")
+        formatted_date = db_today.strftime("%Y年%m月%d日")
+        
+        print(f"[调试] 数据库今天: {today}")
+        
+        # 查询今天的课程
         cur.execute("""
             SELECT 
                 cs.id,
@@ -2460,11 +2463,13 @@ def send_today_confirm_internal():
         """, (today,))
         
         courses = cur.fetchall()
+        print(f"[调试] 找到 {len(courses)} 条待确认课程")
         
         if not courses:
             cur.close()
             db.close()
-            return {"code": 200, "msg": "今天没有待确认的课程", "count": 0}
+            return {"code": 200, "msg": "今天没有待确认的课程", "count": 0}        
+     
         
         access_token = get_access_token()
         if not access_token:
