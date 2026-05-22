@@ -2295,17 +2295,36 @@ def send_tomorrow_remind_internal():
         return {"code": 500, "msg": str(e)}
 
 # 启动定时任务
+# def start_scheduler():
+#     scheduler = BackgroundScheduler()
+#     # 每天晚上 20:00 执行（北京时间）
+#     scheduler.add_job(
+#         func=scheduled_send_remind,
+#         trigger=CronTrigger(hour=20, minute=0, timezone='Asia/Shanghai'),
+#         id='daily_remind',
+#         replace_existing=True
+#     )
+#     scheduler.start()
+#     print("定时任务已启动，每天 20:00 自动发送课程提醒")
+
+# 临时改为 1 分钟后执行（用于测试）
 def start_scheduler():
     scheduler = BackgroundScheduler()
-    # 每天晚上 20:00 执行（北京时间）
+    
+    # 临时：1分钟后执行（测试用）
+    run_time = datetime.now() + timedelta(minutes=1)
     scheduler.add_job(
         func=scheduled_send_remind,
-        trigger=CronTrigger(hour=20, minute=0, timezone='Asia/Shanghai'),
-        id='daily_remind',
+        trigger='date',
+        run_date=run_time,
+        id='test_remind',
         replace_existing=True
     )
+    # 正式环境改回：
+    # trigger=CronTrigger(hour=20, minute=0, timezone='Asia/Shanghai')
+    
     scheduler.start()
-    print("定时任务已启动，每天 20:00 自动发送课程提醒")
+    print(f"定时任务已启动，将在 {run_time} 执行测试")
 
 
 
