@@ -2035,7 +2035,8 @@ def send_tomorrow_remind():
             db.close()
             return jsonify({"code": 500, "msg": "获取access_token失败"}), 500
         
-        TEMPLATE_ID = "qsPScuGxWPjB69boSJvaIleKJFSLJl-d6NRTLypPuYo"
+        # TEMPLATE_ID = "qsPScuGxWPjB69boSJvaIleKJFSLJl-d6NRTLypPuYo"
+        TEMPLATE_ID = "hEY6ukiBlTm79MQ4GL0heVpS0YDcHaiVWZAz3StSj0s"
         
         parent_sent = 0
         teacher_sent = 0
