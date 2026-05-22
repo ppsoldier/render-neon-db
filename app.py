@@ -2703,7 +2703,11 @@ def confirm_schedule():
 
 
 
-
+@app.route("/api/remind/test-confirm", methods=["GET"])
+def test_confirm():
+    """手动测试课后确认提醒"""
+    result = send_today_confirm_internal()
+    return jsonify(result)
 
 
 
