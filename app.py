@@ -2187,17 +2187,22 @@ def scheduled_send_remind():
         except Exception as e:
             print(f"[定时任务] 执行错误: {str(e)}")
 
-# 内部调用版本（不依赖request上下文）
 def send_tomorrow_remind_internal():
-    """内部发送明日课程提醒（教师/家长）"""
+    """内部发送明日课程提醒（给教师和家长）"""
     try:
-        beijing_now = get_beijing_time()
+        from datetime import datetime, timedelta
+        
+        # 获取北京时间
+        beijing_now = datetime.utcnow() + timedelta(hours=8)
         tomorrow = (beijing_now + timedelta(days=1)).strftime("%Y-%m-%d")
         formatted_date = beijing_now.strftime("%Y年%m月%d日")
+        
+        print(f"[课前提醒] 明天日期: {tomorrow}")
         
         db = get_db()
         cur = db.cursor()
         
+        # 查询明天的课程
         cur.execute("""
             SELECT 
                 cs.id,
@@ -2216,32 +2221,44 @@ def send_tomorrow_remind_internal():
         if not courses:
             cur.close()
             db.close()
+            print("[课前提醒] 明天没有课程")
             return {"code": 200, "msg": "明天没有课程", "count": 0}
         
+        print(f"[课前提醒] 找到 {len(courses)} 门课程")
+        
+        # 获取access_token
         access_token = get_access_token()
         if not access_token:
             cur.close()
             db.close()
+            print("[课前提醒] 获取access_token失败")
             return {"code": 500, "msg": "获取access_token失败"}
         
+        # 教师/家长使用的模板ID（新模板）
         TEMPLATE_USER = "hEY6ukiBlTm79MQ4GL0heVpS0YDcHaiVWZAz3StSj0s"
         
         parent_sent = 0
         teacher_sent = 0
         
         for course in courses:
+            course_id = course[0]
             class_time = course[1]
             subject = course[2] or '课程'
             teacher_id = course[4]
             student_ids_str = course[5] or ''
             
+            # 提取开始时间
             start_time = class_time.split('-')[0] if class_time else "09:00"
             full_time_str = f"{formatted_date} {start_time}"
             
-            # 发送给教师
+            print(f"[课前提醒] 处理课程: {subject}, 教师ID: {teacher_id}, 学生IDs: {student_ids_str}")
+            
+            # ========== 1. 发送给教师 ==========
             if teacher_id:
-                cur.execute("SELECT openid FROM \"user\" WHERE teacher_id = %s", (teacher_id,))
+                cur.execute("SELECT openid FROM \"user\" WHERE teacher_id = %s AND openid IS NOT NULL", (teacher_id,))
                 teacher_user = cur.fetchone()
+                print(f"[课前提醒] 教师查询结果: {teacher_user}")
+                
                 if teacher_user and teacher_user[0]:
                     send_data = {
                         "touser": teacher_user[0],
@@ -2255,18 +2272,29 @@ def send_tomorrow_remind_internal():
                     url = f"https://api.weixin.qq.com/cgi-bin/message/subscribe/send?access_token={access_token}"
                     response = requests.post(url, json=send_data, timeout=10)
                     result = response.json()
+                    print(f"[课前提醒] 教师发送结果: {result}")
                     if result.get('errcode') == 0:
                         teacher_sent += 1
+                    elif result.get('errcode') == 43101:
+                        print(f"[课前提醒] 教师未订阅消息")
+                else:
+                    print(f"[课前提醒] 教师没有openid或未登录")
             
-            # 发送给家长
+            # ========== 2. 发送给家长 ==========
             if student_ids_str:
                 student_ids = [int(x) for x in student_ids_str.split(',') if x]
+                print(f"[课前提醒] 学生ID列表: {student_ids}")
+                
                 for sid in student_ids:
                     cur.execute("SELECT name, parent_phone FROM student WHERE id = %s", (sid,))
                     student = cur.fetchone()
+                    print(f"[课前提醒] 学生查询结果: {student}")
+                    
                     if student and student[1]:
-                        cur.execute("SELECT openid FROM \"user\" WHERE phone = %s", (student[1],))
+                        cur.execute("SELECT openid FROM \"user\" WHERE phone = %s AND openid IS NOT NULL", (student[1],))
                         parent_user = cur.fetchone()
+                        print(f"[课前提醒] 家长openid查询结果: {parent_user}")
+                        
                         if parent_user and parent_user[0]:
                             send_data = {
                                 "touser": parent_user[0],
@@ -2280,11 +2308,20 @@ def send_tomorrow_remind_internal():
                             url = f"https://api.weixin.qq.com/cgi-bin/message/subscribe/send?access_token={access_token}"
                             response = requests.post(url, json=send_data, timeout=10)
                             result = response.json()
+                            print(f"[课前提醒] 家长发送结果: {result}")
                             if result.get('errcode') == 0:
                                 parent_sent += 1
+                            elif result.get('errcode') == 43101:
+                                print(f"[课前提醒] 家长未订阅消息")
+                        else:
+                            print(f"[课前提醒] 家长没有openid或未登录，手机号: {student[1]}")
+                    else:
+                        print(f"[课前提醒] 学生没有家长手机号")
         
         cur.close()
         db.close()
+        
+        print(f"[课前提醒] 发送完成 - 教师: {teacher_sent}, 家长: {parent_sent}")
         
         return {
             "code": 200,
@@ -2293,7 +2330,9 @@ def send_tomorrow_remind_internal():
             "parent_sent": parent_sent
         }
     except Exception as e:
-        print(f"课前提醒发送错误: {str(e)}")
+        print(f"[课前提醒] 发送错误: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return {"code": 500, "msg": str(e)}
 
 
