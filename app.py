@@ -2978,24 +2978,27 @@ def teacher_salary_export():
                 WHERE status = 'active'
             """)
         
-        data = cur.fetchall()
+        results = cur.fetchall()
         cur.close()
         db.close()
         
         # 创建Excel文件
         wb = openpyxl.Workbook()
         ws = wb.active
-        ws.title = "教师课酬统计"
+        ws.title = f"教师课酬统计_{month or '全部'}"
         
+        # 设置表头
         headers = ["教师姓名", "手机号", "教学科目", "课时费(元/小时)", "完成课时数", "授课总时长(小时)", "应发课酬(元)"]
         ws.append(headers)
         
+        # 设置表头样式
         for cell in ws[1]:
             cell.font = Font(bold=True, color="FFFFFF")
             cell.fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
             cell.alignment = Alignment(horizontal="center")
         
-        for row in data:
+        # 写入数据
+        for row in results:
             ws.append([
                 row[0] or '',
                 row[1] or '',
@@ -3006,6 +3009,7 @@ def teacher_salary_export():
                 float(row[6]) if row[6] else 0
             ])
         
+        # 调整列宽
         for col in ws.columns:
             max_length = 0
             col_letter = col[0].column_letter
@@ -3018,6 +3022,7 @@ def teacher_salary_export():
             adjusted_width = min(max_length + 2, 25)
             ws.column_dimensions[col_letter].width = adjusted_width
         
+        # 保存到内存
         output = io.BytesIO()
         wb.save(output)
         output.seek(0)
@@ -3030,7 +3035,12 @@ def teacher_salary_export():
         )
     except Exception as e:
         print(f"导出课酬报表错误: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"code": 500, "msg": str(e)}), 500
+
+
+
 
 
 
