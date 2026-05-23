@@ -378,6 +378,61 @@ def set_config():
     restart_scheduler()
     return jsonify({"code": 200, "msg": "保存成功"})
 
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
+
+scheduler = None
+
+def init_scheduler():
+    """初始化定时任务（从数据库读取时间）"""
+    global scheduler
+    if scheduler:
+        scheduler.shutdown()
+    
+    scheduler = BackgroundScheduler()
+    
+    # 从数据库获取提醒时间
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT config_value FROM system_config WHERE config_key = 'remind_before_time'")
+    row = cur.fetchone()
+    before_time = row[0] if row else "09:00"
+    cur.execute("SELECT config_value FROM system_config WHERE config_key = 'remind_after_time'")
+    row = cur.fetchone()
+    after_time = row[0] if row else "20:00"
+    cur.close()
+    db.close()
+    
+    before_hour, before_min = map(int, before_time.split(':'))
+    after_hour, after_min = map(int, after_time.split(':'))
+    
+    # 课前提醒
+    scheduler.add_job(
+        func=scheduled_send_remind,
+        trigger=CronTrigger(hour=before_hour, minute=before_min, timezone='Asia/Shanghai'),
+        id='daily_remind',
+        replace_existing=True
+    )
+    # 课后确认提醒
+    scheduler.add_job(
+        func=scheduled_send_confirm,
+        trigger=CronTrigger(hour=after_hour, minute=after_min, timezone='Asia/Shanghai'),
+        id='daily_confirm',
+        replace_existing=True
+    )
+    scheduler.start()
+    print(f"定时任务已启动：课前提醒 {before_time}，课后确认 {after_time}")
+
+def restart_scheduler():
+    """重启调度器（配置变更后调用）"""
+    with app.app_context():
+        init_scheduler()
+        
+@app.route("/api/remind/test-confirm", methods=["GET"])
+def test_confirm():
+    """手动测试课后确认提醒"""
+    result = send_today_confirm_internal()
+    return jsonify(result)
 
 
 # ==================== 学生管理模块 ====================
