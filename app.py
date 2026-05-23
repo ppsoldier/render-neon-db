@@ -336,6 +336,50 @@ def user_delete():
         db.rollback()
         return jsonify({"code": 500, "msg": f"删除失败: {str(e)}"}), 500
 
+# ==================== 系统配置模块 ====================
+
+@app.route("/api/config/get", methods=["GET"])
+def get_config():
+    """获取配置（支持单个或全部）"""
+    key = request.args.get('key')
+    db = get_db()
+    cur = db.cursor()
+    if key:
+        cur.execute("SELECT config_value FROM system_config WHERE config_key = %s", (key,))
+        row = cur.fetchone()
+        cur.close()
+        db.close()
+        return jsonify({"code": 200, "data": {key: row[0] if row else None}})
+    else:
+        cur.execute("SELECT config_key, config_value FROM system_config")
+        rows = cur.fetchall()
+        cur.close()
+        db.close()
+        return jsonify({"code": 200, "data": {r[0]: r[1] for r in rows}})
+
+@app.route("/api/config/set", methods=["POST"])
+def set_config():
+    """设置配置"""
+    data = request.json
+    key = data.get('key')
+    value = data.get('value')
+    if not key:
+        return jsonify({"code": 400, "msg": "缺少key"}), 400
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("""
+        INSERT INTO system_config (config_key, config_value) VALUES (%s, %s)
+        ON CONFLICT (config_key) DO UPDATE SET config_value = EXCLUDED.config_value, updated_at = NOW()
+    """, (key, value))
+    db.commit()
+    cur.close()
+    db.close()
+    # 重启定时任务
+    restart_scheduler()
+    return jsonify({"code": 200, "msg": "保存成功"})
+
+
+
 # ==================== 学生管理模块 ====================
 @app.route("/api/student/list")
 def student_list():
