@@ -431,6 +431,26 @@ def admin_reset_password():
         print(f"重置密码错误: {str(e)}")
         return jsonify({"code": 500, "msg": str(e)}), 500
 
+@app.route("/api/user/list")
+def user_list():
+    """获取用户列表"""
+    try:
+        db = get_db()
+        cur = db.cursor()
+        cur.execute("SELECT id, phone, name, role, status, created_at FROM \"user\" ORDER BY id")
+        data = cur.fetchall()
+        cur.close()
+        db.close()
+        result = [{"id": r[0], "phone": r[1], "name": r[2], "role": r[3],
+                   "status": r[4], "created_at": str(r[5]) if r[5] else None} for r in data]
+        return jsonify({"code": 200, "data": result})
+    except Exception as e:
+        return jsonify({"code": 500, "msg": str(e)}), 500
+
+
+
+
+
 
 # ==================== 系统配置模块 ====================
 
