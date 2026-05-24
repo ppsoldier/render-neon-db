@@ -1640,6 +1640,154 @@ def copy_week_schedule():
         return jsonify({"code": 500, "msg": str(e)}), 500
 
 
+# ==================== 复制课程接口 ====================
+
+@app.route("/api/copy/single", methods=["POST"])
+def copy_single_course():
+    """复制单个课程到目标日期"""
+    try:
+        data = request.json
+        course_id = data.get('course_id')
+        target_date = data.get('target_date')
+        
+        if not course_id or not target_date:
+            return jsonify({"code": 400, "msg": "缺少参数"}), 400
+        
+        db = get_db()
+        cur = db.cursor()
+        
+        # 获取原课程信息
+        cur.execute("""
+            SELECT subject, teacher_id, student_ids, classroom, class_time, duration
+            FROM course_schedule WHERE id = %s
+        """, (course_id,))
+        course = cur.fetchone()
+        
+        if not course:
+            return jsonify({"code": 404, "msg": "原课程不存在"}), 404
+        
+        # 插入新课程
+        cur.execute("""
+            INSERT INTO course_schedule 
+            (subject, teacher_id, student_ids, classroom, class_date, class_time, duration, status)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, 'scheduled')
+            RETURNING id
+        """, (course[0], course[1], course[2], course[3], target_date, course[4], course[5]))
+        
+        new_id = cur.fetchone()[0]
+        db.commit()
+        cur.close()
+        db.close()
+        
+        return jsonify({"code": 200, "msg": "复制成功", "count": 1, "id": new_id})
+    except Exception as e:
+        print(f"复制单个课程错误: {str(e)}")
+        return jsonify({"code": 500, "msg": str(e)}), 500
+
+
+@app.route("/api/copy/day", methods=["POST"])
+def copy_day_courses():
+    """复制某天的全部课程到目标日期"""
+    try:
+        data = request.json
+        source_date = data.get('source_date')
+        target_date = data.get('target_date')
+        
+        if not source_date or not target_date:
+            return jsonify({"code": 400, "msg": "缺少参数"}), 400
+        
+        db = get_db()
+        cur = db.cursor()
+        
+        # 获取源日期的所有课程
+        cur.execute("""
+            SELECT subject, teacher_id, student_ids, classroom, class_time, duration
+            FROM course_schedule
+            WHERE class_date = %s
+              AND (status IS NULL OR status != 'cancelled')
+        """, (source_date,))
+        
+        courses = cur.fetchall()
+        copied_count = 0
+        
+        for course in courses:
+            cur.execute("""
+                INSERT INTO course_schedule 
+                (subject, teacher_id, student_ids, classroom, class_date, class_time, duration, status)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, 'scheduled')
+            """, (course[0], course[1], course[2], course[3], target_date, course[4], course[5]))
+            copied_count += 1
+        
+        db.commit()
+        cur.close()
+        db.close()
+        
+        return jsonify({"code": 200, "msg": "复制成功", "count": copied_count})
+    except Exception as e:
+        print(f"复制日课程错误: {str(e)}")
+        return jsonify({"code": 500, "msg": str(e)}), 500
+
+
+@app.route("/api/copy/week", methods=["POST"])
+def copy_week_courses():
+    """复制本周全部课程到目标日期（按星期偏移）"""
+    try:
+        data = request.json
+        start_date = data.get('start_date')
+        end_date = data.get('end_date')
+        target_date = data.get('target_date')
+        
+        if not start_date or not end_date or not target_date:
+            return jsonify({"code": 400, "msg": "缺少参数"}), 400
+        
+        from datetime import datetime, timedelta
+        target = datetime.strptime(target_date, "%Y-%m-%d")
+        source_start = datetime.strptime(start_date, "%Y-%m-%d")
+        
+        db = get_db()
+        cur = db.cursor()
+        
+        # 获取本周所有课程
+        cur.execute("""
+            SELECT subject, teacher_id, student_ids, classroom, class_time, duration, class_date
+            FROM course_schedule
+            WHERE class_date BETWEEN %s AND %s
+              AND (status IS NULL OR status != 'cancelled')
+        """, (start_date, end_date))
+        
+        courses = cur.fetchall()
+        copied_count = 0
+        
+        for course in courses:
+            old_date = course[6]
+            # 计算星期偏移
+            old_date_obj = old_date
+            if isinstance(old_date, str):
+                old_date_obj = datetime.strptime(old_date, "%Y-%m-%d")
+            day_offset = (old_date_obj - source_start).days
+            new_date = target + timedelta(days=day_offset)
+            new_date_str = new_date.strftime("%Y-%m-%d")
+            
+            cur.execute("""
+                INSERT INTO course_schedule 
+                (subject, teacher_id, student_ids, classroom, class_date, class_time, duration, status)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, 'scheduled')
+            """, (course[0], course[1], course[2], course[3], new_date_str, course[4], course[5]))
+            copied_count += 1
+        
+        db.commit()
+        cur.close()
+        db.close()
+        
+        return jsonify({"code": 200, "msg": "复制成功", "count": copied_count})
+    except Exception as e:
+        print(f"复制周课程错误: {str(e)}")
+        return jsonify({"code": 500, "msg": str(e)}), 500
+
+
+
+
+
 @app.route("/api/schedule/export/excel", methods=["POST"])
 def export_schedule_excel():
     """导出周课表为Excel - 支持多课程"""
