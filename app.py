@@ -237,118 +237,200 @@ def init_db():
 
 
 
-# ==================== 用户管理模块 ====================
-@app.route("/api/login", methods=["POST"])
-def login():
-    """用户登录"""
+# ==================== 用户管理模块（完整版）====================
+
+@app.route("/api/admin/users", methods=["GET"])
+def admin_get_users():
+    """管理员获取用户列表（支持分页和搜索）"""
     try:
-        d = request.json
-        code = d.get('code')  # 微信登录code
-        phone = d.get('phone')
-        password = d.get('password')
-
-        # 如果传了code，获取openid
-        openid = None
-        if code:
-            # 调用微信接口获取openid
-            url = f"https://api.weixin.qq.com/sns/jscode2session?appid={WECHAT_APP_ID}&secret={WECHAT_APP_SECRET}&js_code={code}&grant_type=authorization_code"
-            response = requests.get(url, timeout=10)
-            wx_data = response.json()
-            openid = wx_data.get('openid')
-            print(f"获取到openid: {openid}")
-
+        page = request.args.get('page', 1, type=int)
+        limit = request.args.get('limit', 20, type=int)
+        keyword = request.args.get('keyword', '')
+        role = request.args.get('role', '')
+        
         db = get_db()
         cur = db.cursor()
-        cur.execute("SELECT id, name, role, openid FROM \"user\" WHERE phone=%s AND password=%s",
-                    (phone, password))
-        user = cur.fetchone()
-
-        if user:
-            # 更新openid
-            if openid and not user[3]:
-                cur.execute("UPDATE \"user\" SET openid = %s WHERE id = %s", (openid, user[0]))
-                db.commit()
-
-            cur.close()
-            db.close()
-            return jsonify({"code": 200, "data": {"id": user[0], "name": user[1], "role": user[2]}})
-
-        cur.close()
-        db.close()
-        return jsonify({"code": 403, "msg": "账号或密码错误"})
-    except Exception as e:
-        print(f"登录错误: {str(e)}")
-        return jsonify({"code": 500, "msg": str(e)}), 500
-
-
-@app.route("/api/user/list")
-def user_list():
-    """获取用户列表"""
-    try:
-        db = get_db()
-        cur = db.cursor()
-        cur.execute("SELECT id, phone, name, role, status, created_at FROM \"user\" ORDER BY id")
+        
+        sql = """
+            SELECT 
+                u.id,
+                u.phone,
+                u.name,
+                u.role,
+                u.status,
+                u.created_at,
+                u.last_login_at
+            FROM "user" u
+            WHERE 1=1
+        """
+        params = []
+        
+        if keyword:
+            sql += " AND (u.name LIKE %s OR u.phone LIKE %s)"
+            params.extend([f'%{keyword}%', f'%{keyword}%'])
+        if role:
+            sql += " AND u.role = %s"
+            params.append(role)
+        
+        # 获取总数
+        count_sql = sql.replace("SELECT u.id, u.phone, u.name, u.role, u.status, u.created_at, u.last_login_at", "SELECT COUNT(*)")
+        cur.execute(count_sql, params)
+        total = cur.fetchone()[0]
+        
+        sql += " ORDER BY u.id DESC LIMIT %s OFFSET %s"
+        params.extend([limit, (page - 1) * limit])
+        
+        cur.execute(sql, params)
         data = cur.fetchall()
         cur.close()
         db.close()
-        result = [{"id": r[0], "phone": r[1], "name": r[2], "role": r[3],
-                   "status": r[4], "created_at": str(r[5]) if r[5] else None} for r in data]
-        return jsonify({"code": 200, "data": result})
+        
+        result = []
+        for row in data:
+            result.append({
+                "id": row[0],
+                "phone": row[1] or '',
+                "name": row[2] or '',
+                "role": row[3] or 'parent',
+                "status": row[4] or 1,
+                "created_at": str(row[5]) if row[5] else None,
+                "last_login_at": str(row[6]) if row[6] else None
+            })
+        
+        return jsonify({
+            "code": 200,
+            "data": result,
+            "total": total,
+            "page": page,
+            "limit": limit
+        })
     except Exception as e:
+        print(f"获取用户列表错误: {str(e)}")
         return jsonify({"code": 500, "msg": str(e)}), 500
 
 
-@app.route("/api/user/add", methods=["POST"])
-def user_add():
-    """添加用户"""
+@app.route("/api/admin/users", methods=["POST"])
+def admin_add_user():
+    """管理员添加用户"""
     try:
         d = request.json
+        phone = d.get('phone')
+        password = d.get('password', '123456')
+        name = d.get('name')
+        role = d.get('role', 'parent')
+        
+        if not phone:
+            return jsonify({"code": 400, "msg": "手机号不能为空"}), 400
+        if not name:
+            return jsonify({"code": 400, "msg": "姓名不能为空"}), 400
+        
         db = get_db()
         cur = db.cursor()
-        cur.execute("INSERT INTO \"user\" (phone, password, name, role, status) VALUES (%s, %s, %s, %s, %s)",
-                    (d['phone'], d['password'], d['name'], d['role'], d.get('status', 1)))
+        
+        # 检查手机号是否已存在
+        cur.execute("SELECT id FROM \"user\" WHERE phone = %s", (phone,))
+        if cur.fetchone():
+            cur.close()
+            db.close()
+            return jsonify({"code": 400, "msg": "手机号已存在"}), 400
+        
+        cur.execute("""
+            INSERT INTO "user" (phone, password, name, role, status)
+            VALUES (%s, %s, %s, %s, 1)
+            RETURNING id
+        """, (phone, password, name, role))
+        
+        new_id = cur.fetchone()[0]
         db.commit()
         cur.close()
         db.close()
-        return jsonify({"code": 200, "msg": "添加成功"})
+        
+        return jsonify({"code": 200, "msg": "添加成功", "data": {"id": new_id}})
     except Exception as e:
-        db.rollback()
-        return jsonify({"code": 500, "msg": f"添加失败: {str(e)}"}), 500
+        print(f"添加用户错误: {str(e)}")
+        return jsonify({"code": 500, "msg": str(e)}), 500
 
 
-@app.route("/api/user/update", methods=["POST"])
-def user_update():
-    """更新用户信息"""
+@app.route("/api/admin/users/<int:user_id>", methods=["PUT"])
+def admin_update_user(user_id):
+    """管理员更新用户信息"""
     try:
         d = request.json
+        name = d.get('name')
+        role = d.get('role')
+        status = d.get('status')
+        
         db = get_db()
         cur = db.cursor()
-        cur.execute("UPDATE \"user\" SET phone=%s, name=%s, role=%s, status=%s WHERE id=%s",
-                    (d['phone'], d['name'], d['role'], d.get('status', 1), d['id']))
+        
+        updates = []
+        params = []
+        
+        if name:
+            updates.append("name = %s")
+            params.append(name)
+        if role:
+            updates.append("role = %s")
+            params.append(role)
+        if status is not None:
+            updates.append("status = %s")
+            params.append(status)
+        
+        if not updates:
+            return jsonify({"code": 400, "msg": "没有要更新的字段"}), 400
+        
+        params.append(user_id)
+        sql = f"UPDATE \"user\" SET {', '.join(updates)} WHERE id = %s"
+        
+        cur.execute(sql, params)
         db.commit()
         cur.close()
         db.close()
+        
         return jsonify({"code": 200, "msg": "更新成功"})
     except Exception as e:
-        db.rollback()
-        return jsonify({"code": 500, "msg": f"更新失败: {str(e)}"}), 500
+        print(f"更新用户错误: {str(e)}")
+        return jsonify({"code": 500, "msg": str(e)}), 500
 
 
-@app.route("/api/user/delete", methods=["POST"])
-def user_delete():
-    """删除用户"""
+@app.route("/api/admin/users/<int:user_id>", methods=["DELETE"])
+def admin_delete_user(user_id):
+    """管理员删除用户"""
     try:
-        id = request.json.get('id')
         db = get_db()
         cur = db.cursor()
-        cur.execute("DELETE FROM \"user\" WHERE id=%s", (id,))
+        
+        cur.execute("DELETE FROM \"user\" WHERE id = %s", (user_id,))
         db.commit()
         cur.close()
         db.close()
+        
         return jsonify({"code": 200, "msg": "删除成功"})
     except Exception as e:
-        db.rollback()
-        return jsonify({"code": 500, "msg": f"删除失败: {str(e)}"}), 500
+        print(f"删除用户错误: {str(e)}")
+        return jsonify({"code": 500, "msg": str(e)}), 500
+
+
+@app.route("/api/admin/users/reset-password", methods=["POST"])
+def admin_reset_password():
+    """管理员重置用户密码"""
+    try:
+        d = request.json
+        user_id = d.get('user_id')
+        new_password = d.get('new_password', '123456')
+        
+        db = get_db()
+        cur = db.cursor()
+        
+        cur.execute("UPDATE \"user\" SET password = %s WHERE id = %s", (new_password, user_id))
+        db.commit()
+        cur.close()
+        db.close()
+        
+        return jsonify({"code": 200, "msg": f"密码已重置为 {new_password}"})
+    except Exception as e:
+        print(f"重置密码错误: {str(e)}")
+        return jsonify({"code": 500, "msg": str(e)}), 500
 
 
 # ==================== 系统配置模块 ====================
