@@ -258,8 +258,7 @@ def admin_get_users():
                 u.name,
                 u.role,
                 u.status,
-                u.created_at,
-                u.last_login_at
+                u.created_at
             FROM "user" u
             WHERE 1=1
         """
@@ -273,7 +272,7 @@ def admin_get_users():
             params.append(role)
         
         # 获取总数
-        count_sql = sql.replace("SELECT u.id, u.phone, u.name, u.role, u.status, u.created_at, u.last_login_at", "SELECT COUNT(*)")
+        count_sql = sql.replace("SELECT u.id, u.phone, u.name, u.role, u.status, u.created_at", "SELECT COUNT(*)")
         cur.execute(count_sql, params)
         total = cur.fetchone()[0]
         
@@ -293,8 +292,7 @@ def admin_get_users():
                 "name": row[2] or '',
                 "role": row[3] or 'parent',
                 "status": row[4] or 1,
-                "created_at": str(row[5]) if row[5] else None,
-                "last_login_at": str(row[6]) if row[6] else None
+                "created_at": str(row[5]) if row[5] else None
             })
         
         return jsonify({
@@ -306,8 +304,9 @@ def admin_get_users():
         })
     except Exception as e:
         print(f"获取用户列表错误: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"code": 500, "msg": str(e)}), 500
-
 
 @app.route("/api/admin/users", methods=["POST"])
 def admin_add_user():
