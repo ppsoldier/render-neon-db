@@ -1306,7 +1306,7 @@ def get_week_schedule():
             # 解析 student_ids 并获取姓名
             student_ids_str = row[9] or ''
             student_id_list = [int(x) for x in student_ids_str.split(',') if x]
-            student_names = [student_map.get(sid, '') for sid in student_id_list if student_map.get(sid)]
+            student_names = [str(students_map.get(sid, '')) for sid in student_id_list if students_map.get(sid)]
 
             week_schedule[weekday_idx][time_slot].append({
                 "id": row[0],
