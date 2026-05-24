@@ -1315,24 +1315,35 @@ def schedule_save():
         db = get_db()
         cur = db.cursor()
 
-        # 检查是否已存在
+        # # 检查是否已存在
+        # cur.execute("""
+        #     SELECT id FROM course_schedule
+        #     WHERE class_date = %s AND class_time = %s
+        #     AND (status IS NULL OR status != 'cancelled')
+        # """, (class_date, class_time))
+
+        # existing = cur.fetchone()
+
+        # if existing:
+        #     cur.execute("""
+        #         UPDATE course_schedule 
+        #         SET subject = %s, teacher_id = %s, student_ids = %s, classroom = %s, duration = %s, status = 'scheduled'
+        #         WHERE id = %s
+        #     """, (subject, teacher_id, student_ids, classroom, duration, existing[0]))
+        #     msg = "更新成功"
+        # else:
+        #     cur.execute("""
+        #         INSERT INTO course_schedule 
+        #         (subject, teacher_id, student_ids, classroom, class_date, class_time, duration, status)
+        #         VALUES (%s, %s, %s, %s, %s, %s, %s, 'scheduled')
+        #         RETURNING id
+        #     """, (subject, teacher_id, student_ids, classroom, class_date, class_time, duration))
+        #     new_id = cur.fetchone()[0]
+        #     msg = f"添加成功，ID: {new_id}"
+
+
+        跳过检查同一时间段课程：
         cur.execute("""
-            SELECT id FROM course_schedule
-            WHERE class_date = %s AND class_time = %s
-            AND (status IS NULL OR status != 'cancelled')
-        """, (class_date, class_time))
-
-        existing = cur.fetchone()
-
-        if existing:
-            cur.execute("""
-                UPDATE course_schedule 
-                SET subject = %s, teacher_id = %s, student_ids = %s, classroom = %s, duration = %s, status = 'scheduled'
-                WHERE id = %s
-            """, (subject, teacher_id, student_ids, classroom, duration, existing[0]))
-            msg = "更新成功"
-        else:
-            cur.execute("""
                 INSERT INTO course_schedule 
                 (subject, teacher_id, student_ids, classroom, class_date, class_time, duration, status)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, 'scheduled')
@@ -1340,6 +1351,7 @@ def schedule_save():
             """, (subject, teacher_id, student_ids, classroom, class_date, class_time, duration))
             new_id = cur.fetchone()[0]
             msg = f"添加成功，ID: {new_id}"
+        
 
         db.commit()
         print(f"数据库操作成功: {msg}")
