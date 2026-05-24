@@ -1254,16 +1254,18 @@ def get_schedule_calendar():
 
 @app.route("/api/schedule/week", methods=["GET"])
 def get_week_schedule():
+    """获取周课表数据 - 每个时间段支持多课程"""
     try:
         start_date = request.args.get('start_date')
         end_date = request.args.get('end_date')
+        
         if not start_date or not end_date:
             return jsonify({"code": 400, "msg": "缺少日期参数"}), 400
-
+        
         db = get_db()
         cur = db.cursor()
-
-        # 获取所有课程
+        
+        # 查询所有课程
         cur.execute("""
             SELECT 
                 s.id,
@@ -1285,9 +1287,10 @@ def get_week_schedule():
 
         rows = cur.fetchall()
 
-        # 获取所有学生 ID -> 姓名 映射
+        # 修正：获取学生名称映射（字段名应为 'name'，而非 'student_name'）
         cur.execute("SELECT id, name FROM student")
-        student_map = {row[0]: row[1] for row in cur.fetchall()}
+        # 如果表中字段是 'student_name'，请改为 'student_name'
+        students_map = {row[0]: row[1] for row in cur.fetchall()}
 
         cur.close()
         db.close()
@@ -1306,7 +1309,7 @@ def get_week_schedule():
             # 解析 student_ids 并获取姓名
             student_ids_str = row[9] or ''
             student_id_list = [int(x) for x in student_ids_str.split(',') if x]
-            student_names = [str(students_map.get(sid, '')) for sid in student_id_list if students_map.get(sid)]
+            student_names = [students_map.get(sid, '') for sid in student_id_list if students_map.get(sid)]
 
             week_schedule[weekday_idx][time_slot].append({
                 "id": row[0],
@@ -1315,7 +1318,7 @@ def get_week_schedule():
                 "place": row[5] or '',
                 "duration": float(row[7]) if row[7] else 2,
                 "status": row[6],
-                "students": student_names   # ← 关键字段
+                "students": student_names
             })
 
         return jsonify({"code": 200, "data": week_schedule})
