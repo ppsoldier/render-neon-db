@@ -1312,6 +1312,7 @@ def get_week_schedule():
                 student_ids = [int(x) for x in row[9].split(',') if x]
                 student_names = [students_map.get(sid, '') for sid in student_ids if students_map.get(sid)]
 
+            # 在 app.py 的 get_week_schedule 中
             week_schedule[weekday_idx][time_slot].append({
                 "id": row[0],
                 "subject": row[4] or '',
@@ -1319,8 +1320,8 @@ def get_week_schedule():
                 "place": row[5] or '',
                 "duration": float(row[7]) if row[7] else 2,
                 "status": row[6],
-                "student_ids": student_ids,
-                "students": student_names
+                "student_ids": student_id_list,
+                "students": student_names  # 这里是学生姓名数组，如 ["张三", "李四"]
             })
 
         return jsonify({"code": 200, "data": week_schedule})
