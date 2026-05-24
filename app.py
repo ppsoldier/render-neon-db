@@ -1287,12 +1287,12 @@ def schedule_detail(schedule_id):
 
 @app.route("/api/schedule/save", methods=["POST"])
 def schedule_save():
-    """保存排课"""
+    """保存排课 - 支持同一时间段多课程"""
     try:
         data = request.json
         print("=== 收到保存请求 ===")
         print(json.dumps(data, ensure_ascii=False))
-
+        
         subject = data.get('subject')
         teacher_id = data.get('teacher_id')
         student_ids = data.get('student_ids', '')
@@ -1300,71 +1300,55 @@ def schedule_save():
         class_date = data.get('date')
         class_time = data.get('time')
         duration = data.get('duration', 2)
-
+        
         if not subject:
             return jsonify({"code": 400, "msg": "课程名称不能为空"}), 400
         if not class_date:
             return jsonify({"code": 400, "msg": "日期不能为空"}), 400
         if not class_time:
             return jsonify({"code": 400, "msg": "时间不能为空"}), 400
-
+        
         if teacher_id:
             try:
                 teacher_id = int(teacher_id)
             except (ValueError, TypeError):
                 teacher_id = None
-
+        
         db = get_db()
         cur = db.cursor()
-
-        # 检查是否已存在
-        cur.execute("""
-            SELECT id FROM course_schedule
-            WHERE class_date = %s AND class_time = %s
-            AND (status IS NULL OR status != 'cancelled')
-        """, (class_date, class_time))
-
-        existing = cur.fetchone()
-
-        if existing:
-            cur.execute("""
-                UPDATE course_schedule 
-                SET subject = %s, teacher_id = %s, student_ids = %s, classroom = %s, duration = %s, status = 'scheduled'
-                WHERE id = %s
-            """, (subject, teacher_id, student_ids, classroom, duration, existing[0]))
-            msg = "更新成功"
-        else:
-            cur.execute("""
-                INSERT INTO course_schedule 
-                (subject, teacher_id, student_ids, classroom, class_date, class_time, duration, status)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, 'scheduled')
-                RETURNING id
-            """, (subject, teacher_id, student_ids, classroom, class_date, class_time, duration))
-            new_id = cur.fetchone()[0]
-            msg = f"添加成功，ID: {new_id}"        
         
-
+        # 重要：不再检查是否已存在，直接插入新课程
+        # 这样同一时间段可以有多门课程
+        cur.execute("""
+            INSERT INTO course_schedule 
+            (subject, teacher_id, student_ids, classroom, class_date, class_time, duration, status)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, 'scheduled')
+            RETURNING id
+        """, (subject, teacher_id, student_ids, classroom, class_date, class_time, duration))
+        
+        new_id = cur.fetchone()[0]
         db.commit()
-        print(f"数据库操作成功: {msg}")
-
+        
+        print(f"添加成功，新课程ID: {new_id}")
+        
         cur.close()
         db.close()
-
-        return jsonify({"code": 200, "msg": msg})
+        
+        return jsonify({"code": 200, "msg": "添加成功", "data": {"id": new_id}})
     except Exception as e:
         print(f"保存排课错误: {str(e)}")
+        import traceback
         traceback.print_exc()
         return jsonify({"code": 500, "msg": str(e)}), 500
 
-
 @app.route("/api/schedule/update", methods=["POST"])
 def schedule_update():
-    """更新排课信息"""
+    """更新排课信息 - 只更新指定ID的课程"""
     try:
         data = request.json
         print("=== 收到更新请求 ===")
         print(json.dumps(data, ensure_ascii=False))
-
+        
         schedule_id = data.get('id')
         subject = data.get('subject')
         teacher_id = data.get('teacher_id')
@@ -1373,32 +1357,33 @@ def schedule_update():
         class_date = data.get('date')
         class_time = data.get('time')
         duration = data.get('duration', 2)
-
+        
         if not schedule_id:
             return jsonify({"code": 400, "msg": "缺少课程ID"}), 400
-
+        
         if teacher_id:
             try:
                 teacher_id = int(teacher_id)
             except (ValueError, TypeError):
                 teacher_id = None
-
+        
         db = get_db()
         cur = db.cursor()
-
+        
+        # 只更新指定ID的课程，不影响同一时间段的其他课程
         cur.execute("""
             UPDATE course_schedule 
             SET subject = %s, teacher_id = %s, student_ids = %s, 
                 classroom = %s, class_date = %s, class_time = %s, duration = %s
             WHERE id = %s
         """, (subject, teacher_id, student_ids, classroom, class_date, class_time, duration, schedule_id))
-
+        
         db.commit()
         print(f"更新成功，ID: {schedule_id}")
-
+        
         cur.close()
         db.close()
-
+        
         return jsonify({"code": 200, "msg": "更新成功"})
     except Exception as e:
         print(f"更新排课错误: {str(e)}")
