@@ -1254,17 +1254,16 @@ def get_schedule_calendar():
 
 @app.route("/api/schedule/week", methods=["GET"])
 def get_week_schedule():
-    """获取周课表数据 - 每个时间段支持多课程"""
     try:
         start_date = request.args.get('start_date')
         end_date = request.args.get('end_date')
-        
         if not start_date or not end_date:
             return jsonify({"code": 400, "msg": "缺少日期参数"}), 400
-        
+
         db = get_db()
         cur = db.cursor()
-        
+
+        # 获取所有课程
         cur.execute("""
             SELECT 
                 s.id,
@@ -1283,37 +1282,32 @@ def get_week_schedule():
               AND (s.status IS NULL OR s.status != 'cancelled')
             ORDER BY s.class_date, s.class_time, s.id
         """, (start_date, end_date))
-        
-        data = cur.fetchall()
-        
-        # 获取学生名称映射
+
+        rows = cur.fetchall()
+
+        # 获取所有学生 ID -> 姓名 映射
         cur.execute("SELECT id, name FROM student")
-        students_map = {row[0]: row[1] for row in cur.fetchall()}
-        
+        student_map = {row[0]: row[1] for row in cur.fetchall()}
+
         cur.close()
         db.close()
-        
-        # 构建数据结构
+
         week_schedule = {}
-        for row in data:
+        for row in rows:
             weekday = int(row[2])
             weekday_idx = 6 if weekday == 0 else weekday - 1
             time_slot = row[3]
-            
+
             if weekday_idx not in week_schedule:
                 week_schedule[weekday_idx] = {}
-            
             if time_slot not in week_schedule[weekday_idx]:
                 week_schedule[weekday_idx][time_slot] = []
-            
-            # 解析学生ID列表，获取学生名称
-            student_names = []
-            student_id_list = []  # 定义变量
-            if row[9]:  # student_ids
-                student_id_list = [int(x) for x in row[9].split(',') if x]
-                student_names = [students_map.get(sid, '') for sid in student_id_list if students_map.get(sid)]
-            
-            # 添加到数组中
+
+            # 解析 student_ids 并获取姓名
+            student_ids_str = row[9] or ''
+            student_id_list = [int(x) for x in student_ids_str.split(',') if x]
+            student_names = [student_map.get(sid, '') for sid in student_id_list if student_map.get(sid)]
+
             week_schedule[weekday_idx][time_slot].append({
                 "id": row[0],
                 "subject": row[4] or '',
@@ -1321,16 +1315,18 @@ def get_week_schedule():
                 "place": row[5] or '',
                 "duration": float(row[7]) if row[7] else 2,
                 "status": row[6],
-                "student_ids": student_id_list,
-                "students": student_names
+                "students": student_names   # ← 关键字段
             })
-        
+
         return jsonify({"code": 200, "data": week_schedule})
     except Exception as e:
-        print(f"获取周课表错误: {str(e)}")
+        print(f"周课表错误: {str(e)}")
         import traceback
         traceback.print_exc()
         return jsonify({"code": 500, "msg": str(e)}), 500
+
+
+
 
 
 @app.route("/api/schedule/detail/<int:schedule_id>", methods=["GET"])
