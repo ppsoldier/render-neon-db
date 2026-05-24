@@ -1253,7 +1253,7 @@ def schedule_detail(schedule_id):
 
 @app.route("/api/schedule/save", methods=["POST"])
 def schedule_save():
-    """保存排课"""
+    """保存排课 - 支持同一时间段多课程"""
     try:
         data = request.json
         print("=== 收到保存请求 ===")
@@ -1283,39 +1283,23 @@ def schedule_save():
         db = get_db()
         cur = db.cursor()
         
-        # 检查是否已存在
+        # 不再检查冲突，直接插入新课程（支持同一时间段多课程）
         cur.execute("""
-            SELECT id FROM course_schedule
-            WHERE class_date = %s AND class_time = %s
-            AND (status IS NULL OR status != 'cancelled')
-        """, (class_date, class_time))
+            INSERT INTO course_schedule 
+            (subject, teacher_id, student_ids, classroom, class_date, class_time, duration, status)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, 'scheduled')
+            RETURNING id
+        """, (subject, teacher_id, student_ids, classroom, class_date, class_time, duration))
         
-        existing = cur.fetchone()
-        
-        if existing:
-            cur.execute("""
-                UPDATE course_schedule 
-                SET subject = %s, teacher_id = %s, student_ids = %s, classroom = %s, duration = %s, status = 'scheduled'
-                WHERE id = %s
-            """, (subject, teacher_id, student_ids, classroom, duration, existing[0]))
-            msg = "更新成功"
-        else:
-            cur.execute("""
-                INSERT INTO course_schedule 
-                (subject, teacher_id, student_ids, classroom, class_date, class_time, duration, status)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, 'scheduled')
-                RETURNING id
-            """, (subject, teacher_id, student_ids, classroom, class_date, class_time, duration))
-            new_id = cur.fetchone()[0]
-            msg = f"添加成功，ID: {new_id}"
-        
+        new_id = cur.fetchone()[0]
         db.commit()
-        print(f"数据库操作成功: {msg}")
+        
+        print(f"添加成功，新课程ID: {new_id}")
         
         cur.close()
         db.close()
         
-        return jsonify({"code": 200, "msg": msg})
+        return jsonify({"code": 200, "msg": "添加成功", "data": {"id": new_id}})
     except Exception as e:
         print(f"保存排课错误: {str(e)}")
         traceback.print_exc()
@@ -1350,6 +1334,7 @@ def schedule_update():
         db = get_db()
         cur = db.cursor()
         
+        # 更新指定ID的课程
         cur.execute("""
             UPDATE course_schedule 
             SET subject = %s, teacher_id = %s, student_ids = %s, 
@@ -1367,6 +1352,8 @@ def schedule_update():
     except Exception as e:
         print(f"更新排课错误: {str(e)}")
         return jsonify({"code": 500, "msg": str(e)}), 500
+
+
 
 @app.route("/api/schedule/delete", methods=["POST"])
 def schedule_delete():
