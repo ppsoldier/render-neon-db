@@ -313,6 +313,7 @@ def log_remind(schedule_id, remind_type, receiver_role, receiver_id, receiver_op
         db.commit()
         cur.close()
         db.close()
+        print(f"日志记录成功: {schedule_id} {status}")
     except Exception as e:
         print(f"记录提醒日志失败: {str(e)}")
 
@@ -2625,7 +2626,7 @@ def send_tomorrow_remind_internal():
                         "data": {
                             "date1": {"value": full_time_str},
                             "thing6": {"value": subject},
-                            "short_thing20": {"value": "教师"}
+                            "short_thing20": {"value": "老师好，明日请准时上课！"}
                         }
                     }
                     url = f"https://api.weixin.qq.com/cgi-bin/message/subscribe/send?access_token={access_token}"
@@ -2646,8 +2647,20 @@ def send_tomorrow_remind_internal():
                         response_data=json.dumps(result)
                     )
                     
+                    # 教师发送成功后
                     if result.get('errcode') == 0:
                         teacher_sent += 1
+                        # 添加日志
+                        log_remind(
+                            schedule_id=course_id,
+                            remind_type='before_class',
+                            receiver_role='teacher',
+                            receiver_id=teacher_user[1],
+                            receiver_openid=teacher_user[0],
+                            receiver_phone=None,
+                            content=f"课程提醒: {subject} {full_time_str}",
+                            status='success'
+                        )
             
             # ========== 发送给家长 ==========
             if student_ids_str:
@@ -2666,7 +2679,7 @@ def send_tomorrow_remind_internal():
                                 "data": {
                                     "date1": {"value": full_time_str},
                                     "thing6": {"value": subject},
-                                    "short_thing20": {"value": student[0]}
+                                    "short_thing20": {"value": student[0]+"同学，明日请准时上课！"}
                                 }
                             }
                             url = f"https://api.weixin.qq.com/cgi-bin/message/subscribe/send?access_token={access_token}"
@@ -2686,9 +2699,20 @@ def send_tomorrow_remind_internal():
                                 error_msg=result.get('errmsg') if result.get('errcode') != 0 else None,
                                 response_data=json.dumps(result)
                             )
-                            
+                            # 教师发送成功后
                             if result.get('errcode') == 0:
                                 parent_sent += 1
+                                # 添加日志
+                                log_remind(
+                                    schedule_id=course_id,
+                                    remind_type='before_class',
+                                    receiver_role='teacher',
+                                    receiver_id=teacher_user[1],
+                                    receiver_openid=teacher_user[0],
+                                    receiver_phone=None,
+                                    content=f"课程提醒: {subject} {full_time_str}",
+                                    status='success'
+                                )                            
         
         cur.close()
         db.close()
