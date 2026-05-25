@@ -3283,7 +3283,7 @@ def dashboard_stats():
             cur.execute("SELECT COUNT(*) FROM teacher")
             teacher_count = cur.fetchone()[0]
 
-        # 今日课程
+        # 今日课程数
         today = datetime.now().strftime("%Y-%m-%d")
         cur.execute("""
             SELECT COUNT(*) FROM course_schedule 
@@ -3292,13 +3292,14 @@ def dashboard_stats():
         """, (today,))
         today_classes = cur.fetchone()[0]
 
-        # 剩余总课时
-        try:
-            cur.execute("SELECT COALESCE(SUM(surplus), 0) FROM course_package WHERE status='active'")
-            total_surplus = cur.fetchone()[0] or 0
-        except Exception:
-            cur.execute("SELECT COALESCE(SUM(surplus), 0) FROM course_package")
-            total_surplus = cur.fetchone()[0] or 0
+        # 待确认课程数 (所有未完成且未取消的课程，日期<=今天)
+        cur.execute("""
+            SELECT COUNT(*) FROM course_schedule 
+            WHERE class_date <= %s
+              AND (status IS NULL OR status = 'scheduled')
+              AND status != 'cancelled'
+        """, (today,))
+        pending_classes = cur.fetchone()[0]
 
         cur.close()
         db.close()
@@ -3307,7 +3308,7 @@ def dashboard_stats():
             "student_count": student_count,
             "teacher_count": teacher_count,
             "today_classes": today_classes,
-            "total_surplus_hours": float(total_surplus)
+            "pending_classes": pending_classes   # 替换原来的 total_surplus_hours
         }})
     except Exception as e:
         print(f"仪表盘错误: {str(e)}")
@@ -3315,7 +3316,7 @@ def dashboard_stats():
             "student_count": 0,
             "teacher_count": 0,
             "today_classes": 0,
-            "total_surplus_hours": 0
+            "pending_classes": 0
         }})
 
 
