@@ -637,7 +637,7 @@ def test_confirm():
     return jsonify(result)
     
 @app.route("/api/remind/test-remind", methods=["GET"])
-def test_confirm():
+def test_remind():
     """手动测试课前上课提醒"""
     result = send_tomorrow_remind_internal()
     return jsonify(result)
