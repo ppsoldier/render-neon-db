@@ -15,6 +15,7 @@ from apscheduler.triggers.cron import CronTrigger
 
 
 scheduler = None
+
 # 获取北京时间
 def get_beijing_time():
     return datetime.utcnow() + timedelta(hours=8)
@@ -301,7 +302,6 @@ def log_remind(schedule_id, remind_type, receiver_role, receiver_id, receiver_op
                receiver_phone, content, status, error_msg=None, response_data=None):
     """记录提醒日志"""
     try:
-        print(f"调用 log_remind: schedule_id={schedule_id}")
         db = get_db()
         cur = db.cursor()
         cur.execute("""
@@ -314,9 +314,9 @@ def log_remind(schedule_id, remind_type, receiver_role, receiver_id, receiver_op
         db.commit()
         cur.close()
         db.close()
-        print(f"日志记录成功: {schedule_id} {status}")
+        print(f"✅ 日志记录成功: {schedule_id} {status}")
     except Exception as e:
-        print(f"记录提醒日志失败: {str(e)}")
+        print(f"❌ 记录提醒日志失败: {str(e)}")
 
 
 
@@ -581,10 +581,7 @@ def set_config():
     return jsonify({"code": 200, "msg": "保存成功"})
 
 
-# from apscheduler.schedulers.background import BackgroundScheduler
-# from apscheduler.triggers.cron import CronTrigger
 
-scheduler = None
 
 def init_scheduler():
     """初始化定时任务（从数据库读取时间）"""
@@ -2916,6 +2913,8 @@ def send_today_confirm_internal():
         today = db_today.strftime("%Y-%m-%d")
         formatted_date = db_today.strftime("%Y年%m月%d日")
         
+        print(f"[课后确认] 查询日期: {today}")
+        
         cur.execute("""
             SELECT 
                 cs.id,
@@ -2929,6 +2928,7 @@ def send_today_confirm_internal():
         """, (today,))
         
         courses = cur.fetchall()
+        print(f"[课后确认] 找到 {len(courses)} 门待确认课程")
         
         if not courses:
             cur.close()
@@ -2982,7 +2982,7 @@ def send_today_confirm_internal():
                 "data": {
                     "thing1": {"value": subject},
                     "time3": {"value": full_time_str},
-                    "thing5": {"value": students_str+"请进系统确认！"}
+                    "thing5": {"value": students_str + " 请进系统确认！"}
                 },
                 "miniprogram": {
                     "appid": WECHAT_APP_ID,
@@ -2994,19 +2994,24 @@ def send_today_confirm_internal():
             response = requests.post(url, json=send_data, timeout=10)
             result = response.json()
             
+            print(f"[课后确认] 课程 {subject} 发送结果: {result}")
+            
             # 记录日志
-            log_remind(
-                schedule_id=course_id,
-                remind_type='after_class',
-                receiver_role='admin',
-                receiver_id=admin_id,
-                receiver_openid=admin_openid,
-                receiver_phone=None,
-                content=f"课程确认提醒: {subject} {full_time_str} 学生: {students_str}",
-                status='success' if result.get('errcode') == 0 else 'failed',
-                error_msg=result.get('errmsg') if result.get('errcode') != 0 else None,
-                response_data=json.dumps(result)
-            )
+            try:
+                log_remind(
+                    schedule_id=course_id,
+                    remind_type='after_class',
+                    receiver_role='admin',
+                    receiver_id=admin_id,
+                    receiver_openid=admin_openid,
+                    receiver_phone=None,
+                    content=f"课程确认提醒: {subject} {full_time_str} 学生: {students_str}",
+                    status='success' if result.get('errcode') == 0 else 'failed',
+                    error_msg=result.get('errmsg') if result.get('errcode') != 0 else None,
+                    response_data=json.dumps(result)
+                )
+            except Exception as log_err:
+                print(f"[课后确认] 记录日志失败: {log_err}")
             
             if result.get('errcode') == 0:
                 confirm_count += 1
@@ -3021,6 +3026,8 @@ def send_today_confirm_internal():
         }
     except Exception as e:
         print(f"课后确认提醒发送错误: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return {"code": 500, "msg": str(e)}
 
 
