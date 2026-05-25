@@ -8,8 +8,13 @@ import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 import json
 import traceback
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 
+
+
+scheduler = None
 # 获取北京时间
 def get_beijing_time():
     return datetime.utcnow() + timedelta(hours=8)
@@ -529,11 +534,10 @@ def set_config():
     return jsonify({"code": 200, "msg": "保存成功"})
 
 
-from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.cron import CronTrigger
+# from apscheduler.schedulers.background import BackgroundScheduler
+# from apscheduler.triggers.cron import CronTrigger
 
 scheduler = None
-
 
 def init_scheduler():
     """初始化定时任务（从数据库读取时间）"""
@@ -2898,12 +2902,12 @@ def start_scheduler():
     )
 
     # 每天晚上 23:50 自动确认当天的课程
-    scheduler.add_job(
-        func=auto_confirm_today_courses,
-        trigger=CronTrigger(hour=23, minute=50, timezone='Asia/Shanghai'),
-        id='auto_confirm',
-        replace_existing=True
-    )
+    # scheduler.add_job(
+    #     func=auto_confirm_today_courses,
+    #     trigger=CronTrigger(hour=23, minute=50, timezone='Asia/Shanghai'),
+    #     id='auto_confirm',
+    #     replace_existing=True
+    # )
 
     scheduler.start()
     print("定时任务已启动")
@@ -3640,7 +3644,8 @@ def export_attendance_record():
 
 # ------------------- 启动应用 -------------------
 if __name__ == "__main__":
+     # 启动定时任务
+    start_scheduler()
     port = int(os.getenv("PORT", 8080))
     app.run(host="0.0.0.0", port=port, debug=False)
-    # 启动定时任务
-    start_scheduler()
+   
