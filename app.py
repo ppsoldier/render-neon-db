@@ -297,6 +297,25 @@ def login():
         traceback.print_exc()
         return jsonify({"code": 500, "msg": str(e)}), 500
 
+def log_remind(schedule_id, remind_type, receiver_role, receiver_id, receiver_openid, 
+               receiver_phone, content, status, error_msg=None, response_data=None):
+    """记录提醒日志"""
+    try:
+        db = get_db()
+        cur = db.cursor()
+        cur.execute("""
+            INSERT INTO remind_log 
+            (schedule_id, remind_type, receiver_role, receiver_id, receiver_openid, 
+             receiver_phone, content, status, error_msg, response_data, send_time)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+        """, (schedule_id, remind_type, receiver_role, receiver_id, receiver_openid,
+              receiver_phone, content, status, error_msg, response_data))
+        db.commit()
+        cur.close()
+        db.close()
+    except Exception as e:
+        print(f"记录提醒日志失败: {str(e)}")
+
 
 
 
@@ -2544,57 +2563,61 @@ def scheduled_send_remind():
 
 
 def send_tomorrow_remind_internal():
+    """内部发送明日课程提醒（给教师和家长）"""
     try:
         beijing_now = datetime.utcnow() + timedelta(hours=8)
         tomorrow = (beijing_now + timedelta(days=1)).strftime("%Y-%m-%d")
         formatted_date = beijing_now.strftime("%Y年%m月%d日")
-
+        
         db = get_db()
         cur = db.cursor()
-
+        
         cur.execute("""
             SELECT 
                 cs.id,
                 cs.class_time,
                 cs.subject,
+                cs.classroom,
                 cs.teacher_id,
                 cs.student_ids
             FROM course_schedule cs
             WHERE cs.class_date = %s
               AND (cs.status IS NULL OR cs.status != 'cancelled')
         """, (tomorrow,))
-
+        
         courses = cur.fetchall()
+        
         if not courses:
             cur.close()
             db.close()
             return {"code": 200, "msg": "明天没有课程", "count": 0}
-
+        
         access_token = get_access_token()
         if not access_token:
             cur.close()
             db.close()
             return {"code": 500, "msg": "获取access_token失败"}
-
+        
         TEMPLATE_USER = "hEY6ukiBlTm79MQ4GL0heVpS0YDcHaiVWZAz3StSj0s"
-
+        
         parent_sent = 0
         teacher_sent = 0
-
+        
         for course in courses:
+            course_id = course[0]
             class_time = course[1]
             subject = course[2] or '课程'
-            teacher_id = course[3]
-            student_ids_str = course[4] or ''
-
+            teacher_id = course[4]
+            student_ids_str = course[5] or ''
+            
             start_time = class_time.split('-')[0] if class_time else "09:00"
             full_time_str = f"{formatted_date} {start_time}"
-
-            # ========== 教师 ==========
+            
+            # ========== 发送给教师 ==========
             if teacher_id:
-                cur.execute("SELECT openid FROM \"user\" WHERE teacher_id = %s AND openid IS NOT NULL", (teacher_id,))
+                cur.execute("SELECT u.openid, u.id, u.name FROM \"user\" u WHERE u.teacher_id = %s AND u.openid IS NOT NULL", (teacher_id,))
                 teacher_user = cur.fetchone()
-                print(f"[教师查询] teacher_id={teacher_id}, result={teacher_user}")
+                
                 if teacher_user and teacher_user[0]:
                     send_data = {
                         "touser": teacher_user[0],
@@ -2608,23 +2631,34 @@ def send_tomorrow_remind_internal():
                     url = f"https://api.weixin.qq.com/cgi-bin/message/subscribe/send?access_token={access_token}"
                     response = requests.post(url, json=send_data, timeout=10)
                     result = response.json()
-                    print(f"[教师发送结果] {result}")
+                    
+                    # 记录日志
+                    log_remind(
+                        schedule_id=course_id,
+                        remind_type='before_class',
+                        receiver_role='teacher',
+                        receiver_id=teacher_user[1],
+                        receiver_openid=teacher_user[0],
+                        receiver_phone=None,
+                        content=f"课程提醒: {subject} {full_time_str}",
+                        status='success' if result.get('errcode') == 0 else 'failed',
+                        error_msg=result.get('errmsg') if result.get('errcode') != 0 else None,
+                        response_data=json.dumps(result)
+                    )
+                    
                     if result.get('errcode') == 0:
                         teacher_sent += 1
-                    elif result.get('errcode') == 43101:
-                        print("[教师] 用户未订阅模板")
-
-            # ========== 家长 ==========
+            
+            # ========== 发送给家长 ==========
             if student_ids_str:
                 student_ids = [int(x) for x in student_ids_str.split(',') if x]
                 for sid in student_ids:
-                    cur.execute("SELECT name, parent_phone FROM student WHERE id = %s", (sid,))
+                    cur.execute("SELECT s.name, s.parent_phone FROM student s WHERE s.id = %s", (sid,))
                     student = cur.fetchone()
                     if student and student[1]:
-                        cur.execute("SELECT openid FROM \"user\" WHERE phone = %s AND openid IS NOT NULL",
-                                    (student[1],))
+                        cur.execute("SELECT u.openid, u.id, u.name FROM \"user\" u WHERE u.phone = %s AND u.openid IS NOT NULL", (student[1],))
                         parent_user = cur.fetchone()
-                        print(f"[家长查询] student={student[0]}, phone={student[1]}, openid={parent_user}")
+                        
                         if parent_user and parent_user[0]:
                             send_data = {
                                 "touser": parent_user[0],
@@ -2638,14 +2672,27 @@ def send_tomorrow_remind_internal():
                             url = f"https://api.weixin.qq.com/cgi-bin/message/subscribe/send?access_token={access_token}"
                             response = requests.post(url, json=send_data, timeout=10)
                             result = response.json()
-                            print(f"[家长发送结果] {result}")
+                            
+                            # 记录日志
+                            log_remind(
+                                schedule_id=course_id,
+                                remind_type='before_class',
+                                receiver_role='parent',
+                                receiver_id=parent_user[1],
+                                receiver_openid=parent_user[0],
+                                receiver_phone=student[1],
+                                content=f"学生{student[0]}的课程提醒: {subject} {full_time_str}",
+                                status='success' if result.get('errcode') == 0 else 'failed',
+                                error_msg=result.get('errmsg') if result.get('errcode') != 0 else None,
+                                response_data=json.dumps(result)
+                            )
+                            
                             if result.get('errcode') == 0:
                                 parent_sent += 1
-                            elif result.get('errcode') == 43101:
-                                print(f"[家长] {student[0]}未订阅模板")
-
+        
         cur.close()
         db.close()
+        
         return {
             "code": 200,
             "msg": f"课前提醒发送完成：教师{teacher_sent}人，家长{parent_sent}人",
@@ -2653,10 +2700,13 @@ def send_tomorrow_remind_internal():
             "parent_sent": parent_sent
         }
     except Exception as e:
-        print(f"课前提醒错误: {str(e)}")
+        print(f"课前提醒发送错误: {str(e)}")
         import traceback
         traceback.print_exc()
         return {"code": 500, "msg": str(e)}
+
+
+
 
 
 # 启动定时任务
@@ -2803,16 +2853,16 @@ def send_tomorrow_remind_internal():
 
 
 def send_today_confirm_internal():
-    """发送今日课程确认提醒（带确认链接）"""
+    """内部发送今日课程确认提醒（给管理员）"""
     try:
         db = get_db()
         cur = db.cursor()
-
+        
         cur.execute("SELECT CURRENT_DATE")
         db_today = cur.fetchone()[0]
         today = db_today.strftime("%Y-%m-%d")
         formatted_date = db_today.strftime("%Y年%m月%d日")
-
+        
         cur.execute("""
             SELECT 
                 cs.id,
@@ -2823,45 +2873,45 @@ def send_today_confirm_internal():
             FROM course_schedule cs
             WHERE cs.class_date = %s
               AND (cs.status IS NULL OR cs.status = 'scheduled')
-            ORDER BY cs.class_time
         """, (today,))
-
+        
         courses = cur.fetchall()
-
+        
         if not courses:
             cur.close()
             db.close()
             return {"code": 200, "msg": "今天没有待确认的课程", "count": 0}
-
+        
         access_token = get_access_token()
         if not access_token:
             cur.close()
             db.close()
             return {"code": 500, "msg": "获取access_token失败"}
-
-        TEMPLATE_ADMIN = "hEY6ukiBlTm79MQ4GL0heVpS0YDcHaiVWZAz3StSj0s"
-
+        
+        TEMPLATE_ADMIN = "qsPScuGxWPjB69boSJvaIleKJFSLJl-d6NRTLypPuYo"
+        
         # 获取管理员openid
-        cur.execute("SELECT openid FROM \"user\" WHERE role = 'admin' AND openid IS NOT NULL LIMIT 1")
+        cur.execute("SELECT u.openid, u.id, u.name FROM \"user\" u WHERE u.role = 'admin' AND u.openid IS NOT NULL LIMIT 1")
         admin_user = cur.fetchone()
-
+        
         if not admin_user or not admin_user[0]:
             cur.close()
             db.close()
             return {"code": 500, "msg": "未找到管理员"}
-
+        
         admin_openid = admin_user[0]
+        admin_id = admin_user[1]
         confirm_count = 0
-
+        
         for course in courses:
             course_id = course[0]
             class_time = course[1]
             subject = course[2] or '课程'
             student_ids_str = course[4] or ''
-
+            
             start_time = class_time.split('-')[0] if class_time else "09:00"
             full_time_str = f"{formatted_date} {start_time}"
-
+            
             # 获取学生名称
             student_names = []
             if student_ids_str:
@@ -2872,31 +2922,45 @@ def send_today_confirm_internal():
                     if student:
                         student_names.append(student[0])
             students_str = '、'.join(student_names) if student_names else '集体课'
-
-            # 发送带确认链接的消息
+            
             send_data = {
                 "touser": admin_openid,
                 "template_id": TEMPLATE_ADMIN,
                 "data": {
-                    "date1": {"value": full_time_str},
-                    "thing6": {"value": subject},
-                    "short_thing20": {"value": students_str}
+                    "thing1": {"value": subject},
+                    "time3": {"value": full_time_str},
+                    "thing5": {"value": students_str}
                 },
                 "miniprogram": {
                     "appid": WECHAT_APP_ID,
                     "pagepath": f"pages/schedule/calendar/calendar?confirm_id={course_id}"
                 }
             }
-
+            
             url = f"https://api.weixin.qq.com/cgi-bin/message/subscribe/send?access_token={access_token}"
             response = requests.post(url, json=send_data, timeout=10)
             result = response.json()
+            
+            # 记录日志
+            log_remind(
+                schedule_id=course_id,
+                remind_type='after_class',
+                receiver_role='admin',
+                receiver_id=admin_id,
+                receiver_openid=admin_openid,
+                receiver_phone=None,
+                content=f"课程确认提醒: {subject} {full_time_str} 学生: {students_str}",
+                status='success' if result.get('errcode') == 0 else 'failed',
+                error_msg=result.get('errmsg') if result.get('errcode') != 0 else None,
+                response_data=json.dumps(result)
+            )
+            
             if result.get('errcode') == 0:
                 confirm_count += 1
-
+        
         cur.close()
         db.close()
-
+        
         return {
             "code": 200,
             "msg": f"课后确认提醒发送完成：{confirm_count} 条",
@@ -2905,6 +2969,9 @@ def send_today_confirm_internal():
     except Exception as e:
         print(f"课后确认提醒发送错误: {str(e)}")
         return {"code": 500, "msg": str(e)}
+
+
+
 
 
 # 在 start_scheduler 中添加自动确认任务
