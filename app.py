@@ -2632,7 +2632,9 @@ def send_tomorrow_remind_internal():
                     response = requests.post(url, json=send_data, timeout=10)
                     result = response.json()
                     
-                    # 记录日志
+                    is_success = (result.get('errcode') == 0)
+                    
+                    # 记录日志（一次性）
                     log_remind(
                         schedule_id=course_id,
                         remind_type='before_class',
@@ -2641,39 +2643,13 @@ def send_tomorrow_remind_internal():
                         receiver_openid=teacher_user[0],
                         receiver_phone=None,
                         content=f"课程提醒: {subject} {full_time_str}",
-                        status='success' if result.get('errcode') == 0 else 'failed',
-                        error_msg=result.get('errmsg') if result.get('errcode') != 0 else None,
+                        status='success' if is_success else 'failed',
+                        error_msg=result.get('errmsg') if not is_success else None,
                         response_data=json.dumps(result)
                     )
                     
-                    # 教师发送成功后
-                    if result.get('errcode') == 0:
+                    if is_success:
                         teacher_sent += 1
-                        # 添加日志记录
-                        log_remind(
-                            schedule_id=course_id,
-                            remind_type='before_class',
-                            receiver_role='teacher',
-                            receiver_id=teacher_user[1],
-                            receiver_openid=teacher_user[0],
-                            receiver_phone=None,
-                            content=f"课程提醒: {subject} {full_time_str}",
-                            status='success'
-                        )
-                    else:
-                        # 失败也记录
-                        log_remind(
-                            schedule_id=course_id,
-                            remind_type='before_class',
-                            receiver_role='teacher',
-                            receiver_id=teacher_user[1] if teacher_user else None,
-                            receiver_openid=teacher_user[0] if teacher_user else None,
-                            receiver_phone=None,
-                            content=f"课程提醒: {subject} {full_time_str}",
-                            status='failed',
-                            error_msg=result.get('errmsg')
-                        )
-                    
             
             # ========== 发送给家长 ==========
             if student_ids_str:
@@ -2692,14 +2668,16 @@ def send_tomorrow_remind_internal():
                                 "data": {
                                     "date1": {"value": full_time_str},
                                     "thing6": {"value": subject},
-                                    "short_thing20": {"value": student[0]+"同学，明日请准时上课！"}
+                                    "short_thing20": {"value": f"{student[0]}同学，明日请准时上课！"}
                                 }
                             }
                             url = f"https://api.weixin.qq.com/cgi-bin/message/subscribe/send?access_token={access_token}"
                             response = requests.post(url, json=send_data, timeout=10)
                             result = response.json()
                             
-                            # 记录日志
+                            is_success = (result.get('errcode') == 0)
+                            
+                            # 记录日志（一次性）
                             log_remind(
                                 schedule_id=course_id,
                                 remind_type='before_class',
@@ -2708,37 +2686,13 @@ def send_tomorrow_remind_internal():
                                 receiver_openid=parent_user[0],
                                 receiver_phone=student[1],
                                 content=f"学生{student[0]}的课程提醒: {subject} {full_time_str}",
-                                status='success' if result.get('errcode') == 0 else 'failed',
-                                error_msg=result.get('errmsg') if result.get('errcode') != 0 else None,
+                                status='success' if is_success else 'failed',
+                                error_msg=result.get('errmsg') if not is_success else None,
                                 response_data=json.dumps(result)
                             )
-                            # 家长发送成功后
-                            if result.get('errcode') == 0:
+                            
+                            if is_success:
                                 parent_sent += 1
-                                # 添加日志记录
-                                log_remind(
-                                    schedule_id=course_id,
-                                    remind_type='before_class',
-                                    receiver_role='parent',
-                                    receiver_id=parent_user[1],
-                                    receiver_openid=parent_user[0],
-                                    receiver_phone=None,
-                                    content=f"课程提醒: {subject} {full_time_str}",
-                                    status='success'
-                                )
-                            else:
-                                # 失败也记录
-                                log_remind(
-                                    schedule_id=course_id,
-                                    remind_type='before_class',
-                                    receiver_role='parent',
-                                    receiver_id=parent_user[1] if parent_user else None,
-                                    receiver_openid=parent_user[0] if parent_user else None,
-                                    receiver_phone=None,
-                                    content=f"课程提醒: {subject} {full_time_str}",
-                                    status='failed',
-                                    error_msg=result.get('errmsg')
-                                )                   
         
         cur.close()
         db.close()
@@ -2754,7 +2708,6 @@ def send_tomorrow_remind_internal():
         import traceback
         traceback.print_exc()
         return {"code": 500, "msg": str(e)}
-
 
 
 
