@@ -3127,10 +3127,10 @@ def schedule_list():
     try:
         start_date = request.args.get('start_date')
         end_date = request.args.get('end_date')
-
+        
         db = get_db()
         cur = db.cursor()
-
+        
         sql = """
             SELECT 
                 cs.id,
@@ -3139,29 +3139,38 @@ def schedule_list():
                 cs.subject,
                 cs.classroom,
                 cs.status,
-                t.name as teacher_name
+                t.name as teacher_name,
+                cs.student_ids
             FROM course_schedule cs
             LEFT JOIN teacher t ON cs.teacher_id = t.id
             WHERE 1=1
         """
         params = []
-
+        
         if start_date:
             sql += " AND cs.class_date >= %s"
             params.append(start_date)
         if end_date:
             sql += " AND cs.class_date <= %s"
             params.append(end_date)
-
+        
         sql += " ORDER BY cs.class_date DESC, cs.class_time"
-
+        
         cur.execute(sql, params)
-        data = cur.fetchall()
+        rows = cur.fetchall()
+        
+        # 获取学生名称映射
+        cur.execute("SELECT id, name FROM student")
+        student_map = {row[0]: row[1] for row in cur.fetchall()}
+        
         cur.close()
         db.close()
-
+        
         result = []
-        for row in data:
+        for row in rows:
+            student_ids_str = row[7] or ''
+            student_ids = [int(x) for x in student_ids_str.split(',') if x]
+            student_names = [student_map.get(sid, '') for sid in student_ids if student_map.get(sid)]
             result.append({
                 "id": row[0],
                 "class_date": str(row[1]),
@@ -3169,14 +3178,15 @@ def schedule_list():
                 "subject": row[3] or '',
                 "classroom": row[4] or '',
                 "status": row[5] or 'scheduled',
-                "teacher_name": row[6] or '待分配'
+                "teacher_name": row[6] or '待分配',
+                "students": student_names,
+                "student_count": len(student_names)
             })
-
+        
         return jsonify({"code": 200, "data": result})
     except Exception as e:
         print(f"获取排课列表错误: {str(e)}")
         return jsonify({"code": 500, "msg": str(e)}), 500
-
 
 @app.route("/api/schedule/auto-confirm", methods=["POST"])
 def auto_confirm_courses():
