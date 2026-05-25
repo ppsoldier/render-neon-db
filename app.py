@@ -10,7 +10,7 @@ import json
 import traceback
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
-
+from datetime import datetime, timedelta
 
 
 
@@ -2552,9 +2552,9 @@ def test_env():
 
 # ==================== 定时任务模块 ====================
 
-from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.cron import CronTrigger
-
+# from apscheduler.schedulers.background import BackgroundScheduler
+# from apscheduler.triggers.cron import CronTrigger
+# from datetime import datetime, timedelta
 
 # 定时发送提醒函数
 def scheduled_send_remind():
@@ -2633,7 +2633,7 @@ def send_tomorrow_remind_internal():
                         "data": {
                             "date1": {"value": full_time_str},
                             "thing6": {"value": subject},
-                            "short_thing20": {"value": "老师,请准时上课"}
+                            "short_thing20": {"value": "请按时上课！"}
                         }
                     }
                     url = f"https://api.weixin.qq.com/cgi-bin/message/subscribe/send?access_token={access_token}"
@@ -2676,7 +2676,7 @@ def send_tomorrow_remind_internal():
                                 "data": {
                                     "date1": {"value": full_time_str},
                                     "thing6": {"value": subject},
-                                    "short_thing20": {"value": f"{student[0]},请准时上课"}
+                                    "short_thing20": {"value": student[0]}
                                 }
                             }
                             url = f"https://api.weixin.qq.com/cgi-bin/message/subscribe/send?access_token={access_token}"
@@ -2720,36 +2720,36 @@ def send_tomorrow_remind_internal():
 
 
 
-# 启动定时任务
-# ==================== 定时任务模块 ====================
+# # 启动定时任务
+# # ==================== 定时任务模块 ====================
 
-from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.cron import CronTrigger
-from datetime import datetime, timedelta
-
-
-# 定时发送明日课程提醒（给教师和家长）
-def scheduled_send_remind():
-    """定时发送明天的课程提醒"""
-    with app.app_context():
-        print(f"[定时任务-课前提醒] 开始执行 - {datetime.now()}")
-        try:
-            result = send_tomorrow_remind_internal()
-            print(f"[定时任务-课前提醒] 执行结果: {result.get('msg', '未知')}")
-        except Exception as e:
-            print(f"[定时任务-课前提醒] 执行错误: {str(e)}")
+# from apscheduler.schedulers.background import BackgroundScheduler
+# from apscheduler.triggers.cron import CronTrigger
+# from datetime import datetime, timedelta
 
 
-# 定时发送今日课程确认提醒（给管理员）
-def scheduled_send_confirm():
-    """定时发送今日课程确认提醒"""
-    with app.app_context():
-        print(f"[定时任务-课后确认] 开始执行 - {datetime.now()}")
-        try:
-            result = send_today_confirm_internal()
-            print(f"[定时任务-课后确认] 执行结果: {result.get('msg', '未知')}")
-        except Exception as e:
-            print(f"[定时任务-课后确认] 执行错误: {str(e)}")
+# # 定时发送明日课程提醒（给教师和家长）
+# def scheduled_send_remind():
+#     """定时发送明天的课程提醒"""
+#     with app.app_context():
+#         print(f"[定时任务-课前提醒] 开始执行 - {datetime.now()}")
+#         try:
+#             result = send_tomorrow_remind_internal()
+#             print(f"[定时任务-课前提醒] 执行结果: {result.get('msg', '未知')}")
+#         except Exception as e:
+#             print(f"[定时任务-课前提醒] 执行错误: {str(e)}")
+
+
+# # 定时发送今日课程确认提醒（给管理员）
+# def scheduled_send_confirm():
+#     """定时发送今日课程确认提醒"""
+#     with app.app_context():
+#         print(f"[定时任务-课后确认] 开始执行 - {datetime.now()}")
+#         try:
+#             result = send_today_confirm_internal()
+#             print(f"[定时任务-课后确认] 执行结果: {result.get('msg', '未知')}")
+#         except Exception as e:
+#             print(f"[定时任务-课后确认] 执行错误: {str(e)}")
 
 
 # def send_tomorrow_remind_internal():
