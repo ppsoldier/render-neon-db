@@ -235,7 +235,40 @@ def init_db():
         return jsonify({"code": 500, "msg": f"初始化失败: {str(e)}"}), 500
 
 
+@app.route("/api/login", methods=["POST"])
+def login():
+    """用户登录"""
+    try:
+        data = request.get_json()
+        phone = data.get('phone')
+        password = data.get('password')
 
+        if not phone or not password:
+            return jsonify({"code": 400, "msg": "手机号和密码不能为空"}), 400
+
+        db = get_db()  # 使用您项目中已有的数据库连接函数
+        cur = db.cursor()
+
+        # 注意表名 "user" 需要用双引号包裹（因为 user 是 PostgreSQL 保留字）
+        cur.execute('SELECT id, name, role FROM "user" WHERE phone = %s AND password = %s', (phone, password))
+        user = cur.fetchone()
+        cur.close()
+        db.close()
+
+        if user:
+            return jsonify({
+                "code": 200,
+                "data": {
+                    "id": user[0],
+                    "name": user[1],
+                    "role": user[2]
+                }
+            })
+        else:
+            return jsonify({"code": 403, "msg": "账号或密码错误"}), 403
+    except Exception as e:
+        print(f"登录错误: {str(e)}")
+        return jsonify({"code": 500, "msg": str(e)}), 500
 
 # ==================== 用户管理模块（完整版）====================
 
