@@ -2652,7 +2652,7 @@ def send_tomorrow_remind_internal():
                     # 教师发送成功后
                     if result.get('errcode') == 0:
                         teacher_sent += 1
-                        # 添加日志
+                        # 添加日志记录
                         log_remind(
                             schedule_id=course_id,
                             remind_type='before_class',
@@ -2663,6 +2663,20 @@ def send_tomorrow_remind_internal():
                             content=f"课程提醒: {subject} {full_time_str}",
                             status='success'
                         )
+                    else:
+                        # 失败也记录
+                        log_remind(
+                            schedule_id=course_id,
+                            remind_type='before_class',
+                            receiver_role='teacher',
+                            receiver_id=teacher_user[1] if teacher_user else None,
+                            receiver_openid=teacher_user[0] if teacher_user else None,
+                            receiver_phone=None,
+                            content=f"课程提醒: {subject} {full_time_str}",
+                            status='failed',
+                            error_msg=result.get('errmsg')
+                        )
+                    
             
             # ========== 发送给家长 ==========
             if student_ids_str:
@@ -2701,20 +2715,33 @@ def send_tomorrow_remind_internal():
                                 error_msg=result.get('errmsg') if result.get('errcode') != 0 else None,
                                 response_data=json.dumps(result)
                             )
-                            # 教师发送成功后
+                            # 家长发送成功后
                             if result.get('errcode') == 0:
                                 parent_sent += 1
-                                # 添加日志
+                                # 添加日志记录
                                 log_remind(
                                     schedule_id=course_id,
                                     remind_type='before_class',
-                                    receiver_role='teacher',
-                                    receiver_id=teacher_user[1],
-                                    receiver_openid=teacher_user[0],
+                                    receiver_role='parent',
+                                    receiver_id=parent_user[1],
+                                    receiver_openid=parent_user[0],
                                     receiver_phone=None,
                                     content=f"课程提醒: {subject} {full_time_str}",
                                     status='success'
-                                )                            
+                                )
+                            else:
+                                # 失败也记录
+                                log_remind(
+                                    schedule_id=course_id,
+                                    remind_type='before_class',
+                                    receiver_role='parent',
+                                    receiver_id=parent_user[1] if parent_user else None,
+                                    receiver_openid=parent_user[0] if parent_user else None,
+                                    receiver_phone=None,
+                                    content=f"课程提醒: {subject} {full_time_str}",
+                                    status='failed',
+                                    error_msg=result.get('errmsg')
+                                )                   
         
         cur.close()
         db.close()
@@ -2955,7 +2982,7 @@ def send_today_confirm_internal():
                 "data": {
                     "thing1": {"value": subject},
                     "time3": {"value": full_time_str},
-                    "thing5": {"value": students_str}
+                    "thing5": {"value": students_str+"请进系统确认！"}
                 },
                 "miniprogram": {
                     "appid": WECHAT_APP_ID,
@@ -3032,39 +3059,39 @@ def start_scheduler():
     print("定时任务已启动")
 
 
-def auto_confirm_today_courses():
-    """自动确认当天已结束的课程"""
-    with app.app_context():
-        print(f"[自动确认] 开始执行 - {datetime.now()}")
-        try:
-            db = get_db()
-            cur = db.cursor()
+# def auto_confirm_today_courses():
+#     """自动确认当天已结束的课程"""
+#     with app.app_context():
+#         print(f"[自动确认] 开始执行 - {datetime.now()}")
+#         try:
+#             db = get_db()
+#             cur = db.cursor()
 
-            # 获取今天的日期
-            beijing_now = get_beijing_time()
-            today = beijing_now.strftime("%Y-%m-%d")
+#             # 获取今天的日期
+#             beijing_now = get_beijing_time()
+#             today = beijing_now.strftime("%Y-%m-%d")
 
-            # 获取当前时间
-            current_time = beijing_now.strftime("%H:%M")
+#             # 获取当前时间
+#             current_time = beijing_now.strftime("%H:%M")
 
-            # 自动确认今天开始时间已过的课程
-            cur.execute("""
-                UPDATE course_schedule 
-                SET status = 'completed' 
-                WHERE class_date = %s
-                  AND class_time <= %s
-                  AND (status IS NULL OR status != 'completed')
-                  AND status != 'cancelled'
-            """, (today, current_time))
+#             # 自动确认今天开始时间已过的课程
+#             cur.execute("""
+#                 UPDATE course_schedule 
+#                 SET status = 'completed' 
+#                 WHERE class_date = %s
+#                   AND class_time <= %s
+#                   AND (status IS NULL OR status != 'completed')
+#                   AND status != 'cancelled'
+#             """, (today, current_time))
 
-            updated_count = cur.rowcount
-            db.commit()
-            cur.close()
-            db.close()
+#             updated_count = cur.rowcount
+#             db.commit()
+#             cur.close()
+#             db.close()
 
-            print(f"[自动确认] 成功自动确认 {updated_count} 门课程")
-        except Exception as e:
-            print(f"[自动确认] 错误: {str(e)}")
+#             print(f"[自动确认] 成功自动确认 {updated_count} 门课程")
+#         except Exception as e:
+#             print(f"[自动确认] 错误: {str(e)}")
 
 
 @app.route("/api/remind/send-today-confirm", methods=["POST"])
@@ -3150,7 +3177,7 @@ def send_today_confirm():
                 "data": {
                     "thing1": {"value": subject},
                     "time3": {"value": full_time_str},
-                    "thing5": {"value": students_str}
+                    "thing5": {"value": students_str+"请进系统确认！"}
                 },
                 "miniprogram": {
                     "appid": "wx7f3bff31a3dbfd0c",
