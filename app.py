@@ -2633,7 +2633,7 @@ def send_tomorrow_remind_internal():
                         "data": {
                             "date1": {"value": full_time_str},
                             "thing6": {"value": subject},
-                            "short_thing20": {"value": "老师好，明日请准时上课！"}
+                            "short_thing20": {"value": "老师，明日请准时上课！"}
                         }
                     }
                     url = f"https://api.weixin.qq.com/cgi-bin/message/subscribe/send?access_token={access_token}"
@@ -2676,7 +2676,7 @@ def send_tomorrow_remind_internal():
                                 "data": {
                                     "date1": {"value": full_time_str},
                                     "thing6": {"value": subject},
-                                    "short_thing20": {"value": f"{student[0]}同学，明日请准时上课！"}
+                                    "short_thing20": {"value": f"{student[0]}，请准时来上课！"}
                                 }
                             }
                             url = f"https://api.weixin.qq.com/cgi-bin/message/subscribe/send?access_token={access_token}"
