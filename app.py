@@ -242,38 +242,55 @@ def init_db():
 
 @app.route("/api/login", methods=["POST"])
 def login():
-    """用户登录"""
     try:
         data = request.get_json()
         phone = data.get('phone')
         password = data.get('password')
+        code = data.get('code')          # 小程序传过来的 code
 
-        if not phone or not password:
-            return jsonify({"code": 400, "msg": "手机号和密码不能为空"}), 400
+        openid = None
+        if code:
+            # 通过 code 换取 openid
+            appid = os.environ.get('WECHAT_APP_ID')
+            secret = os.environ.get('WECHAT_APP_SECRET')
+            url = f"https://api.weixin.qq.com/sns/jscode2session?appid={appid}&secret={secret}&js_code={code}&grant_type=authorization_code"
+            resp = requests.get(url, timeout=5)
+            wx_data = resp.json()
+            openid = wx_data.get('openid')
+            print(f"获取到 openid: {openid}")
 
-        db = get_db()  # 使用您项目中已有的数据库连接函数
+        db = get_db()
         cur = db.cursor()
-
-        # 注意表名 "user" 需要用双引号包裹（因为 user 是 PostgreSQL 保留字）
-        cur.execute('SELECT id, name, role FROM "user" WHERE phone = %s AND password = %s', (phone, password))
+        cur.execute('SELECT id, name, role, openid FROM "user" WHERE phone=%s AND password=%s', (phone, password))
         user = cur.fetchone()
-        cur.close()
-        db.close()
 
         if user:
+            # 如果用户已有 openid 但本次获取到了新的，则更新
+            if openid and not user[3]:
+                cur.execute('UPDATE "user" SET openid = %s WHERE id = %s', (openid, user[0]))
+                db.commit()
+            cur.close()
+            db.close()
             return jsonify({
                 "code": 200,
                 "data": {
                     "id": user[0],
                     "name": user[1],
-                    "role": user[2]
+                    "role": user[2],
+                    "openid": openid or user[3]   # 返回 openid 给前端
                 }
             })
         else:
+            cur.close()
+            db.close()
             return jsonify({"code": 403, "msg": "账号或密码错误"}), 403
     except Exception as e:
         print(f"登录错误: {str(e)}")
         return jsonify({"code": 500, "msg": str(e)}), 500
+
+
+
+
 
 # ==================== 用户管理模块（完整版）====================
 
