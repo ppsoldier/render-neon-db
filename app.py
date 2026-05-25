@@ -301,6 +301,7 @@ def log_remind(schedule_id, remind_type, receiver_role, receiver_id, receiver_op
                receiver_phone, content, status, error_msg=None, response_data=None):
     """记录提醒日志"""
     try:
+        print(f"调用 log_remind: schedule_id={schedule_id}")
         db = get_db()
         cur = db.cursor()
         cur.execute("""
@@ -2565,6 +2566,7 @@ def scheduled_send_remind():
 
 def send_tomorrow_remind_internal():
     """内部发送明日课程提醒（给教师和家长）"""
+    print("开始发送提醒，准备记录日志")
     try:
         beijing_now = datetime.utcnow() + timedelta(hours=8)
         tomorrow = (beijing_now + timedelta(days=1)).strftime("%Y-%m-%d")
