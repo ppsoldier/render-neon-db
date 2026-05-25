@@ -1208,7 +1208,6 @@ def student_hours_export():
 # ==================== 排课管理模块 ====================
 @app.route("/api/schedule/calendar", methods=["GET"])
 def get_schedule_calendar():
-    """获取指定日期的课程（供首页使用）"""
     try:
         date_str = request.args.get('date')
         if not date_str:
@@ -1216,6 +1215,7 @@ def get_schedule_calendar():
 
         db = get_db()
         cur = db.cursor()
+        # 查询课程基本信息
         cur.execute("""
             SELECT 
                 s.id,
@@ -1223,29 +1223,37 @@ def get_schedule_calendar():
                 s.subject,
                 s.classroom,
                 COALESCE(s.status, 'scheduled') as status,
-                t.name as teacher_name
+                t.name as teacher_name,
+                s.student_ids
             FROM course_schedule s
             LEFT JOIN teacher t ON s.teacher_id = t.id
             WHERE s.class_date = %s 
               AND (s.status IS NULL OR s.status != 'cancelled')
             ORDER BY s.class_time
         """, (date_str,))
-
+        
         rows = cur.fetchall()
+        # 获取学生名称映射
+        cur.execute("SELECT id, name FROM student")
+        student_map = {row[0]: row[1] for row in cur.fetchall()}
         cur.close()
         db.close()
 
         schedule_list = []
         for row in rows:
+            student_ids_str = row[6] or ''
+            student_ids = [int(x) for x in student_ids_str.split(',') if x]
+            student_names = [student_map.get(sid, '') for sid in student_ids if student_map.get(sid)]
             schedule_list.append({
                 "id": row[0],
                 "class_time": row[1],
                 "subject": row[2],
                 "classroom": row[3] or '',
                 "status": row[4],
-                "teacher_name": row[5] or '待分配'
+                "teacher_name": row[5] or '待分配',
+                "students": student_names,          # 新增学生姓名数组
+                "student_count": len(student_names) # 也可单独返回人数
             })
-
         return jsonify({"code": 200, "data": schedule_list})
     except Exception as e:
         print(f"获取日历数据错误: {str(e)}")
