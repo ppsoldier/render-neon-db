@@ -242,33 +242,40 @@ def init_db():
 
 @app.route("/api/login", methods=["POST"])
 def login():
+    """用户登录 - 硬编码 AppID 和 Secret"""
     try:
         data = request.get_json()
         phone = data.get('phone')
         password = data.get('password')
-        code = data.get('code')          # 小程序传过来的 code
+        code = data.get('code')          # 小程序登录 code
+
+        # 硬编码微信小程序配置（请确保值正确）
+        WECHAT_APP_ID = "wx7f3bff31a3dbfd0c"
+        WECHAT_APP_SECRET = "74e6b9ccbf7495205aa5e1da0a30135e"
 
         openid = None
         if code:
             # 通过 code 换取 openid
-            appid = os.environ.get('WECHAT_APP_ID')
-            secret = os.environ.get('WECHAT_APP_SECRET')
-            url = f"https://api.weixin.qq.com/sns/jscode2session?appid={appid}&secret={secret}&js_code={code}&grant_type=authorization_code"
+            url = f"https://api.weixin.qq.com/sns/jscode2session?appid={WECHAT_APP_ID}&secret={WECHAT_APP_SECRET}&js_code={code}&grant_type=authorization_code"
+            print(f"[登录] 请求微信接口: {url}")
             resp = requests.get(url, timeout=5)
             wx_data = resp.json()
+            print(f"[登录] 微信返回: {wx_data}")
             openid = wx_data.get('openid')
-            print(f"获取到 openid: {openid}")
+            print(f"[登录] 获取到 openid: {openid}")
 
         db = get_db()
         cur = db.cursor()
-        cur.execute('SELECT id, name, role, openid FROM "user" WHERE phone=%s AND password=%s', (phone, password))
+        # 注意表名 "user" 需要加双引号（PostgreSQL 保留字）
+        cur.execute('SELECT id, name, role, openid FROM "user" WHERE phone = %s AND password = %s', (phone, password))
         user = cur.fetchone()
 
         if user:
-            # 如果用户已有 openid 但本次获取到了新的，则更新
+            # 如果用户有 openid 但数据库为空，则更新
             if openid and not user[3]:
                 cur.execute('UPDATE "user" SET openid = %s WHERE id = %s', (openid, user[0]))
                 db.commit()
+                print(f"[登录] 更新用户 {user[1]} 的 openid 为 {openid}")
             cur.close()
             db.close()
             return jsonify({
@@ -277,7 +284,7 @@ def login():
                     "id": user[0],
                     "name": user[1],
                     "role": user[2],
-                    "openid": openid or user[3]   # 返回 openid 给前端
+                    "openid": openid or user[3]   # 优先使用新获取的，否则用数据库已有的
                 }
             })
         else:
@@ -285,7 +292,9 @@ def login():
             db.close()
             return jsonify({"code": 403, "msg": "账号或密码错误"}), 403
     except Exception as e:
-        print(f"登录错误: {str(e)}")
+        print(f"[登录] 错误: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"code": 500, "msg": str(e)}), 500
 
 
