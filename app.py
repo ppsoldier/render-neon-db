@@ -3283,7 +3283,7 @@ def send_today_confirm_internal():
 
 
 
-# 在 start_scheduler 中添加自动确认任务
+# 启动定时任务
 def start_scheduler():
     scheduler = BackgroundScheduler()
 
