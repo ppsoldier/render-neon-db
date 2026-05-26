@@ -1095,6 +1095,79 @@ def student_hours_statistics():
         return jsonify({"code": 500, "msg": str(e)}), 500
 
 
+@app.route("/api/student/hours/statistics-v2", methods=["GET"])
+def get_student_hours_statistics_v2():
+    """获取学生课时消耗统计（基于已确认课程）"""
+    try:
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+        
+        db = get_db()
+        cur = db.cursor()
+        
+        # 基于 course_schedule 表统计已确认课程
+        sql = """
+            SELECT 
+                s.id as student_id,
+                s.name as student_name,
+                s.grade,
+                COUNT(cs.id) as class_count,
+                COALESCE(SUM(cs.duration), 0) as total_hours
+            FROM student s
+            LEFT JOIN course_schedule cs ON 
+                (cs.student_id = s.id 
+                 OR cs.student_ids = CAST(s.id AS TEXT)
+                 OR cs.student_ids LIKE CONCAT(CAST(s.id AS TEXT), ',%')
+                 OR cs.student_ids LIKE CONCAT('%,', CAST(s.id AS TEXT), ',%'))
+                AND cs.status = 'completed'
+        """
+        params = []
+        
+        if start_date and end_date:
+            sql += " AND cs.class_date BETWEEN %s AND %s"
+            params.extend([start_date, end_date])
+        
+        sql += """
+            GROUP BY s.id, s.name, s.grade
+            HAVING COUNT(cs.id) > 0
+            ORDER BY s.name
+        """
+        
+        cur.execute(sql, params)
+        
+        student_stats = []
+        total_classes = 0
+        total_hours = 0
+        
+        for row in cur.fetchall():
+            student_stats.append({
+                "student_id": row[0],
+                "student_name": row[1] or '',
+                "grade": row[2] or '',
+                "class_count": row[3] or 0,
+                "total_hours": float(row[4]) if row[4] else 0
+            })
+            total_classes += row[3] or 0
+            total_hours += float(row[4]) if row[4] else 0
+        
+        cur.close()
+        db.close()
+        
+        return jsonify({
+            "code": 200,
+            "data": {
+                "total_students": len(student_stats),
+                "total_classes": total_classes,
+                "total_hours": total_hours,
+                "student_stats": student_stats
+            }
+        })
+    except Exception as e:
+        print(f"获取统计错误: {str(e)}")
+        return jsonify({"code": 500, "msg": str(e)}), 500
+
+
+
 @app.route("/api/student/hours/add", methods=["POST"])
 def student_hours_add():
     """添加课时包"""
@@ -3348,101 +3421,220 @@ def send_today_confirm():
 
 @app.route("/api/schedule/confirm", methods=["POST"])
 def confirm_schedule():
-    """管理员确认课程完成"""
+    """管理员确认课程完成，并自动记录课时消耗"""
     try:
         data = request.json
         course_id = data.get('course_id')
-
+        
         if not course_id:
             return jsonify({"code": 400, "msg": "缺少课程ID"}), 400
-
+        
         db = get_db()
         cur = db.cursor()
-
-        # 检查课程是否存在
-        cur.execute("SELECT id, subject, status FROM course_schedule WHERE id = %s", (course_id,))
+        
+        # 检查课程是否存在以及是否已确认
+        cur.execute("SELECT id, subject, status, duration, student_id, student_ids FROM course_schedule WHERE id = %s", (course_id,))
         course = cur.fetchone()
-
+        
         if not course:
             cur.close()
             db.close()
             return jsonify({"code": 404, "msg": "课程不存在"}), 404
-
+        
         if course[2] == 'completed':
             cur.close()
             db.close()
             return jsonify({"code": 400, "msg": "课程已完成确认"}), 400
-
-        # 更新状态为已完成
+        
+        # 更新课程状态为已完成
         cur.execute("""
             UPDATE course_schedule 
             SET status = 'completed' 
             WHERE id = %s
         """, (course_id,))
-
+        
+        # 获取课程涉及的课时数
+        duration = float(course[3]) if course[3] else 2
+        
+        # 获取学生ID列表
+        student_ids = []
+        if course[4]:  # student_id（单学生）
+            student_ids.append(course[4])
+        if course[5]:  # student_ids（多学生，逗号分隔）
+            for sid in course[5].split(','):
+                if sid and int(sid) not in student_ids:
+                    student_ids.append(int(sid))
+        
+        # 为每个学生记录课时消耗
+        consumption_count = 0
+        for student_id in student_ids:
+            # 查找该学生有剩余课时的课时包
+            cur.execute("""
+                SELECT id, surplus FROM course_package 
+                WHERE student_id = %s 
+                  AND status = 'active' 
+                  AND surplus > 0
+                ORDER BY created_at ASC
+                LIMIT 1
+            """, (student_id,))
+            
+            package = cur.fetchone()
+            if package:
+                package_id = package[0]
+                surplus = float(package[1]) if package[1] else 0
+                
+                # 消耗课时（优先从最早的课时包扣减）
+                consume_hours = min(duration, surplus)
+                
+                # 更新课时包
+                cur.execute("""
+                    UPDATE course_package 
+                    SET used = used + %s, surplus = surplus - %s 
+                    WHERE id = %s
+                """, (consume_hours, consume_hours, package_id))
+                
+                # 记录课时消耗
+                cur.execute("""
+                    INSERT INTO hour_consumption (package_id, schedule_id, hours, consume_date, note)
+                    VALUES (%s, %s, %s, CURRENT_DATE, %s)
+                """, (package_id, course_id, consume_hours, f"课程确认：{course[1]}"))
+                
+                consumption_count += 1
+                
+                # 如果课时不够，继续从下一个课时包扣减
+                remaining = duration - consume_hours
+                while remaining > 0:
+                    cur.execute("""
+                        SELECT id, surplus FROM course_package 
+                        WHERE student_id = %s 
+                          AND status = 'active' 
+                          AND surplus > 0
+                        ORDER BY created_at ASC
+                        LIMIT 1
+                    """, (student_id,))
+                    next_package = cur.fetchone()
+                    if not next_package:
+                        # 没有更多课时包，记录不足提醒
+                        cur.execute("""
+                            INSERT INTO hour_consumption (package_id, schedule_id, hours, consume_date, note)
+                            VALUES (NULL, %s, %s, CURRENT_DATE, %s)
+                        """, (course_id, remaining, f"课时不足，剩余{remaining}课时未扣减"))
+                        break
+                    
+                    next_consume = min(remaining, float(next_package[1]))
+                    cur.execute("""
+                        UPDATE course_package 
+                        SET used = used + %s, surplus = surplus - %s 
+                        WHERE id = %s
+                    """, (next_consume, next_consume, next_package[0]))
+                    
+                    cur.execute("""
+                        INSERT INTO hour_consumption (package_id, schedule_id, hours, consume_date, note)
+                        VALUES (%s, %s, %s, CURRENT_DATE, %s)
+                    """, (next_package[0], course_id, next_consume, f"课程确认：{course[1]}"))
+                    
+                    consumption_count += 1
+                    remaining -= next_consume
+        
         db.commit()
         cur.close()
         db.close()
-
+        
         return jsonify({
             "code": 200,
-            "msg": "确认成功",
+            "msg": "确认成功，已记录课时消耗",
             "data": {
                 "course_id": course_id,
-                "subject": course[1]
+                "subject": course[1],
+                "consumption_count": consumption_count
             }
         })
     except Exception as e:
         print(f"确认课程错误: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"code": 500, "msg": str(e)}), 500
 
 
 @app.route("/api/schedule/confirm/batch", methods=["POST"])
 def batch_confirm_schedule():
-    """批量确认课程完成"""
+    """批量确认课程完成，并自动记录课时消耗"""
     try:
         data = request.json
         course_ids = data.get('course_ids', [])
-
+        
         if not course_ids:
             return jsonify({"code": 400, "msg": "请选择课程"}), 400
-
+        
         db = get_db()
         cur = db.cursor()
-
-        # 先查询待确认课程的信息
+        
+        # 查询待确认课程
         placeholders = ','.join(['%s'] * len(course_ids))
         cur.execute(f"""
-            SELECT id, subject, class_date 
+            SELECT id, subject, status, duration, student_id, student_ids 
             FROM course_schedule 
             WHERE id IN ({placeholders})
         """, course_ids)
-
+        
         courses = cur.fetchall()
-
-        # 批量更新状态
-        cur.execute(f"""
-            UPDATE course_schedule 
-            SET status = 'completed' 
-            WHERE id IN ({placeholders})
-              AND (status IS NULL OR status != 'completed')
-        """, course_ids)
-
-        updated_count = cur.rowcount
-
+        
+        confirmed_count = 0
+        for course in courses:
+            if course[2] == 'completed':
+                continue
+            
+            # 更新课程状态
+            cur.execute("UPDATE course_schedule SET status = 'completed' WHERE id = %s", (course[0],))
+            
+            duration = float(course[3]) if course[3] else 2
+            
+            # 获取学生ID列表
+            student_ids = []
+            if course[4]:
+                student_ids.append(course[4])
+            if course[5]:
+                for sid in course[5].split(','):
+                    if sid and int(sid) not in student_ids:
+                        student_ids.append(int(sid))
+            
+            # 记录课时消耗
+            for student_id in student_ids:
+                cur.execute("""
+                    SELECT id, surplus FROM course_package 
+                    WHERE student_id = %s AND status = 'active' AND surplus > 0
+                    ORDER BY created_at ASC
+                    LIMIT 1
+                """, (student_id,))
+                
+                package = cur.fetchone()
+                if package:
+                    consume_hours = min(duration, float(package[1]))
+                    cur.execute("""
+                        UPDATE course_package SET used = used + %s, surplus = surplus - %s WHERE id = %s
+                    """, (consume_hours, consume_hours, package[0]))
+                    
+                    cur.execute("""
+                        INSERT INTO hour_consumption (package_id, schedule_id, hours, consume_date, note)
+                        VALUES (%s, %s, %s, CURRENT_DATE, %s)
+                    """, (package[0], course[0], consume_hours, f"批量确认：{course[1]}"))
+            
+            confirmed_count += 1
+        
         db.commit()
         cur.close()
         db.close()
-
+        
         return jsonify({
             "code": 200,
-            "msg": f"成功确认 {updated_count} 门课程",
-            "count": updated_count,
-            "total": len(course_ids)
+            "msg": f"成功确认 {confirmed_count} 门课程",
+            "count": confirmed_count
         })
     except Exception as e:
         print(f"批量确认错误: {str(e)}")
         return jsonify({"code": 500, "msg": str(e)}), 500
+
+@app.route("/api/student/hours/statistics-v2", methods=["GET"])
 
 
 @app.route("/api/schedule/list", methods=["GET"])
@@ -3512,42 +3704,42 @@ def schedule_list():
         print(f"获取排课列表错误: {str(e)}")
         return jsonify({"code": 500, "msg": str(e)}), 500
 
-@app.route("/api/schedule/auto-confirm", methods=["POST"])
-def auto_confirm_courses():
-    """自动确认今天及以前已结束的课程"""
-    try:
-        db = get_db()
-        cur = db.cursor()
+# @app.route("/api/schedule/auto-confirm", methods=["POST"])
+# def auto_confirm_courses():
+#     """自动确认今天及以前已结束的课程"""
+#     try:
+#         db = get_db()
+#         cur = db.cursor()
 
-        # 获取北京时间
-        from datetime import datetime, timedelta
-        beijing_now = datetime.utcnow() + timedelta(hours=8)
-        today = beijing_now.strftime("%Y-%m-%d")
-        current_time = beijing_now.strftime("%H:%M")
+#         # 获取北京时间
+#         from datetime import datetime, timedelta
+#         beijing_now = datetime.utcnow() + timedelta(hours=8)
+#         today = beijing_now.strftime("%Y-%m-%d")
+#         current_time = beijing_now.strftime("%H:%M")
 
-        # 确认今天开始时间已过的课程
-        cur.execute("""
-            UPDATE course_schedule 
-            SET status = 'completed' 
-            WHERE class_date <= %s
-              AND (class_date < %s OR class_time <= %s)
-              AND (status IS NULL OR status != 'completed')
-              AND status != 'cancelled'
-        """, (today, today, current_time))
+#         # 确认今天开始时间已过的课程
+#         cur.execute("""
+#             UPDATE course_schedule 
+#             SET status = 'completed' 
+#             WHERE class_date <= %s
+#               AND (class_date < %s OR class_time <= %s)
+#               AND (status IS NULL OR status != 'completed')
+#               AND status != 'cancelled'
+#         """, (today, today, current_time))
 
-        updated_count = cur.rowcount
-        db.commit()
-        cur.close()
-        db.close()
+#         updated_count = cur.rowcount
+#         db.commit()
+#         cur.close()
+#         db.close()
 
-        return jsonify({
-            "code": 200,
-            "msg": f"成功确认 {updated_count} 门课程",
-            "count": updated_count
-        })
-    except Exception as e:
-        print(f"自动确认错误: {str(e)}")
-        return jsonify({"code": 500, "msg": str(e)}), 500
+#         return jsonify({
+#             "code": 200,
+#             "msg": f"成功确认 {updated_count} 门课程",
+#             "count": updated_count
+#         })
+#     except Exception as e:
+#         print(f"自动确认错误: {str(e)}")
+#         return jsonify({"code": 500, "msg": str(e)}), 500
 
 
 # ==================== 仪表盘数据 ====================
