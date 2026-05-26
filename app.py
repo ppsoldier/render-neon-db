@@ -1530,26 +1530,12 @@ def export_semester_report():
     """导出学期统计报表"""
     try:
         data = request.json
-        semester_key = data.get('semester_key')
+        start_date = data.get('start_date')
+        end_date = data.get('end_date')
         student_ids = data.get('student_ids', [])
         
-        if not semester_key:
-            return jsonify({"code": 400, "msg": "缺少学期参数"}), 400
-        
-        # 解析学期
-        parts = semester_key.split('-')
-        year = parts[0]
-        semester_type = parts[1]
-        
-        # 确定日期范围
-        if semester_type == 'spring':
-            start_date = f"{year}-03-01"
-            end_date = f"{year}-08-31"
-            semester_name = f"{year}春季学期"
-        else:
-            start_date = f"{year}-09-01"
-            end_date = f"{year}-12-31"
-            semester_name = f"{year}秋季学期"
+        if not start_date or not end_date:
+            return jsonify({"code": 400, "msg": "缺少时间范围参数"}), 400
         
         db = get_db()
         cur = db.cursor()
@@ -1566,7 +1552,10 @@ def export_semester_report():
                     COALESCE(SUM(cs.duration), 0) as total_hours
                 FROM student s
                 LEFT JOIN course_schedule cs ON 
-                    (cs.student_id = s.id OR cs.student_ids LIKE '%' || s.id || '%')
+                    (cs.student_id = s.id 
+                     OR cs.student_ids = CAST(s.id AS TEXT)
+                     OR cs.student_ids LIKE CONCAT(CAST(s.id AS TEXT), ',%')
+                     OR cs.student_ids LIKE CONCAT('%,', CAST(s.id AS TEXT), ',%'))
                     AND cs.status = 'completed'
                     AND cs.class_date BETWEEN %s AND %s
                 WHERE s.id IN ({placeholders})
@@ -1585,7 +1574,10 @@ def export_semester_report():
                     COALESCE(SUM(cs.duration), 0) as total_hours
                 FROM student s
                 LEFT JOIN course_schedule cs ON 
-                    (cs.student_id = s.id OR cs.student_ids LIKE '%' || s.id || '%')
+                    (cs.student_id = s.id 
+                     OR cs.student_ids = CAST(s.id AS TEXT)
+                     OR cs.student_ids LIKE CONCAT(CAST(s.id AS TEXT), ',%')
+                     OR cs.student_ids LIKE CONCAT('%,', CAST(s.id AS TEXT), ',%'))
                     AND cs.status = 'completed'
                     AND cs.class_date BETWEEN %s AND %s
                 GROUP BY s.id, s.name, s.grade
@@ -1600,7 +1592,7 @@ def export_semester_report():
         # 创建 Excel 文件
         wb = openpyxl.Workbook()
         ws = wb.active
-        ws.title = f"{semester_name}课时统计"
+        ws.title = f"课时统计_{start_date}_至_{end_date}"
         
         headers = ["学生姓名", "年级", "上课次数", "总课时(小时)"]
         ws.append(headers)
@@ -1647,12 +1639,13 @@ def export_semester_report():
             output,
             mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
             as_attachment=True,
-            download_name=f'{semester_name}_课时统计.xlsx'
+            download_name=f'课时统计_{start_date}_至_{end_date}.xlsx'
         )
     except Exception as e:
-        print(f"导出学期报表错误: {str(e)}")
+        print(f"导出报表错误: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"code": 500, "msg": str(e)}), 500
-
 
 
 
