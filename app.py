@@ -963,6 +963,7 @@ def teacher_salary_statistics():
         return jsonify({"code": 500, "msg": str(e)}), 500
 
 
+
 # ==================== 课时管理模块 ====================
 @app.route("/api/student/hours/list", methods=["GET"])
 def student_hours_list():
@@ -1332,6 +1333,350 @@ def student_hours_export():
     except Exception as e:
         print(f"导出课时报表错误: {str(e)}")
         return jsonify({"code": 500, "msg": str(e)}), 500
+
+
+# ==================== 学期统计模块 ====================
+
+@app.route("/api/student/semester/list", methods=["GET"])
+def get_semester_list():
+    """获取学期列表（基于排课数据）"""
+    try:
+        db = get_db()
+        cur = db.cursor()
+        
+        cur.execute("""
+            SELECT DISTINCT 
+                TO_CHAR(class_date, 'YYYY') as year,
+                CASE 
+                    WHEN EXTRACT(MONTH FROM class_date) BETWEEN 3 AND 8 THEN 'spring'
+                    ELSE 'autumn'
+                END as semester_type,
+                CASE 
+                    WHEN EXTRACT(MONTH FROM class_date) BETWEEN 3 AND 8 THEN '春季学期'
+                    ELSE '秋季学期'
+                END as semester_name
+            FROM course_schedule 
+            WHERE status = 'completed'
+            ORDER BY year DESC, semester_type DESC
+        """)
+        
+        data = cur.fetchall()
+        cur.close()
+        db.close()
+        
+        result = []
+        for row in data:
+            result.append({
+                "key": f"{row[0]}-{row[1]}",
+                "name": f"{row[0]}{row[2]}",
+                "year": row[0],
+                "semester_type": row[1]
+            })
+        
+        return jsonify({"code": 200, "data": result})
+    except Exception as e:
+        print(f"获取学期列表错误: {str(e)}")
+        return jsonify({"code": 500, "msg": str(e)}), 500
+
+
+@app.route("/api/student/semester/statistics", methods=["GET"])
+def get_semester_statistics():
+    """获取学期统计数据（基于已完成课程）"""
+    try:
+        semester_key = request.args.get('semester_key')
+        if not semester_key:
+            return jsonify({"code": 400, "msg": "缺少学期参数"}), 400
+        
+        # 解析学期
+        parts = semester_key.split('-')
+        year = parts[0]
+        semester_type = parts[1]
+        
+        # 确定日期范围
+        if semester_type == 'spring':
+            start_date = f"{year}-03-01"
+            end_date = f"{year}-08-31"
+        else:
+            start_date = f"{year}-09-01"
+            end_date = f"{year}-12-31"
+        
+        db = get_db()
+        cur = db.cursor()
+        
+        # 获取学期内每个学生的上课统计
+        cur.execute("""
+            SELECT 
+                s.id as student_id,
+                s.name as student_name,
+                s.grade,
+                COUNT(cs.id) as class_count,
+                COALESCE(SUM(cs.duration), 0) as total_hours
+            FROM student s
+            LEFT JOIN course_schedule cs ON 
+                (cs.student_id = s.id OR cs.student_ids LIKE '%' || s.id || '%')
+                AND cs.status = 'completed'
+                AND cs.class_date BETWEEN %s AND %s
+            GROUP BY s.id, s.name, s.grade
+            HAVING COUNT(cs.id) > 0
+            ORDER BY s.name
+        """, (start_date, end_date))
+        
+        student_stats = []
+        total_classes = 0
+        total_hours = 0
+        
+        for row in cur.fetchall():
+            student_stats.append({
+                "student_id": row[0],
+                "student_name": row[1] or '',
+                "grade": row[2] or '',
+                "class_count": row[3] or 0,
+                "total_hours": float(row[4]) if row[4] else 0
+            })
+            total_classes += row[3] or 0
+            total_hours += float(row[4]) if row[4] else 0
+        
+        cur.close()
+        db.close()
+        
+        return jsonify({
+            "code": 200,
+            "data": {
+                "semester_key": semester_key,
+                "total_students": len(student_stats),
+                "total_classes": total_classes,
+                "total_hours": total_hours,
+                "student_stats": student_stats
+            }
+        })
+    except Exception as e:
+        print(f"获取学期统计错误: {str(e)}")
+        return jsonify({"code": 500, "msg": str(e)}), 500
+
+
+@app.route("/api/student/semester/detail", methods=["GET"])
+def get_student_semester_detail():
+    """获取学生在某学期的课程明细"""
+    try:
+        student_id = request.args.get('student_id', type=int)
+        semester_key = request.args.get('semester_key')
+        
+        if not student_id or not semester_key:
+            return jsonify({"code": 400, "msg": "缺少参数"}), 400
+        
+        # 解析学期
+        parts = semester_key.split('-')
+        year = parts[0]
+        semester_type = parts[1]
+        
+        # 确定日期范围
+        if semester_type == 'spring':
+            start_date = f"{year}-03-01"
+            end_date = f"{year}-08-31"
+        else:
+            start_date = f"{year}-09-01"
+            end_date = f"{year}-12-31"
+        
+        db = get_db()
+        cur = db.cursor()
+        
+        student_id_str = str(student_id)
+        
+        # 获取学生的课程明细
+        cur.execute("""
+            SELECT 
+                cs.id,
+                cs.class_date,
+                cs.class_time,
+                cs.subject,
+                cs.classroom,
+                cs.duration,
+                t.name as teacher_name
+            FROM course_schedule cs
+            LEFT JOIN teacher t ON cs.teacher_id = t.id
+            WHERE cs.status = 'completed'
+              AND cs.class_date BETWEEN %s AND %s
+              AND (
+                  cs.student_id = %s 
+                  OR cs.student_ids = %s
+                  OR cs.student_ids LIKE %s
+                  OR cs.student_ids LIKE %s
+                  OR cs.student_ids LIKE %s
+              )
+            ORDER BY cs.class_date, cs.class_time
+        """, (start_date, end_date, student_id, student_id_str, 
+              f'{student_id_str},%', f'%,{student_id_str}', f'%,{student_id_str},%'))
+        
+        schedule_list = []
+        total_classes = 0
+        total_hours = 0
+        
+        for row in cur.fetchall():
+            duration = float(row[5]) if row[5] else 2
+            schedule_list.append({
+                "id": row[0],
+                "class_date": str(row[1]),
+                "class_time": row[2],
+                "subject": row[3] or '',
+                "classroom": row[4] or '',
+                "duration": duration,
+                "teacher_name": row[6] or '待分配'
+            })
+            total_classes += 1
+            total_hours += duration
+        
+        cur.execute("SELECT name FROM student WHERE id = %s", (student_id,))
+        student = cur.fetchone()
+        student_name = student[0] if student else ''
+        
+        cur.close()
+        db.close()
+        
+        return jsonify({
+            "code": 200,
+            "data": {
+                "student_id": student_id,
+                "student_name": student_name,
+                "total_classes": total_classes,
+                "total_hours": total_hours,
+                "schedule_list": schedule_list
+            }
+        })
+    except Exception as e:
+        print(f"获取学生明细错误: {str(e)}")
+        return jsonify({"code": 500, "msg": str(e)}), 500
+
+
+@app.route("/api/student/semester/export", methods=["POST"])
+def export_semester_report():
+    """导出学期统计报表"""
+    try:
+        data = request.json
+        semester_key = data.get('semester_key')
+        student_ids = data.get('student_ids', [])
+        
+        if not semester_key:
+            return jsonify({"code": 400, "msg": "缺少学期参数"}), 400
+        
+        # 解析学期
+        parts = semester_key.split('-')
+        year = parts[0]
+        semester_type = parts[1]
+        
+        # 确定日期范围
+        if semester_type == 'spring':
+            start_date = f"{year}-03-01"
+            end_date = f"{year}-08-31"
+            semester_name = f"{year}春季学期"
+        else:
+            start_date = f"{year}-09-01"
+            end_date = f"{year}-12-31"
+            semester_name = f"{year}秋季学期"
+        
+        db = get_db()
+        cur = db.cursor()
+        
+        # 获取统计数据
+        if student_ids:
+            placeholders = ','.join(['%s'] * len(student_ids))
+            sql = f"""
+                SELECT 
+                    s.id,
+                    s.name,
+                    s.grade,
+                    COUNT(cs.id) as class_count,
+                    COALESCE(SUM(cs.duration), 0) as total_hours
+                FROM student s
+                LEFT JOIN course_schedule cs ON 
+                    (cs.student_id = s.id OR cs.student_ids LIKE '%' || s.id || '%')
+                    AND cs.status = 'completed'
+                    AND cs.class_date BETWEEN %s AND %s
+                WHERE s.id IN ({placeholders})
+                GROUP BY s.id, s.name, s.grade
+                ORDER BY s.name
+            """
+            params = [start_date, end_date] + student_ids
+            cur.execute(sql, params)
+        else:
+            cur.execute("""
+                SELECT 
+                    s.id,
+                    s.name,
+                    s.grade,
+                    COUNT(cs.id) as class_count,
+                    COALESCE(SUM(cs.duration), 0) as total_hours
+                FROM student s
+                LEFT JOIN course_schedule cs ON 
+                    (cs.student_id = s.id OR cs.student_ids LIKE '%' || s.id || '%')
+                    AND cs.status = 'completed'
+                    AND cs.class_date BETWEEN %s AND %s
+                GROUP BY s.id, s.name, s.grade
+                HAVING COUNT(cs.id) > 0
+                ORDER BY s.name
+            """, (start_date, end_date))
+        
+        data = cur.fetchall()
+        cur.close()
+        db.close()
+        
+        # 创建 Excel 文件
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = f"{semester_name}课时统计"
+        
+        headers = ["学生姓名", "年级", "上课次数", "总课时(小时)"]
+        ws.append(headers)
+        
+        for cell in ws[1]:
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+            cell.alignment = Alignment(horizontal="center")
+        
+        total_classes = 0
+        total_hours = 0
+        
+        for row in data:
+            ws.append([
+                row[1] or '',
+                row[2] or '',
+                row[3] or 0,
+                float(row[4]) if row[4] else 0
+            ])
+            total_classes += row[3] or 0
+            total_hours += float(row[4]) if row[4] else 0
+        
+        # 添加汇总行
+        ws.append([])
+        ws.append(["合计", "", total_classes, total_hours])
+        
+        for col in ws.columns:
+            max_length = 0
+            col_letter = col[0].column_letter
+            for cell in col:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
+            adjusted_width = min(max_length + 2, 25)
+            ws.column_dimensions[col_letter].width = adjusted_width
+        
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+        
+        return send_file(
+            output,
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            as_attachment=True,
+            download_name=f'{semester_name}_课时统计.xlsx'
+        )
+    except Exception as e:
+        print(f"导出学期报表错误: {str(e)}")
+        return jsonify({"code": 500, "msg": str(e)}), 500
+
+
+
 
 
 # ==================== 排课管理模块 ====================
