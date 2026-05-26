@@ -2914,14 +2914,6 @@ def start_scheduler():
         replace_existing=True
     )
 
-    # 每天晚上 23:50 自动确认当天的课程
-    # scheduler.add_job(
-    #     func=auto_confirm_today_courses,
-    #     trigger=CronTrigger(hour=23, minute=50, timezone='Asia/Shanghai'),
-    #     id='auto_confirm',
-    #     replace_existing=True
-    # )
-
     scheduler.start()
     print("定时任务已启动")
 
