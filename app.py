@@ -611,7 +611,22 @@ def user_list():
         return jsonify({"code": 500, "msg": str(e)}), 500
 
 
+from werkzeug.security import generate_password_hash
 
+def migrate_passwords():
+    """将明文密码转换为哈希"""
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT id, password FROM \"user\"")
+    users = cur.fetchall()
+    for uid, plain_pw in users:
+        if plain_pw and not plain_pw.startswith('pbkdf2:sha256:'):
+            hashed = generate_password_hash(plain_pw)
+            cur.execute("UPDATE \"user\" SET password = %s WHERE id = %s", (hashed, uid))
+    db.commit()
+    cur.close()
+    db.close()
+    print("密码迁移完成")
 
 
 
