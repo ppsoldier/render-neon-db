@@ -345,11 +345,6 @@ def change_password():
         return jsonify({"code": 500, "msg": str(e)}), 500
 
 
-@app.route("/migrate-passwords")
-def migrate_passwords_route():
-    migrate_passwords()
-    return "密码迁移完成"
-
 
 def log_remind(schedule_id, remind_type, receiver_role, receiver_id, receiver_openid, 
                receiver_phone, content, status, error_msg=None, response_data=None):
@@ -627,6 +622,13 @@ def migrate_passwords():
     cur.close()
     db.close()
     print("密码迁移完成")
+    
+# #临时接口
+# @app.route("/migrate-passwords")
+# def migrate_passwords_route():
+#     migrate_passwords()
+#     return "密码迁移完成"
+
 
 
 
