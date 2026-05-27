@@ -376,7 +376,25 @@ def admin_get_users():
         db = get_db()
         cur = db.cursor()
         
-        sql = """
+        # 构建 WHERE 条件与参数
+        where_clause = " WHERE 1=1"
+        params = []
+        
+        if keyword:
+            where_clause += " AND (u.name LIKE %s OR u.phone LIKE %s)"
+            params.extend([f'%{keyword}%', f'%{keyword}%'])
+        if role:
+            where_clause += " AND u.role = %s"
+            params.append(role)
+        
+        # 1. 查询总数（单独执行，避免字符串替换）
+        count_sql = f"SELECT COUNT(*) FROM \"user\" u{where_clause}"
+        cur.execute(count_sql, params)
+        total_result = cur.fetchone()
+        total = total_result[0] if total_result is not None else 0
+        
+        # 2. 查询分页数据
+        select_sql = f"""
             SELECT 
                 u.id,
                 u.phone,
@@ -384,27 +402,12 @@ def admin_get_users():
                 u.role,
                 u.status,
                 u.created_at
-            FROM "user" u
-            WHERE 1=1
+            FROM \"user\" u{where_clause}
+            ORDER BY u.id DESC
+            LIMIT %s OFFSET %s
         """
-        params = []
-        
-        if keyword:
-            sql += " AND (u.name LIKE %s OR u.phone LIKE %s)"
-            params.extend([f'%{keyword}%', f'%{keyword}%'])
-        if role:
-            sql += " AND u.role = %s"
-            params.append(role)
-        
-        # 获取总数
-        count_sql = sql.replace("SELECT u.id, u.phone, u.name, u.role, u.status, u.created_at", "SELECT COUNT(*)")
-        cur.execute(count_sql, params)
-        total = cur.fetchone()[0]
-        
-        sql += " ORDER BY u.id DESC LIMIT %s OFFSET %s"
         params.extend([limit, (page - 1) * limit])
-        
-        cur.execute(sql, params)
+        cur.execute(select_sql, params)
         data = cur.fetchall()
         cur.close()
         db.close()
@@ -432,6 +435,7 @@ def admin_get_users():
         import traceback
         traceback.print_exc()
         return jsonify({"code": 500, "msg": str(e)}), 500
+
 
 @app.route("/api/admin/users", methods=["POST"])
 def admin_add_user():
