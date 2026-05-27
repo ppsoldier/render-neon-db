@@ -11,7 +11,7 @@ import traceback
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from datetime import datetime, timedelta
-
+from werkzeug.security import generate_password_hash, check_password_hash
 
 
 scheduler = None
@@ -242,6 +242,8 @@ def init_db():
 
 
 # ------------------- 登录接口 -------------------
+from werkzeug.security import check_password_hash
+
 @app.route("/api/login", methods=["POST"])
 def login():
     try:
@@ -259,9 +261,11 @@ def login():
             openid = wx_data.get('openid')
         db = get_db()
         cur = db.cursor()
-        cur.execute('SELECT id, name, role, openid FROM "user" WHERE phone = %s AND password = %s', (phone, password))
+        # 查询用户时包含密码哈希字段
+        cur.execute('SELECT id, name, role, openid, password FROM "user" WHERE phone = %s', (phone,))
         user = cur.fetchone()
-        if user:
+        if user and check_password_hash(user[4], password):
+            # 密码验证成功
             if openid and not user[3]:
                 cur.execute('UPDATE "user" SET openid = %s WHERE id = %s', (openid, user[0]))
                 db.commit()
@@ -282,7 +286,10 @@ def login():
             return jsonify({"code": 403, "msg": "账号或密码错误"}), 403
     except Exception as e:
         print(f"[登录] 错误: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"code": 500, "msg": str(e)}), 500
+        
 
 # ==================== 密码修改接口（新增） ====================
 @app.route("/api/user/change-password", methods=["POST"])
@@ -305,7 +312,7 @@ def change_password():
         
         db = get_db()
         cur = db.cursor()
-        # 验证用户身份
+        # 验证用户身份，同时获取密码哈希
         cur.execute('SELECT id, password FROM "user" WHERE phone = %s', (phone,))
         user = cur.fetchone()
         if not user:
@@ -313,20 +320,21 @@ def change_password():
             db.close()
             return jsonify({"code": 404, "msg": "用户不存在"}), 404
         
-        # 检查旧密码（当前数据库存储为明文，直接比较）
-        if user[1] != old_password:
+        # 使用哈希验证原密码
+        if not check_password_hash(user[1], old_password):
             cur.close()
             db.close()
             return jsonify({"code": 403, "msg": "原密码错误"}), 403
         
-        # 新密码不能与旧密码相同
+        # 新密码不能与旧密码相同（直接比较明文）
         if old_password == new_password:
             cur.close()
             db.close()
             return jsonify({"code": 400, "msg": "新密码不能与旧密码相同"}), 400
         
-        # 更新密码
-        cur.execute('UPDATE "user" SET password = %s WHERE id = %s', (new_password, user[0]))
+        # 生成新密码哈希并更新
+        hashed_new_password = generate_password_hash(new_password)
+        cur.execute('UPDATE "user" SET password = %s WHERE id = %s', (hashed_new_password, user[0]))
         db.commit()
         cur.close()
         db.close()
@@ -336,6 +344,11 @@ def change_password():
         print(f"修改密码错误: {str(e)}")
         return jsonify({"code": 500, "msg": str(e)}), 500
 
+
+@app.route("/migrate-passwords")
+def migrate_passwords_route():
+    migrate_passwords()
+    return "密码迁移完成"
 
 
 def log_remind(schedule_id, remind_type, receiver_role, receiver_id, receiver_openid, 
@@ -437,9 +450,11 @@ def admin_get_users():
         return jsonify({"code": 500, "msg": str(e)}), 500
 
 
+
+
 @app.route("/api/admin/users", methods=["POST"])
 def admin_add_user():
-    """管理员添加用户"""
+    """管理员添加用户（密码哈希存储）"""
     try:
         d = request.json
         phone = d.get('phone')
@@ -462,11 +477,14 @@ def admin_add_user():
             db.close()
             return jsonify({"code": 400, "msg": "手机号已存在"}), 400
         
+        # 生成密码哈希
+        hashed_password = generate_password_hash(password)
+        
         cur.execute("""
             INSERT INTO "user" (phone, password, name, role, status)
             VALUES (%s, %s, %s, %s, 1)
             RETURNING id
-        """, (phone, password, name, role))
+        """, (phone, hashed_password, name, role))
         
         new_id = cur.fetchone()[0]
         db.commit()
@@ -477,7 +495,6 @@ def admin_add_user():
     except Exception as e:
         print(f"添加用户错误: {str(e)}")
         return jsonify({"code": 500, "msg": str(e)}), 500
-
 
 @app.route("/api/admin/users/<int:user_id>", methods=["PUT"])
 def admin_update_user(user_id):
@@ -541,16 +558,30 @@ def admin_delete_user(user_id):
 
 @app.route("/api/admin/users/reset-password", methods=["POST"])
 def admin_reset_password():
-    """管理员重置用户密码"""
+    """管理员重置用户密码（哈希存储）"""
     try:
         d = request.json
         user_id = d.get('user_id')
         new_password = d.get('new_password', '123456')
         
+        if not user_id:
+            return jsonify({"code": 400, "msg": "用户ID不能为空"}), 400
+        
         db = get_db()
         cur = db.cursor()
         
-        cur.execute("UPDATE \"user\" SET password = %s WHERE id = %s", (new_password, user_id))
+        # 检查用户是否存在
+        cur.execute("SELECT id FROM \"user\" WHERE id = %s", (user_id,))
+        if not cur.fetchone():
+            cur.close()
+            db.close()
+            return jsonify({"code": 404, "msg": "用户不存在"}), 404
+        
+        # 生成新密码的哈希值
+        hashed_password = generate_password_hash(new_password)
+        
+        # 更新密码
+        cur.execute("UPDATE \"user\" SET password = %s WHERE id = %s", (hashed_password, user_id))
         db.commit()
         cur.close()
         db.close()
@@ -559,6 +590,9 @@ def admin_reset_password():
     except Exception as e:
         print(f"重置密码错误: {str(e)}")
         return jsonify({"code": 500, "msg": str(e)}), 500
+
+
+
 
 @app.route("/api/user/list")
 def user_list():
