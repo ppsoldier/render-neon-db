@@ -3514,7 +3514,7 @@ def confirm_schedule():
         db = get_db()
         cur = db.cursor()
         
-        # 检查课程是否存在以及是否已确认
+        # 1. 检查课程是否存在以及是否已确认
         cur.execute("SELECT id, subject, status, duration, student_id, student_ids FROM course_schedule WHERE id = %s", (course_id,))
         course = cur.fetchone()
         
@@ -3526,19 +3526,27 @@ def confirm_schedule():
         if course[2] == 'completed':
             cur.close()
             db.close()
-            return jsonify({"code": 400, "msg": "课程已完成确认"}), 400
+            return jsonify({"code": 400, "msg": "课程已完成确认，不能重复确认"}), 400
         
-        # 更新课程状态为已完成
-        cur.execute("""
-            UPDATE course_schedule 
-            SET status = 'completed' 
-            WHERE id = %s
-        """, (course_id,))
+        # 2. 检查是否已经有课时消耗记录（防止重复扣减）
+        cur.execute("SELECT COUNT(*) FROM hour_consumption WHERE schedule_id = %s", (course_id,))
+        existing_count = cur.fetchone()[0]
+        if existing_count > 0:
+            # 已经有记录，说明可能重复调用，但课程状态还是 scheduled
+            # 这种情况应该直接更新课程状态，不再重复扣减
+            cur.execute("UPDATE course_schedule SET status = 'completed' WHERE id = %s", (course_id,))
+            db.commit()
+            cur.close()
+            db.close()
+            return jsonify({"code": 200, "msg": "课程已确认（消耗记录已存在）"}), 200
         
-        # 获取课程涉及的课时数
+        # 3. 更新课程状态
+        cur.execute("UPDATE course_schedule SET status = 'completed' WHERE id = %s", (course_id,))
+        
+        # 4. 获取课程涉及的课时数
         duration = float(course[3]) if course[3] else 2
         
-        # 获取学生ID列表
+        # 5. 获取学生ID列表
         student_ids = []
         if course[4]:  # student_id（单学生）
             student_ids.append(course[4])
@@ -3547,7 +3555,7 @@ def confirm_schedule():
                 if sid and int(sid) not in student_ids:
                     student_ids.append(int(sid))
         
-        # 为每个学生记录课时消耗
+        # 6. 为每个学生记录课时消耗
         consumption_count = 0
         for student_id in student_ids:
             # 查找该学生有剩余课时的课时包
@@ -3575,48 +3583,13 @@ def confirm_schedule():
                     WHERE id = %s
                 """, (consume_hours, consume_hours, package_id))
                 
-                # 记录课时消耗
+                # 记录课时消耗（添加唯一约束防止重复）
                 cur.execute("""
                     INSERT INTO hour_consumption (package_id, schedule_id, hours, consume_date, note)
                     VALUES (%s, %s, %s, CURRENT_DATE, %s)
                 """, (package_id, course_id, consume_hours, f"课程确认：{course[1]}"))
                 
                 consumption_count += 1
-                
-                # 如果课时不够，继续从下一个课时包扣减
-                remaining = duration - consume_hours
-                while remaining > 0:
-                    cur.execute("""
-                        SELECT id, surplus FROM course_package 
-                        WHERE student_id = %s 
-                          AND status = 'active' 
-                          AND surplus > 0
-                        ORDER BY created_at ASC
-                        LIMIT 1
-                    """, (student_id,))
-                    next_package = cur.fetchone()
-                    if not next_package:
-                        # 没有更多课时包，记录不足提醒
-                        cur.execute("""
-                            INSERT INTO hour_consumption (package_id, schedule_id, hours, consume_date, note)
-                            VALUES (NULL, %s, %s, CURRENT_DATE, %s)
-                        """, (course_id, remaining, f"课时不足，剩余{remaining}课时未扣减"))
-                        break
-                    
-                    next_consume = min(remaining, float(next_package[1]))
-                    cur.execute("""
-                        UPDATE course_package 
-                        SET used = used + %s, surplus = surplus - %s 
-                        WHERE id = %s
-                    """, (next_consume, next_consume, next_package[0]))
-                    
-                    cur.execute("""
-                        INSERT INTO hour_consumption (package_id, schedule_id, hours, consume_date, note)
-                        VALUES (%s, %s, %s, CURRENT_DATE, %s)
-                    """, (next_package[0], course_id, next_consume, f"课程确认：{course[1]}"))
-                    
-                    consumption_count += 1
-                    remaining -= next_consume
         
         db.commit()
         cur.close()
