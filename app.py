@@ -1521,27 +1521,37 @@ def get_semester_statistics():
         cur = db.cursor()
         
         # 修复：正确统计每个学生的上课次数（支持多学生）
+        # 使用子查询先找出每个学生关联的课程，再统计
         cur.execute("""
+            WITH student_courses AS (
+                SELECT 
+                    s.id as student_id,
+                    s.name as student_name,
+                    s.grade,
+                    cs.id as course_id,
+                    cs.duration
+                FROM student s
+                LEFT JOIN course_schedule cs ON 
+                    cs.status = 'completed'
+                    AND cs.class_date BETWEEN %s AND %s
+                    AND (
+                        cs.student_id = s.id 
+                        OR cs.student_ids = CAST(s.id AS TEXT)
+                        OR cs.student_ids LIKE CONCAT(CAST(s.id AS TEXT), ',%')
+                        OR cs.student_ids LIKE CONCAT('%,', CAST(s.id AS TEXT), ',%')
+                        OR cs.student_ids LIKE CONCAT('%,', CAST(s.id AS TEXT))
+                    )
+            )
             SELECT 
-                s.id as student_id,
-                s.name as student_name,
-                s.grade,
-                COUNT(DISTINCT cs.id) as class_count,
-                COALESCE(SUM(cs.duration), 0) as total_hours
-            FROM student s
-            LEFT JOIN course_schedule cs ON 
-                cs.status = 'completed'
-                AND cs.class_date BETWEEN %s AND %s
-                AND (
-                    cs.student_id = s.id 
-                    OR cs.student_ids = CAST(s.id AS TEXT)
-                    OR cs.student_ids LIKE CONCAT(CAST(s.id AS TEXT), ',%')
-                    OR cs.student_ids LIKE CONCAT('%,', CAST(s.id AS TEXT), ',%')
-                    OR cs.student_ids LIKE CONCAT('%,', CAST(s.id AS TEXT))
-                )
-            GROUP BY s.id, s.name, s.grade
-            HAVING COUNT(cs.id) > 0
-            ORDER BY s.name
+                student_id,
+                student_name,
+                grade,
+                COUNT(DISTINCT course_id) as class_count,
+                COALESCE(SUM(duration), 0) as total_hours
+            FROM student_courses
+            WHERE course_id IS NOT NULL
+            GROUP BY student_id, student_name, grade
+            ORDER BY student_name
         """, (start_date, end_date))
         
         student_stats = []
