@@ -1509,7 +1509,7 @@ def get_semester_list():
 
 @app.route("/api/student/semester/statistics", methods=["GET"])
 def get_semester_statistics():
-    """获取学期统计数据（基于已完成课程）"""
+    """获取学期统计数据（支持多学生）"""
     try:
         start_date = request.args.get('start_date')
         end_date = request.args.get('end_date')
@@ -1520,22 +1520,25 @@ def get_semester_statistics():
         db = get_db()
         cur = db.cursor()
         
-        # 修正：使用更可靠的子查询方式，避免变量未定义错误
+        # 修复：正确统计每个学生的上课次数（支持多学生）
         cur.execute("""
             SELECT 
                 s.id as student_id,
                 s.name as student_name,
                 s.grade,
-                COUNT(cs.id) as class_count,
+                COUNT(DISTINCT cs.id) as class_count,
                 COALESCE(SUM(cs.duration), 0) as total_hours
             FROM student s
             LEFT JOIN course_schedule cs ON 
-                (cs.student_id = s.id 
-                 OR cs.student_ids = CAST(s.id AS TEXT)
-                 OR cs.student_ids LIKE CONCAT(CAST(s.id AS TEXT), ',%')
-                 OR cs.student_ids LIKE CONCAT('%,', CAST(s.id AS TEXT), ',%'))
-                AND cs.status = 'completed'
+                cs.status = 'completed'
                 AND cs.class_date BETWEEN %s AND %s
+                AND (
+                    cs.student_id = s.id 
+                    OR cs.student_ids = CAST(s.id AS TEXT)
+                    OR cs.student_ids LIKE CONCAT(CAST(s.id AS TEXT), ',%')
+                    OR cs.student_ids LIKE CONCAT('%,', CAST(s.id AS TEXT), ',%')
+                    OR cs.student_ids LIKE CONCAT('%,', CAST(s.id AS TEXT))
+                )
             GROUP BY s.id, s.name, s.grade
             HAVING COUNT(cs.id) > 0
             ORDER BY s.name
@@ -1579,7 +1582,7 @@ def get_semester_statistics():
 
 @app.route("/api/student/semester/detail", methods=["GET"])
 def get_student_semester_detail():
-    """获取学生在指定时间范围内的课程明细"""
+    """获取学生在指定时间范围内的课程明细（支持多学生）"""
     try:
         student_id = request.args.get('student_id', type=int)
         start_date = request.args.get('start_date')
@@ -1591,7 +1594,9 @@ def get_student_semester_detail():
         db = get_db()
         cur = db.cursor()
         
-        # 修正：使用 CAST 转换类型，避免变量未定义
+        student_id_str = str(student_id)
+        
+        # 修复：正确匹配单学生和多学生情况
         cur.execute("""
             SELECT 
                 cs.id,
@@ -1607,12 +1612,20 @@ def get_student_semester_detail():
               AND cs.class_date BETWEEN %s AND %s
               AND (
                   cs.student_id = %s 
-                  OR cs.student_ids = CAST(%s AS TEXT)
-                  OR cs.student_ids LIKE CONCAT(CAST(%s AS TEXT), ',%')
-                  OR cs.student_ids LIKE CONCAT('%,', CAST(%s AS TEXT), ',%')
+                  OR cs.student_ids = %s
+                  OR cs.student_ids LIKE %s
+                  OR cs.student_ids LIKE %s
+                  OR cs.student_ids LIKE %s
               )
             ORDER BY cs.class_date, cs.class_time
-        """, (start_date, end_date, student_id, student_id, student_id, student_id))
+        """, (
+            start_date, end_date, 
+            student_id, 
+            student_id_str,
+            f'{student_id_str},%',
+            f'%,{student_id_str},%',
+            f'%,{student_id_str}'
+        ))
         
         schedule_list = []
         total_classes = 0
@@ -1651,7 +1664,11 @@ def get_student_semester_detail():
         })
     except Exception as e:
         print(f"获取学生明细错误: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"code": 500, "msg": str(e)}), 500
+
+
 
 @app.route("/api/student/semester/export", methods=["POST"])
 def export_semester_report():
