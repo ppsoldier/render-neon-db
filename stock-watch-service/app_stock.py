@@ -713,6 +713,252 @@ async def remove_watchlist(user_id: str, stock_code: str):
         logger.error(f"删除自选股错误: {e}")
         return {"success": False, "message": str(e)}
 
+
+# ========== 持仓管理接口 ==========
+
+# 持仓数据结构
+# {
+#     "code": "600519",
+#     "name": "贵州茅台", 
+#     "quantity": 100,
+#     "cost_price": 1680.00,
+#     "current_price": 1700.00,
+#     "market_value": 170000.00,
+#     "pnl": 2000.00,
+#     "pnl_pct": 1.19,
+#     "updated_at": "2026-06-12 10:30:00"
+# }
+
+@app.get("/api/holdings")
+async def get_holdings(user_id: str = Query(..., description="用户ID")):
+    """获取用户持仓列表"""
+    try:
+        engine = get_sync_engine()
+        
+        with engine.connect() as conn:
+            result = conn.execute(
+                text(f"""
+                    SELECT code, name, quantity, cost_price, current_price, 
+                           market_value, pnl, pnl_pct, updated_at
+                    FROM {TABLE_HOLDINGS}
+                    WHERE user_id = :user_id
+                    ORDER BY market_value DESC
+                """),
+                {"user_id": user_id}
+            )
+            rows = result.fetchall()
+        
+        holdings = []
+        for row in rows:
+            holdings.append({
+                "code": row[0],
+                "name": row[1],
+                "quantity": float(row[2]) if row[2] else 0,
+                "cost_price": float(row[3]) if row[3] else 0,
+                "current_price": float(row[4]) if row[4] else 0,
+                "market_value": float(row[5]) if row[5] else 0,
+                "pnl": float(row[6]) if row[6] else 0,
+                "pnl_pct": float(row[7]) if row[7] else 0,
+                "updated_at": str(row[8]) if row[8] else None
+            })
+        
+        # 计算总统计
+        total_value = sum(h.get('market_value', 0) for h in holdings)
+        total_cost = sum(h.get('quantity', 0) * h.get('cost_price', 0) for h in holdings)
+        total_pnl = total_value - total_cost
+        total_pnl_pct = (total_pnl / total_cost * 100) if total_cost > 0 else 0
+        
+        return {
+            "code": 200,
+            "data": holdings,
+            "stats": {
+                "total_value": round(total_value, 2),
+                "total_cost": round(total_cost, 2),
+                "total_pnl": round(total_pnl, 2),
+                "total_pnl_pct": round(total_pnl_pct, 2)
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"获取持仓错误: {e}")
+        return {"code": 500, "message": str(e), "data": [], "stats": {}}
+
+
+@app.post("/api/holdings")
+async def add_holding(request: Request):
+    """添加持仓"""
+    try:
+        body = await request.json()
+        user_id = body.get('user_id')
+        code = body.get('code')
+        name = body.get('name')
+        quantity = float(body.get('quantity', 0))
+        cost_price = float(body.get('cost_price', 0))
+        
+        if not user_id or not code or not name:
+            return {"code": 400, "message": "缺少必要参数"}
+        
+        if quantity <= 0 or cost_price <= 0:
+            return {"code": 400, "message": "数量和成本价必须大于0"}
+        
+        engine = get_sync_engine()
+        
+        # 获取实时行情
+        current_price = cost_price
+        try:
+            # 尝试从实时数据获取最新价格
+            up_ranks = await fetch_stock_rank('0')
+            down_ranks = await fetch_stock_rank('1')
+            all_stocks = {s['stock_code']: s for s in up_ranks + down_ranks}
+            if code in all_stocks:
+                current_price = all_stocks[code].get('price', cost_price)
+        except:
+            pass
+        
+        market_value = current_price * quantity
+        pnl = market_value - (cost_price * quantity)
+        pnl_pct = (pnl / (cost_price * quantity)) * 100 if cost_price * quantity > 0 else 0
+        
+        with engine.connect() as conn:
+            # 检查是否已存在
+            existing = conn.execute(
+                text(f"SELECT code FROM {TABLE_HOLDINGS} WHERE user_id = :user_id AND code = :code"),
+                {"user_id": user_id, "code": code}
+            ).fetchone()
+            
+            if existing:
+                return {"code": 400, "message": "该股票已在持仓中"}
+            
+            conn.execute(
+                text(f"""
+                    INSERT INTO {TABLE_HOLDINGS} 
+                    (user_id, code, name, quantity, cost_price, current_price, 
+                     market_value, pnl, pnl_pct, updated_at)
+                    VALUES (:user_id, :code, :name, :quantity, :cost_price, :current_price,
+                            :market_value, :pnl, :pnl_pct, NOW())
+                """),
+                {
+                    "user_id": user_id, "code": code, "name": name,
+                    "quantity": quantity, "cost_price": cost_price, "current_price": current_price,
+                    "market_value": market_value, "pnl": pnl, "pnl_pct": pnl_pct
+                }
+            )
+            conn.commit()
+        
+        return {"code": 200, "message": "添加成功"}
+        
+    except Exception as e:
+        logger.error(f"添加持仓错误: {e}")
+        return {"code": 500, "message": str(e)}
+
+
+@app.put("/api/holdings")
+async def update_holding(request: Request):
+    """更新持仓（加仓/减仓）"""
+    try:
+        body = await request.json()
+        user_id = body.get('user_id')
+        code = body.get('code')
+        action = body.get('action')  # 'add' 或 'reduce'
+        quantity = float(body.get('quantity', 0))
+        price = float(body.get('price', 0))
+        
+        if not user_id or not code:
+            return {"code": 400, "message": "缺少必要参数"}
+        
+        if quantity <= 0 or price <= 0:
+            return {"code": 400, "message": "数量和价格必须大于0"}
+        
+        engine = get_sync_engine()
+        
+        with engine.connect() as conn:
+            # 获取当前持仓
+            result = conn.execute(
+                text(f"SELECT quantity, cost_price FROM {TABLE_HOLDINGS} WHERE user_id = :user_id AND code = :code"),
+                {"user_id": user_id, "code": code}
+            )
+            holding = result.fetchone()
+            
+            if not holding:
+                return {"code": 404, "message": "持仓不存在"}
+            
+            current_quantity = float(holding[0])
+            current_cost = float(holding[1])
+            
+            if action == 'add':
+                # 加仓：重新计算平均成本
+                new_quantity = current_quantity + quantity
+                new_cost = (current_cost * current_quantity + price * quantity) / new_quantity
+                new_cost_price = new_cost
+            elif action == 'reduce':
+                # 减仓
+                if quantity >= current_quantity:
+                    return {"code": 400, "message": "减仓数量不能大于或等于持仓数量"}
+                new_quantity = current_quantity - quantity
+                new_cost_price = current_cost  # 成本价不变
+            else:
+                return {"code": 400, "message": "无效的操作类型"}
+            
+            # 获取实时行情更新市值
+            current_price = price
+            try:
+                up_ranks = await fetch_stock_rank('0')
+                down_ranks = await fetch_stock_rank('1')
+                all_stocks = {s['stock_code']: s for s in up_ranks + down_ranks}
+                if code in all_stocks:
+                    current_price = all_stocks[code].get('price', current_price)
+            except:
+                pass
+            
+            market_value = current_price * new_quantity
+            total_cost = new_cost_price * new_quantity
+            pnl = market_value - total_cost
+            pnl_pct = (pnl / total_cost) * 100 if total_cost > 0 else 0
+            
+            conn.execute(
+                text(f"""
+                    UPDATE {TABLE_HOLDINGS} 
+                    SET quantity = :quantity, cost_price = :cost_price, current_price = :current_price,
+                        market_value = :market_value, pnl = :pnl, pnl_pct = :pnl_pct, updated_at = NOW()
+                    WHERE user_id = :user_id AND code = :code
+                """),
+                {
+                    "quantity": new_quantity, "cost_price": new_cost_price,
+                    "current_price": current_price, "market_value": market_value,
+                    "pnl": pnl, "pnl_pct": pnl_pct,
+                    "user_id": user_id, "code": code
+                }
+            )
+            conn.commit()
+        
+        return {"code": 200, "message": f"{'加仓' if action == 'add' else '减仓'}成功"}
+        
+    except Exception as e:
+        logger.error(f"更新持仓错误: {e}")
+        return {"code": 500, "message": str(e)}
+
+
+@app.delete("/api/holdings")
+async def delete_holding(user_id: str, stock_code: str):
+    """删除持仓"""
+    try:
+        engine = get_sync_engine()
+        
+        with engine.connect() as conn:
+            result = conn.execute(
+                text(f"DELETE FROM {TABLE_HOLDINGS} WHERE user_id = :user_id AND code = :code"),
+                {"user_id": user_id, "code": stock_code}
+            )
+            conn.commit()
+        
+        return {"code": 200, "message": "删除成功"}
+        
+    except Exception as e:
+        logger.error(f"删除持仓错误: {e}")
+        return {"code": 500, "message": str(e)}
+        
+
+
 # ========== 个股详情接口 ==========
 @app.get("/api/stock/detail")
 async def get_stock_detail(stock_code: str):
