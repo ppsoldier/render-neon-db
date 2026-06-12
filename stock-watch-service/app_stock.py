@@ -662,7 +662,6 @@ async def search_stock(keyword: str):
 
 
 
-# ========== 测试数据初始化接口 ==========
 @app.post("/api/stock/init-test-data")
 async def init_test_data():
     """初始化测试数据（仅用于开发测试）"""
@@ -670,109 +669,42 @@ async def init_test_data():
         today = datetime.now().strftime('%Y-%m-%d')
         engine = get_sync_engine()
         
-        # 1. 插入测试选股数据
-        test_picks = pd.DataFrame([{
-            'date': today,
-            'code': '600519',
-            'name': '贵州茅台',
-            'price': 1680.00,
-            'change_pct': 2.5,
-            'total_score': 85,
-            'advice': '持有',
-            'fin_rating': '优秀'
-        }, {
-            'date': today,
-            'code': '000858',
-            'name': '五粮液',
-            'price': 145.00,
-            'change_pct': 3.2,
-            'total_score': 82,
-            'advice': '买入',
-            'fin_rating': '良好'
-        }, {
-            'date': today,
-            'code': '300750',
-            'name': '宁德时代',
-            'price': 220.00,
-            'change_pct': 4.0,
-            'total_score': 88,
-            'advice': '强烈买入',
-            'fin_rating': '优秀'
-        }])
+        # 简化测试数据：只包含基本类型
+        test_picks = [
+            {'date': today, 'code': '600519', 'name': '贵州茅台', 'price': 1680.00, 'change_pct': 2.5, 'total_score': 85, 'advice': '持有', 'fin_rating': '优秀'},
+            {'date': today, 'code': '000858', 'name': '五粮液', 'price': 145.00, 'change_pct': 3.2, 'total_score': 82, 'advice': '买入', 'fin_rating': '良好'},
+            {'date': today, 'code': '300750', 'name': '宁德时代', 'price': 220.00, 'change_pct': 4.0, 'total_score': 88, 'advice': '强烈买入', 'fin_rating': '优秀'}
+        ]
+        df_picks = pd.DataFrame(test_picks)
         
-        # 删除当天旧数据
+        # 删除旧数据
         with engine.connect() as conn:
             conn.execute(text(f"DELETE FROM {TABLE_SELECTED} WHERE date = :date"), {"date": today})
             conn.commit()
         
-        # 插入新数据
-        test_picks.to_sql(TABLE_SELECTED.split('.')[1], engine, schema=SCHEMA_NAME, if_exists='append', index=False)
+        # 写入新数据
+        df_picks.to_sql(TABLE_SELECTED.split('.')[1], engine, schema=SCHEMA_NAME, if_exists='append', index=False)
         
-        # 2. 插入测试市场数据
-        test_market = pd.DataFrame([{
+        # 同样简化市场数据
+        test_market = [{
             'date': today,
             'market_state': '震荡市',
             'market_score': 65,
             'position_ratio': 0.5,
-            'advice': '控制仓位，高抛低吸，关注科技板块',
+            'advice': '控制仓位',
             'trend_strength': 45,
             'volatility': 18,
             'ma_arrangement': '多头排列'
-        }])
+        }]
+        df_market = pd.DataFrame(test_market)
         
         with engine.connect() as conn:
             conn.execute(text(f"DELETE FROM {TABLE_MARKET} WHERE date = :date"), {"date": today})
             conn.commit()
         
-        test_market.to_sql(TABLE_MARKET.split('.')[1], engine, schema=SCHEMA_NAME, if_exists='append', index=False)
+        df_market.to_sql(TABLE_MARKET.split('.')[1], engine, schema=SCHEMA_NAME, if_exists='append', index=False)
         
-        # 3. 插入测试热点概念数据
-        test_concepts = pd.DataFrame([{
-            'date': today,
-            'concept_name': '人工智能',
-            'change_pct': 3.5,
-            'leading_stock': '科大讯飞'
-        }, {
-            'date': today,
-            'concept_name': '新能源',
-            'change_pct': 2.8,
-            'leading_stock': '宁德时代'
-        }, {
-            'date': today,
-            'concept_name': '半导体',
-            'change_pct': 1.9,
-            'leading_stock': '中芯国际'
-        }])
-        
-        with engine.connect() as conn:
-            conn.execute(text(f"DELETE FROM {TABLE_CONCEPTS} WHERE date = :date"), {"date": today})
-            conn.commit()
-        
-        test_concepts.to_sql(TABLE_CONCEPTS.split('.')[1], engine, schema=SCHEMA_NAME, if_exists='append', index=False)
-        
-        # 4. 插入测试行业数据
-        test_industries = pd.DataFrame([{
-            'date': today,
-            'industry_name': '白酒',
-            'change_pct': 2.1,
-            'leading_stock': '贵州茅台'
-        }, {
-            'date': today,
-            'industry_name': '电池',
-            'change_pct': 3.2,
-            'leading_stock': '宁德时代'
-        }])
-        
-        with engine.connect() as conn:
-            conn.execute(text(f"DELETE FROM {TABLE_INDUSTRIES} WHERE date = :date"), {"date": today})
-            conn.commit()
-        
-        test_industries.to_sql(TABLE_INDUSTRIES.split('.')[1], engine, schema=SCHEMA_NAME, if_exists='append', index=False)
-        
-        return {
-            "code": 200, 
-            "message": f"测试数据初始化完成！选股：{len(test_picks)}条，概念：{len(test_concepts)}条，行业：{len(test_industries)}条"
-        }
+        return {"code": 200, "message": f"测试数据初始化完成！选股：{len(df_picks)}条"}
         
     except Exception as e:
         logger.error(f"初始化测试数据失败: {e}")
