@@ -563,6 +563,70 @@ async def search_stock(keyword: str):
         logger.error(f"搜索错误: {e}")
         return []
 
+
+
+@app.post("/api/stock/init-test-data")
+async def init_test_data():
+    """初始化测试数据（仅用于开发测试）"""
+    try:
+        today = datetime.now().strftime('%Y-%m-%d')
+        engine = get_sync_engine()
+        
+        # 插入测试选股数据
+        test_picks = pd.DataFrame([{
+            'date': today,
+            'code': '600519',
+            'name': '贵州茅台',
+            'price': 1680.00,
+            'change_pct': 2.5,
+            'total_score': 85,
+            'advice': '持有',
+            'fin_rating': '优秀'
+        }, {
+            'date': today,
+            'code': '000858',
+            'name': '五粮液',
+            'price': 145.00,
+            'change_pct': 3.2,
+            'total_score': 82,
+            'advice': '买入',
+            'fin_rating': '良好'
+        }])
+        
+        # 先删除当天旧数据
+        with engine.connect() as conn:
+            conn.execute(text(f"DELETE FROM {TABLE_SELECTED} WHERE date = :date"), {"date": today})
+            conn.commit()
+        
+        # 插入新数据
+        test_picks.to_sql(TABLE_SELECTED.split('.')[1], engine, schema=SCHEMA_NAME, if_exists='append', index=False)
+        
+        # 插入测试市场数据
+        test_market = pd.DataFrame([{
+            'date': today,
+            'market_state': '震荡市',
+            'market_score': 65,
+            'position_ratio': 0.5,
+            'advice': '控制仓位，高抛低吸',
+            'trend_strength': 45,
+            'volatility': 18,
+            'ma_arrangement': '多头排列'
+        }])
+        
+        with engine.connect() as conn:
+            conn.execute(text(f"DELETE FROM {TABLE_MARKET} WHERE date = :date"), {"date": today})
+            conn.commit()
+        
+        test_market.to_sql(TABLE_MARKET.split('.')[1], engine, schema=SCHEMA_NAME, if_exists='append', index=False)
+        
+        return {"code": 200, "message": f"测试数据已初始化，共 {len(test_picks)} 条选股记录"}
+        
+    except Exception as e:
+        logger.error(f"初始化测试数据失败: {e}")
+        return {"code": 500, "message": str(e)}
+        
+
+
 # ========== 启动事件 ==========
 @asynccontextmanager
 async def lifespan(app: FastAPI):
