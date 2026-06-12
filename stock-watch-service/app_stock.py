@@ -273,7 +273,7 @@ async def fetch_stock_rank(sort_type: str):
     """获取股票涨跌幅排行"""
     # ... 保持原有实现 ...
     stock_rank = []
-    for page in range(1, 3):
+    for page in range(1, 10):
         timestamp = str(int(time.time() * 1000))
         params = {
             'pageNum': str(page),
