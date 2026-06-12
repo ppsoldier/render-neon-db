@@ -598,6 +598,23 @@ async def get_stock_detail(stock_code: str):
         logger.error(f"获取个股详情错误: {e}")
         return {"stock_code": stock_code, "stock_name": stock_code, "quote": {}}
 
+# ========== 历史选股接口 ==========
+@app.get("/api/stock/picks/history")
+async def get_stock_picks_history(date: str = Query(..., description="日期 YYYY-MM-DD")):
+    """获取指定日期的历史选股结果"""
+    try:
+        engine = get_sync_engine()
+        df = pd.read_sql(f"SELECT * FROM {TABLE_SELECTED} WHERE date = %s ORDER BY total_score DESC", engine, params=[date])
+        
+        if df.empty:
+            return {"code": 200, "data": [], "has_data": False, "msg": f"{date} 无选股数据"}
+        
+        picks = df.to_dict(orient='records')
+        return {"code": 200, "data": picks, "has_data": True}
+    except Exception as e:
+        logger.error(f"获取历史选股结果错误: {e}")
+        return {"code": 500, "message": str(e), "data": []}
+
 # ========== 搜索接口 ==========
 @app.get("/api/stock/search")
 async def search_stock(keyword: str):
