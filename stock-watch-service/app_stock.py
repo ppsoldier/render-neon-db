@@ -340,7 +340,7 @@ async def fetch_sector_rank(hq_type_code: str):
     hq_type_code: 'HY' 行业, 'GN' 概念
     """
     sector_rank = []
-    for page in range(1, 2):
+    for page in range(1, 6):
         timestamp = str(int(time.time() * 1000))
         params = {
             'hqTypeCode': hq_type_code,
@@ -474,26 +474,26 @@ async def get_limit_stats():
             change = stock.get('change_percent', 0)
             code = stock.get('stock_code', '')
             if code.startswith(('30', '68')):
-                if change >= 19.5:
+                if change >= 19.8:
                     limit_up += 1
             elif code.startswith('8'):
-                if change >= 29.5:
+                if change >= 29.8:
                     limit_up += 1
             else:
-                if change >= 9.5:
+                if change >= 9.8:
                     limit_up += 1
         
         for stock in down_ranks:
             change = stock.get('change_percent', 0)
             code = stock.get('stock_code', '')
             if code.startswith(('30', '68')):
-                if change <= -19.5:
+                if change <= -19.8:
                     limit_down += 1
             elif code.startswith('8'):
-                if change <= -29.5:
+                if change <= -29.8:
                     limit_down += 1
             else:
-                if change <= -9.5:
+                if change <= -9.8:
                     limit_down += 1
         
         # 市场情绪评分（0-100）
