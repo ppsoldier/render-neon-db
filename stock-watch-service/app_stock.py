@@ -29,7 +29,8 @@ DB_USER = os.environ.get("DB_USER", "neondb_owner")
 DB_PASSWORD = os.environ.get("DB_PASSWORD", "npg_b1QR9lMdusev")
 DB_NAME = os.environ.get("DB_NAME", "neondb")
 DB_PORT = int(os.environ.get("DB_PORT", 5432))
-SCHEMA_NAME = os.environ.get("DB_SCHEMA", "stock_watch")
+# SCHEMA_NAME = os.environ.get("DB_SCHEMA", "stock_watch")
+SCHEMA_NAME = os.environ.get("DB_SCHEMA", "stock_data")
 
 # 异步数据库URL（用于asyncpg）
 DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}?sslmode=require"
