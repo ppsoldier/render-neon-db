@@ -745,42 +745,99 @@ async def init_test_data():
         today = datetime.now().strftime('%Y-%m-%d')
         engine = get_sync_engine()
         
-        # 简化测试数据：只包含基本类型
+        # ========== 1. 插入选股数据 ==========
         test_picks = [
-            {'date': today, 'code': '600519', 'name': '贵州茅台', 'price': 1680.00, 'change_pct': 2.5, 'total_score': 85, 'advice': '持有', 'fin_rating': '优秀'},
-            {'date': today, 'code': '000858', 'name': '五粮液', 'price': 145.00, 'change_pct': 3.2, 'total_score': 82, 'advice': '买入', 'fin_rating': '良好'},
-            {'date': today, 'code': '300750', 'name': '宁德时代', 'price': 220.00, 'change_pct': 4.0, 'total_score': 88, 'advice': '强烈买入', 'fin_rating': '优秀'}
+            (today, '600519', '贵州茅台', 1680.00, 2.5, 85, '持有', '优秀'),
+            (today, '000858', '五粮液', 145.00, 3.2, 82, '买入', '良好'),
+            (today, '300750', '宁德时代', 220.00, 4.0, 88, '强烈买入', '优秀')
         ]
-        df_picks = pd.DataFrame(test_picks)
         
-        # 删除旧数据
         with engine.connect() as conn:
             conn.execute(text(f"DELETE FROM {TABLE_SELECTED} WHERE date = :date"), {"date": today})
             conn.commit()
+            
+            for pick in test_picks:
+                conn.execute(
+                    text(f"""
+                        INSERT INTO {TABLE_SELECTED} 
+                        (date, code, name, price, change_pct, total_score, advice, fin_rating)
+                        VALUES (:date, :code, :name, :price, :change_pct, :total_score, :advice, :fin_rating)
+                    """),
+                    {"date": pick[0], "code": pick[1], "name": pick[2],
+                     "price": pick[3], "change_pct": pick[4],
+                     "total_score": pick[5], "advice": pick[6], "fin_rating": pick[7]}
+                )
+            conn.commit()
         
-        # 写入新数据
-        df_picks.to_sql(TABLE_SELECTED.split('.')[1], engine, schema=SCHEMA_NAME, if_exists='append', index=False)
-        
-        # 同样简化市场数据
-        test_market = [{
-            'date': today,
-            'market_state': '震荡市',
-            'market_score': 65,
-            'position_ratio': 0.5,
-            'advice': '控制仓位',
-            'trend_strength': 45,
-            'volatility': 18,
-            'ma_arrangement': '多头排列'
-        }]
-        df_market = pd.DataFrame(test_market)
-        
+        # ========== 2. 插入市场数据 ==========
         with engine.connect() as conn:
             conn.execute(text(f"DELETE FROM {TABLE_MARKET} WHERE date = :date"), {"date": today})
             conn.commit()
+            
+            conn.execute(
+                text(f"""
+                    INSERT INTO {TABLE_MARKET} 
+                    (date, market_state, market_score, position_ratio, advice, trend_strength, volatility, ma_arrangement)
+                    VALUES (:date, :market_state, :market_score, :position_ratio, :advice, :trend_strength, :volatility, :ma_arrangement)
+                """),
+                {"date": today, "market_state": "震荡市", "market_score": 65,
+                 "position_ratio": 0.5, "advice": "控制仓位，高抛低吸", "trend_strength": 45,
+                 "volatility": 18, "ma_arrangement": "多头排列"}
+            )
+            conn.commit()
         
-        df_market.to_sql(TABLE_MARKET.split('.')[1], engine, schema=SCHEMA_NAME, if_exists='append', index=False)
+        # ========== 3. 插入概念板块数据 ==========
+        test_concepts = [
+            (today, '人工智能', 3.5, '科大讯飞'),
+            (today, '新能源', 2.8, '宁德时代'),
+            (today, '半导体', 1.9, '中芯国际'),
+            (today, '国产软件', 2.5, '金山办公'),
+            (today, '军工', 1.8, '航发动力')
+        ]
         
-        return {"code": 200, "message": f"测试数据初始化完成！选股：{len(df_picks)}条"}
+        with engine.connect() as conn:
+            conn.execute(text(f"DELETE FROM {TABLE_CONCEPTS} WHERE date = :date"), {"date": today})
+            conn.commit()
+            
+            for concept in test_concepts:
+                conn.execute(
+                    text(f"""
+                        INSERT INTO {TABLE_CONCEPTS} 
+                        (date, concept_name, change_pct, leading_stock)
+                        VALUES (:date, :concept_name, :change_pct, :leading_stock)
+                    """),
+                    {"date": concept[0], "concept_name": concept[1], "change_pct": concept[2], "leading_stock": concept[3]}
+                )
+            conn.commit()
+        
+        # ========== 4. 插入行业板块数据 ==========
+        test_industries = [
+            (today, '白酒', 2.1, '贵州茅台'),
+            (today, '电池', 3.2, '宁德时代'),
+            (today, '家电', 1.5, '美的集团'),
+            (today, '半导体', 2.0, '中芯国际'),
+            (today, '证券', 1.2, '中信证券')
+        ]
+        
+        with engine.connect() as conn:
+            conn.execute(text(f"DELETE FROM {TABLE_INDUSTRIES} WHERE date = :date"), {"date": today})
+            conn.commit()
+            
+            for industry in test_industries:
+                conn.execute(
+                    text(f"""
+                        INSERT INTO {TABLE_INDUSTRIES} 
+                        (date, industry_name, change_pct, leading_stock)
+                        VALUES (:date, :industry_name, :change_pct, :leading_stock)
+                    """),
+                    {"date": industry[0], "industry_name": industry[1], "change_pct": industry[2], "leading_stock": industry[3]}
+                )
+            conn.commit()
+        
+        return {
+            "code": 200,
+            "message": f"测试数据初始化完成！选股：{len(test_picks)}条，概念：{len(test_concepts)}条，行业：{len(test_industries)}条"
+        }
         
     except Exception as e:
         logger.error(f"初始化测试数据失败: {e}")
