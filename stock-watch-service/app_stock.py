@@ -457,21 +457,60 @@ async def get_realtime_concept():
         logger.error(f"获取概念板块错误: {e}")
         return {"code": 500, "message": str(e), "data": []}
 
+
 @app.get("/api/market/limit-stats")
 async def get_limit_stats():
     """获取涨跌停统计"""
     try:
+        # 从涨幅榜和跌幅榜中统计涨停/跌停数量
         up_ranks = await fetch_stock_rank('0')
         down_ranks = await fetch_stock_rank('1')
-        limit_up = sum(1 for s in up_ranks if s.get('change_percent', 0) >= 9.5)
-        limit_down = sum(1 for s in down_ranks if s.get('change_percent', 0) <= -9.5)
+        
+        # 涨停判断：涨幅 >= 9.5%（主板）或 >= 19.5%（创业板/科创板）
+        limit_up = 0
+        limit_down = 0
+        
+        for stock in up_ranks:
+            change = stock.get('change_percent', 0)
+            code = stock.get('stock_code', '')
+            if code.startswith(('30', '68')):
+                if change >= 19.5:
+                    limit_up += 1
+            elif code.startswith('8'):
+                if change >= 29.5:
+                    limit_up += 1
+            else:
+                if change >= 9.5:
+                    limit_up += 1
+        
+        for stock in down_ranks:
+            change = stock.get('change_percent', 0)
+            code = stock.get('stock_code', '')
+            if code.startswith(('30', '68')):
+                if change <= -19.5:
+                    limit_down += 1
+            elif code.startswith('8'):
+                if change <= -29.5:
+                    limit_down += 1
+            else:
+                if change <= -9.5:
+                    limit_down += 1
+        
+        # 市场情绪评分（0-100）
+        sentiment = 50 + (limit_up - limit_down) * 2
+        sentiment = max(0, min(100, sentiment))
+        
         return {
             "limit_up_count": limit_up,
             "limit_down_count": limit_down,
-            "sentiment": 50 + (limit_up - limit_down) // 2
+            "sentiment": sentiment
         }
-    except:
+    except Exception as e:
+        logger.error(f"获取涨跌停统计错误: {e}")
+        # 返回默认值
         return {"limit_up_count": 0, "limit_down_count": 0, "sentiment": 50}
+
+
 
 # ========== 选股结果接口（从数据库读取）==========
 @app.get("/api/stock/picks")
