@@ -479,14 +479,38 @@ async def get_stock_picks():
     try:
         today = datetime.now().strftime('%Y-%m-%d')
         engine = get_sync_engine()
-        # 从你的选股结果表中读取今日数据
-        df = pd.read_sql(f"SELECT * FROM {TABLE_SELECTED} WHERE date = %s", engine, params=[today])
         
-        if df.empty:
+        # 使用原生 SQL 查询，避免 pandas 的类型问题
+        with engine.connect() as conn:
+            result = conn.execute(
+                text(f"""
+                    SELECT code, name, price, change_pct, total_score, advice, fin_rating, date
+                    FROM {TABLE_SELECTED}
+                    WHERE date = :date
+                    ORDER BY total_score DESC
+                """),
+                {"date": today}
+            )
+            rows = result.fetchall()
+        
+        if not rows:
             return {"code": 200, "data": [], "has_data": False, "msg": "今日尚无选股数据"}
         
-        picks = df.to_dict(orient='records')
+        picks = []
+        for row in rows:
+            picks.append({
+                "code": row[0],
+                "name": row[1],
+                "price": float(row[2]) if row[2] else 0,
+                "change_pct": float(row[3]) if row[3] else 0,
+                "total_score": float(row[4]) if row[4] else 0,
+                "advice": row[5] or '',
+                "fin_rating": row[6] or '',
+                "date": str(row[7]) if row[7] else ''
+            })
+        
         return {"code": 200, "data": picks, "has_data": True}
+        
     except Exception as e:
         logger.error(f"获取选股结果错误: {e}")
         return {"code": 500, "message": str(e), "data": []}
@@ -497,14 +521,34 @@ async def get_market_data():
     try:
         today = datetime.now().strftime('%Y-%m-%d')
         engine = get_sync_engine()
-        # 从你的市场数据表中读取今日数据
-        df = pd.read_sql(f"SELECT * FROM {TABLE_MARKET} WHERE date = %s", engine, params=[today])
         
-        if df.empty:
+        with engine.connect() as conn:
+            result = conn.execute(
+                text(f"""
+                    SELECT market_state, market_score, position_ratio, advice, 
+                           trend_strength, volatility, ma_arrangement
+                    FROM {TABLE_MARKET}
+                    WHERE date = :date
+                """),
+                {"date": today}
+            )
+            row = result.fetchone()
+        
+        if not row:
             return {"code": 200, "data": None, "msg": "暂无市场数据"}
         
-        row = df.iloc[0].to_dict()
-        return {"code": 200, "data": row}
+        market_data = {
+            "market_state": row[0],
+            "market_score": row[1],
+            "position_ratio": float(row[2]) if row[2] else 0.5,
+            "advice": row[3] or '',
+            "trend_strength": float(row[4]) if row[4] else 0,
+            "volatility": float(row[5]) if row[5] else 0,
+            "ma_arrangement": row[6] or ''
+        }
+        
+        return {"code": 200, "data": market_data}
+        
     except Exception as e:
         logger.error(f"获取市场数据错误: {e}")
         return {"code": 500, "message": str(e), "data": None}
@@ -516,19 +560,51 @@ async def get_sentiment_data():
         today = datetime.now().strftime('%Y-%m-%d')
         engine = get_sync_engine()
         
-        # 获取热点概念 (前5名)
-        concepts_df = pd.read_sql(f"SELECT concept_name, change_pct, leading_stock FROM {TABLE_CONCEPTS} WHERE date = %s ORDER BY change_pct DESC LIMIT 5", engine, params=[today])
-        concepts = concepts_df.to_dict(orient='records') if not concepts_df.empty else []
+        # 获取热点概念
+        with engine.connect() as conn:
+            concepts_result = conn.execute(
+                text(f"""
+                    SELECT concept_name, change_pct, leading_stock
+                    FROM {TABLE_CONCEPTS}
+                    WHERE date = :date
+                    ORDER BY change_pct DESC
+                    LIMIT 5
+                """),
+                {"date": today}
+            )
+            concepts = []
+            for row in concepts_result.fetchall():
+                concepts.append({
+                    "name": row[0],
+                    "change_pct": float(row[1]) if row[1] else 0,
+                    "leading_stock": row[2] or ''
+                })
         
-        # 获取热点行业 (前5名)
-        industries_df = pd.read_sql(f"SELECT industry_name, change_pct, leading_stock FROM {TABLE_INDUSTRIES} WHERE date = %s ORDER BY change_pct DESC LIMIT 5", engine, params=[today])
-        industries = industries_df.to_dict(orient='records') if not industries_df.empty else []
+        # 获取热点行业
+        with engine.connect() as conn:
+            industries_result = conn.execute(
+                text(f"""
+                    SELECT industry_name, change_pct, leading_stock
+                    FROM {TABLE_INDUSTRIES}
+                    WHERE date = :date
+                    ORDER BY change_pct DESC
+                    LIMIT 5
+                """),
+                {"date": today}
+            )
+            industries = []
+            for row in industries_result.fetchall():
+                industries.append({
+                    "name": row[0],
+                    "change_pct": float(row[1]) if row[1] else 0,
+                    "leading_stock": row[2] or ''
+                })
         
         return {"code": 200, "data": {"concepts": concepts, "industries": industries}}
+        
     except Exception as e:
         logger.error(f"获取情绪数据错误: {e}")
         return {"code": 500, "message": str(e), "data": {"concepts": [], "industries": []}}
-        
 
 # ========== 自选股接口（使用数据库）==========
 @app.get("/api/watchlist")
