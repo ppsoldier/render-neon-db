@@ -698,19 +698,43 @@ async def get_stock_detail(stock_code: str):
         logger.error(f"获取个股详情错误: {e}")
         return {"stock_code": stock_code, "stock_name": stock_code, "quote": {}}
 
-# ========== 历史选股接口 ==========
+
 @app.get("/api/stock/picks/history")
 async def get_stock_picks_history(date: str = Query(..., description="日期 YYYY-MM-DD")):
     """获取指定日期的历史选股结果"""
     try:
         engine = get_sync_engine()
-        df = pd.read_sql(f"SELECT * FROM {TABLE_SELECTED} WHERE date = %s ORDER BY total_score DESC", engine, params=[date])
         
-        if df.empty:
+        with engine.connect() as conn:
+            result = conn.execute(
+                text(f"""
+                    SELECT code, name, price, change_pct, total_score, advice, fin_rating, date
+                    FROM {TABLE_SELECTED}
+                    WHERE date = :date
+                    ORDER BY total_score DESC
+                """),
+                {"date": date}
+            )
+            rows = result.fetchall()
+        
+        if not rows:
             return {"code": 200, "data": [], "has_data": False, "msg": f"{date} 无选股数据"}
         
-        picks = df.to_dict(orient='records')
+        picks = []
+        for row in rows:
+            picks.append({
+                "code": row[0],
+                "name": row[1],
+                "price": float(row[2]) if row[2] else 0,
+                "change_pct": float(row[3]) if row[3] else 0,
+                "total_score": float(row[4]) if row[4] else 0,
+                "advice": row[5] or '',
+                "fin_rating": row[6] or '',
+                "date": str(row[7]) if row[7] else ''
+            })
+        
         return {"code": 200, "data": picks, "has_data": True}
+        
     except Exception as e:
         logger.error(f"获取历史选股结果错误: {e}")
         return {"code": 500, "message": str(e), "data": []}
