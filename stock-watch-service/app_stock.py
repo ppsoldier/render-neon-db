@@ -475,26 +475,26 @@ async def get_limit_stats():
             change = stock.get('change_percent', 0)
             code = stock.get('stock_code', '')
             if code.startswith(('30', '68')):
-                if change >= 19.8:
+                if change >= 19.7:
                     limit_up += 1
             elif code.startswith('8'):
-                if change >= 29.8:
+                if change >= 29.7:
                     limit_up += 1
             else:
-                if change >= 9.8:
+                if change >= 9.7:
                     limit_up += 1
         
         for stock in down_ranks:
             change = stock.get('change_percent', 0)
             code = stock.get('stock_code', '')
             if code.startswith(('30', '68')):
-                if change <= -19.8:
+                if change <= -19.7:
                     limit_down += 1
             elif code.startswith('8'):
-                if change <= -29.8:
+                if change <= -29.7:
                     limit_down += 1
             else:
-                if change <= -9.8:
+                if change <= -9.7:
                     limit_down += 1
         
         # 市场情绪评分（0-100）
