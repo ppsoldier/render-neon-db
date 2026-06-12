@@ -45,6 +45,7 @@ TABLE_CONCEPTS = f"{SCHEMA_NAME}.concepts_data"
 TABLE_INDUSTRIES = f"{SCHEMA_NAME}.industries_data"
 TABLE_SELECTED = f"{SCHEMA_NAME}.selected_stocks"
 TABLE_WATCHLIST = f"{SCHEMA_NAME}.watchlist"
+TABLE_CURRENT_POSITIONS = f"{SCHEMA_NAME}.current_positions"
 
 # ========== 同步数据库引擎（用于pandas）==========
 _sync_engine = None
@@ -738,9 +739,9 @@ async def get_holdings(user_id: str = Query(..., description="用户ID")):
         with engine.connect() as conn:
             result = conn.execute(
                 text(f"""
-                    SELECT code, name, quantity, cost_price, current_price, 
+                    SELECT code, name, quantity, cost_price, market_price, 
                            market_value, pnl, pnl_pct, updated_at
-                    FROM {TABLE_HOLDINGS}
+                    FROM {TABLE_CURRENT_POSITIONS}
                     WHERE user_id = :user_id
                     ORDER BY market_value DESC
                 """),
@@ -749,22 +750,32 @@ async def get_holdings(user_id: str = Query(..., description="用户ID")):
             rows = result.fetchall()
         
         holdings = []
+        total_value = 0
+        total_cost = 0
+        
         for row in rows:
+            quantity = float(row[2]) if row[2] else 0
+            cost_price = float(row[3]) if row[3] else 0
+            current_price = float(row[4]) if row[4] else cost_price
+            market_value = float(row[5]) if row[5] else current_price * quantity
+            pnl = float(row[6]) if row[6] else 0
+            pnl_pct = float(row[7]) if row[7] else 0
+            
             holdings.append({
                 "code": row[0],
                 "name": row[1],
-                "quantity": float(row[2]) if row[2] else 0,
-                "cost_price": float(row[3]) if row[3] else 0,
-                "current_price": float(row[4]) if row[4] else 0,
-                "market_value": float(row[5]) if row[5] else 0,
-                "pnl": float(row[6]) if row[6] else 0,
-                "pnl_pct": float(row[7]) if row[7] else 0,
+                "quantity": quantity,
+                "cost_price": cost_price,
+                "current_price": current_price,
+                "market_value": market_value,
+                "pnl": pnl,
+                "pnl_pct": pnl_pct,
                 "updated_at": str(row[8]) if row[8] else None
             })
+            
+            total_value += market_value
+            total_cost += cost_price * quantity
         
-        # 计算总统计
-        total_value = sum(h.get('market_value', 0) for h in holdings)
-        total_cost = sum(h.get('quantity', 0) * h.get('cost_price', 0) for h in holdings)
         total_pnl = total_value - total_cost
         total_pnl_pct = (total_pnl / total_cost * 100) if total_cost > 0 else 0
         
@@ -792,7 +803,7 @@ async def add_holding(request: Request):
         user_id = body.get('user_id')
         code = body.get('code')
         name = body.get('name')
-        quantity = float(body.get('quantity', 0))
+        quantity = int(body.get('quantity', 0))
         cost_price = float(body.get('cost_price', 0))
         
         if not user_id or not code or not name:
@@ -806,7 +817,6 @@ async def add_holding(request: Request):
         # 获取实时行情
         current_price = cost_price
         try:
-            # 尝试从实时数据获取最新价格
             up_ranks = await fetch_stock_rank('0')
             down_ranks = await fetch_stock_rank('1')
             all_stocks = {s['stock_code']: s for s in up_ranks + down_ranks}
@@ -817,12 +827,12 @@ async def add_holding(request: Request):
         
         market_value = current_price * quantity
         pnl = market_value - (cost_price * quantity)
-        pnl_pct = (pnl / (cost_price * quantity)) * 100 if cost_price * quantity > 0 else 0
+        pnl_pct = round((pnl / (cost_price * quantity)) * 100, 2) if cost_price * quantity > 0 else 0
         
         with engine.connect() as conn:
             # 检查是否已存在
             existing = conn.execute(
-                text(f"SELECT code FROM {TABLE_HOLDINGS} WHERE user_id = :user_id AND code = :code"),
+                text(f"SELECT code FROM {TABLE_CURRENT_POSITIONS} WHERE user_id = :user_id AND code = :code"),
                 {"user_id": user_id, "code": code}
             ).fetchone()
             
@@ -831,16 +841,18 @@ async def add_holding(request: Request):
             
             conn.execute(
                 text(f"""
-                    INSERT INTO {TABLE_HOLDINGS} 
-                    (user_id, code, name, quantity, cost_price, current_price, 
-                     market_value, pnl, pnl_pct, updated_at)
+                    INSERT INTO {TABLE_CURRENT_POSITIONS} 
+                    (user_id, code, name, quantity, cost_price, market_price, 
+                     market_value, pnl, pnl_pct, updated_at, created_at)
                     VALUES (:user_id, :code, :name, :quantity, :cost_price, :current_price,
-                            :market_value, :pnl, :pnl_pct, NOW())
+                            :market_value, :pnl, :pnl_pct, NOW(), NOW())
                 """),
                 {
                     "user_id": user_id, "code": code, "name": name,
                     "quantity": quantity, "cost_price": cost_price, "current_price": current_price,
-                    "market_value": market_value, "pnl": pnl, "pnl_pct": pnl_pct
+                    "market_value": round(market_value, 2), 
+                    "pnl": round(pnl, 2), 
+                    "pnl_pct": pnl_pct
                 }
             )
             conn.commit()
@@ -860,7 +872,7 @@ async def update_holding(request: Request):
         user_id = body.get('user_id')
         code = body.get('code')
         action = body.get('action')  # 'add' 或 'reduce'
-        quantity = float(body.get('quantity', 0))
+        quantity = int(body.get('quantity', 0))
         price = float(body.get('price', 0))
         
         if not user_id or not code:
@@ -874,7 +886,7 @@ async def update_holding(request: Request):
         with engine.connect() as conn:
             # 获取当前持仓
             result = conn.execute(
-                text(f"SELECT quantity, cost_price FROM {TABLE_HOLDINGS} WHERE user_id = :user_id AND code = :code"),
+                text(f"SELECT quantity, cost_price FROM {TABLE_CURRENT_POSITIONS} WHERE user_id = :user_id AND code = :code"),
                 {"user_id": user_id, "code": code}
             )
             holding = result.fetchone()
@@ -882,14 +894,14 @@ async def update_holding(request: Request):
             if not holding:
                 return {"code": 404, "message": "持仓不存在"}
             
-            current_quantity = float(holding[0])
+            current_quantity = int(holding[0])
             current_cost = float(holding[1])
             
             if action == 'add':
                 # 加仓：重新计算平均成本
                 new_quantity = current_quantity + quantity
                 new_cost = (current_cost * current_quantity + price * quantity) / new_quantity
-                new_cost_price = new_cost
+                new_cost_price = round(new_cost, 2)
             elif action == 'reduce':
                 # 减仓
                 if quantity >= current_quantity:
@@ -913,20 +925,24 @@ async def update_holding(request: Request):
             market_value = current_price * new_quantity
             total_cost = new_cost_price * new_quantity
             pnl = market_value - total_cost
-            pnl_pct = (pnl / total_cost) * 100 if total_cost > 0 else 0
+            pnl_pct = round((pnl / total_cost) * 100, 2) if total_cost > 0 else 0
             
             conn.execute(
                 text(f"""
-                    UPDATE {TABLE_HOLDINGS} 
-                    SET quantity = :quantity, cost_price = :cost_price, current_price = :current_price,
+                    UPDATE {TABLE_CURRENT_POSITIONS} 
+                    SET quantity = :quantity, cost_price = :cost_price, market_price = :current_price,
                         market_value = :market_value, pnl = :pnl, pnl_pct = :pnl_pct, updated_at = NOW()
                     WHERE user_id = :user_id AND code = :code
                 """),
                 {
-                    "quantity": new_quantity, "cost_price": new_cost_price,
-                    "current_price": current_price, "market_value": market_value,
-                    "pnl": pnl, "pnl_pct": pnl_pct,
-                    "user_id": user_id, "code": code
+                    "quantity": new_quantity, 
+                    "cost_price": new_cost_price,
+                    "current_price": round(current_price, 2),
+                    "market_value": round(market_value, 2),
+                    "pnl": round(pnl, 2),
+                    "pnl_pct": pnl_pct,
+                    "user_id": user_id, 
+                    "code": code
                 }
             )
             conn.commit()
@@ -945,8 +961,8 @@ async def delete_holding(user_id: str, stock_code: str):
         engine = get_sync_engine()
         
         with engine.connect() as conn:
-            result = conn.execute(
-                text(f"DELETE FROM {TABLE_HOLDINGS} WHERE user_id = :user_id AND code = :code"),
+            conn.execute(
+                text(f"DELETE FROM {TABLE_CURRENT_POSITIONS} WHERE user_id = :user_id AND code = :code"),
                 {"user_id": user_id, "code": stock_code}
             )
             conn.commit()
@@ -955,6 +971,66 @@ async def delete_holding(user_id: str, stock_code: str):
         
     except Exception as e:
         logger.error(f"删除持仓错误: {e}")
+        return {"code": 500, "message": str(e)}
+
+
+@app.post("/api/holdings/refresh")
+async def refresh_holdings_prices(user_id: str):
+    """刷新所有持仓的实时价格"""
+    try:
+        engine = get_sync_engine()
+        
+        # 获取所有持仓
+        with engine.connect() as conn:
+            holdings = conn.execute(
+                text(f"SELECT code, quantity, cost_price FROM {TABLE_CURRENT_POSITIONS} WHERE user_id = :user_id"),
+                {"user_id": user_id}
+            ).fetchall()
+        
+        if not holdings:
+            return {"code": 200, "message": "无持仓数据"}
+        
+        # 获取实时行情
+        up_ranks = await fetch_stock_rank('0')
+        down_ranks = await fetch_stock_rank('1')
+        all_stocks = {s['stock_code']: s for s in up_ranks + down_ranks}
+        
+        with engine.connect() as conn:
+            for holding in holdings:
+                code = holding[0]
+                quantity = int(holding[1])
+                cost_price = float(holding[2])
+                
+                quote = all_stocks.get(code, {})
+                current_price = quote.get('price', cost_price)
+                
+                market_value = current_price * quantity
+                total_cost = cost_price * quantity
+                pnl = market_value - total_cost
+                pnl_pct = round((pnl / total_cost) * 100, 2) if total_cost > 0 else 0
+                
+                conn.execute(
+                    text(f"""
+                        UPDATE {TABLE_CURRENT_POSITIONS} 
+                        SET market_price = :current_price, market_value = :market_value,
+                            pnl = :pnl, pnl_pct = :pnl_pct, updated_at = NOW()
+                        WHERE user_id = :user_id AND code = :code
+                    """),
+                    {
+                        "current_price": round(current_price, 2),
+                        "market_value": round(market_value, 2),
+                        "pnl": round(pnl, 2),
+                        "pnl_pct": pnl_pct,
+                        "user_id": user_id,
+                        "code": code
+                    }
+                )
+            conn.commit()
+        
+        return {"code": 200, "message": "价格刷新成功"}
+        
+    except Exception as e:
+        logger.error(f"刷新持仓价格错误: {e}")
         return {"code": 500, "message": str(e)}
         
 
