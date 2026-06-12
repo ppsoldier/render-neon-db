@@ -479,6 +479,7 @@ async def get_stock_picks():
     try:
         today = datetime.now().strftime('%Y-%m-%d')
         engine = get_sync_engine()
+        # 从你的选股结果表中读取今日数据
         df = pd.read_sql(f"SELECT * FROM {TABLE_SELECTED} WHERE date = %s", engine, params=[today])
         
         if df.empty:
@@ -496,6 +497,7 @@ async def get_market_data():
     try:
         today = datetime.now().strftime('%Y-%m-%d')
         engine = get_sync_engine()
+        # 从你的市场数据表中读取今日数据
         df = pd.read_sql(f"SELECT * FROM {TABLE_MARKET} WHERE date = %s", engine, params=[today])
         
         if df.empty:
@@ -506,6 +508,27 @@ async def get_market_data():
     except Exception as e:
         logger.error(f"获取市场数据错误: {e}")
         return {"code": 500, "message": str(e), "data": None}
+
+@app.get("/api/stock/sentiment")
+async def get_sentiment_data():
+    """获取市场情绪数据（热点概念/行业）"""
+    try:
+        today = datetime.now().strftime('%Y-%m-%d')
+        engine = get_sync_engine()
+        
+        # 获取热点概念 (前5名)
+        concepts_df = pd.read_sql(f"SELECT concept_name, change_pct, leading_stock FROM {TABLE_CONCEPTS} WHERE date = %s ORDER BY change_pct DESC LIMIT 5", engine, params=[today])
+        concepts = concepts_df.to_dict(orient='records') if not concepts_df.empty else []
+        
+        # 获取热点行业 (前5名)
+        industries_df = pd.read_sql(f"SELECT industry_name, change_pct, leading_stock FROM {TABLE_INDUSTRIES} WHERE date = %s ORDER BY change_pct DESC LIMIT 5", engine, params=[today])
+        industries = industries_df.to_dict(orient='records') if not industries_df.empty else []
+        
+        return {"code": 200, "data": {"concepts": concepts, "industries": industries}}
+    except Exception as e:
+        logger.error(f"获取情绪数据错误: {e}")
+        return {"code": 500, "message": str(e), "data": {"concepts": [], "industries": []}}
+        
 
 # ========== 自选股接口（使用数据库）==========
 @app.get("/api/watchlist")
