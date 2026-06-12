@@ -332,6 +332,63 @@ async def fetch_stock_rank(sort_type: str):
     
     return stock_rank
 
+# ========== 九方智投数据采集函数 ==========
+
+async def fetch_sector_rank(hq_type_code: str):
+    """获取行业/概念板块排行
+    hq_type_code: 'HY' 行业, 'GN' 概念
+    """
+    sector_rank = []
+    for page in range(1, 2):
+        timestamp = str(int(time.time() * 1000))
+        params = {
+            'hqTypeCode': hq_type_code,
+            'sortFlag': 'true',
+            'sortFields': 'pxChangeRate',
+            'pageNum': page,
+            'pageSize': '30',
+        }
+        
+        sign = get_sector_signature(timestamp)
+        
+        headers = {
+            'accept': 'application/json, text/plain, */*',
+            'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            'origin': 'https://stock.9fzt.com',
+            'referer': 'https://stock.9fzt.com/',
+            'signature': sign,
+            'timestamp': timestamp,
+            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        }
+        
+        url = 'https://hq.chongnengjihua.com/rjhy-quote-sector/api/1/pc/plate/block/quote/list'
+        
+        try:
+            response = requests.get(url=url, headers=headers, params=params, timeout=10)
+            data = response.json()
+            
+            if not data or 'data' not in data or 'plate' not in data['data']:
+                break
+            
+            plates = data['data']['plate']
+            for item in plates:
+                # 获取价格和涨跌幅
+                last_px = item.get('LastPx', 0)
+                px_change_rate = item.get('PxChangeRate', 0)
+                
+                sector_rank.append({
+                    "sector_code": item.get('ProdCode', ''),
+                    "sector_name": item.get('ProdName', ''),
+                    "price": round(last_px / 1000, 2) if last_px else 0,
+                    "change_percent": round(px_change_rate / 100, 2) if px_change_rate else 0
+                })
+            await asyncio.sleep(0.5)
+        except Exception as e:
+            logger.error(f"获取板块排行错误: {e}")
+            continue
+    
+    return sector_rank
+
 # ========== FastAPI 应用 ==========
 app = FastAPI(title="股票看盘系统", version="2.0.0")
 
