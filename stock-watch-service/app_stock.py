@@ -476,26 +476,26 @@ async def get_limit_stats():
             change = stock.get('change_percent', 0)
             code = stock.get('stock_code', '')
             if code.startswith(('30', '68')):
-                if change >= 19.7:
+                if change >= 19.6:
                     limit_up += 1
             elif code.startswith('8'):
-                if change >= 29.7:
+                if change >= 29.6:
                     limit_up += 1
             else:
-                if change >= 9.7:
+                if change >= 9.6:
                     limit_up += 1
         
         for stock in down_ranks:
             change = stock.get('change_percent', 0)
             code = stock.get('stock_code', '')
             if code.startswith(('30', '68')):
-                if change <= -19.7:
+                if change <= -19.6:
                     limit_down += 1
             elif code.startswith('8'):
-                if change <= -29.7:
+                if change <= -29.6:
                     limit_down += 1
             else:
-                if change <= -9.7:
+                if change <= -9.6:
                     limit_down += 1
         
         # 市场情绪评分（0-100）
@@ -648,30 +648,34 @@ async def get_sentiment_data():
         logger.error(f"获取情绪数据错误: {e}")
         return {"code": 500, "message": str(e), "data": {"concepts": [], "industries": []}}
 
-# ========== 自选股接口（使用数据库）==========
+# ========== 自选股管理接口（适配实际表结构）==========
+# 假设表名为 stock_data.watchlist，字段为 code, name, added_date
+
+WATCHLIST_TABLE = f"{SCHEMA_NAME}.watchlist"
+
 @app.get("/api/watchlist")
 async def get_watchlist():
     """获取自选股列表（含最新行情）"""
     try:
         engine = get_sync_engine()
         
-        # 1. 获取自选股列表
+        # 1. 查询自选股列表，使用别名 stock_code, stock_name
         with engine.connect() as conn:
             rows = conn.execute(
                 text(f"""
-                    SELECT stock_code, stock_name, added_at
-                    FROM {TABLE_WATCHLIST}
-                    ORDER BY added_at DESC
+                    SELECT code AS stock_code, name AS stock_name, added_date
+                    FROM {WATCHLIST_TABLE}
+                    ORDER BY added_date DESC
                 """)
             ).fetchall()
         
         if not rows:
             return {"code": 200, "data": [], "message": "暂无自选股"}
         
-        stock_codes = [r[0] for r in rows]
+        stock_codes = [row[0] for row in rows]
         placeholders = ','.join(['%s'] * len(stock_codes))
         
-        # 2. 获取每个股票最新的行情（从 stocks_data 取最新日期）
+        # 2. 获取最新行情（从 stocks_data 表取每个股票最新日期的价格和涨跌幅）
         with engine.connect() as conn:
             quotes = conn.execute(
                 text(f"""
@@ -685,16 +689,17 @@ async def get_watchlist():
         
         quote_map = {q[0]: {"price": float(q[1]), "change_pct": float(q[2])} for q in quotes}
         
-        # 3. 组装返回
+        # 3. 组装返回数据
         result = []
         for row in rows:
-            code, name, _ = row
-            q = quote_map.get(code, {"price": 0, "change_pct": 0})
+            stock_code = row[0]
+            stock_name = row[1]
+            quote = quote_map.get(stock_code, {"price": 0, "change_pct": 0})
             result.append({
-                "stock_code": code,
-                "stock_name": name,
-                "price": q["price"],
-                "change_pct": q["change_pct"]
+                "stock_code": stock_code,
+                "stock_name": stock_name,
+                "price": quote["price"],
+                "change_pct": quote["change_pct"]
             })
         
         return {"code": 200, "data": result, "message": "success"}
@@ -717,19 +722,19 @@ async def add_watchlist(request: Request):
         
         engine = get_sync_engine()
         with engine.connect() as conn:
-            # 检查重复
+            # 检查重复（基于 code 字段）
             existing = conn.execute(
-                text(f"SELECT 1 FROM {TABLE_WATCHLIST} WHERE stock_code = :code"),
+                text(f"SELECT id FROM {WATCHLIST_TABLE} WHERE code = :code"),
                 {"code": stock_code}
             ).fetchone()
             if existing:
                 return {"code": 400, "message": "该股票已在自选股中"}
             
-            # 插入
+            # 插入记录（使用 code, name, added_date）
             conn.execute(
                 text(f"""
-                    INSERT INTO {TABLE_WATCHLIST} (stock_code, stock_name, added_at)
-                    VALUES (:code, :name, NOW())
+                    INSERT INTO {WATCHLIST_TABLE} (code, name, added_date)
+                    VALUES (:code, :name, CURRENT_DATE)
                 """),
                 {"code": stock_code, "name": stock_name}
             )
@@ -749,7 +754,7 @@ async def delete_watchlist(stock_code: str = Query(..., description="股票代�
         engine = get_sync_engine()
         with engine.connect() as conn:
             result = conn.execute(
-                text(f"DELETE FROM {TABLE_WATCHLIST} WHERE stock_code = :code"),
+                text(f"DELETE FROM {WATCHLIST_TABLE} WHERE code = :code"),
                 {"code": stock_code}
             )
             conn.commit()
@@ -770,14 +775,12 @@ async def search_stock(keyword: str = Query(..., description="搜索关键词"))
     try:
         engine = get_sync_engine()
         with engine.connect() as conn:
-            # 获取最新日期
             latest = conn.execute(
                 text(f"SELECT MAX(date) FROM {TABLE_STOCKS}")
             ).fetchone()[0]
             if not latest:
                 return {"code": 200, "data": [], "message": "暂无股票数据"}
             
-            # 模糊搜索（不区分大小写）
             rows = conn.execute(
                 text(f"""
                     SELECT DISTINCT code, name
@@ -789,79 +792,13 @@ async def search_stock(keyword: str = Query(..., description="搜索关键词"))
                 {"latest": latest, "kw": f"%{keyword}%"}
             ).fetchall()
         
+        # 返回字段使用 stock_code, stock_name 以匹配前端
         data = [{"stock_code": r[0], "stock_name": r[1]} for r in rows]
         return {"code": 200, "data": data, "message": "success"}
         
     except Exception as e:
         logger.error(f"搜索股票错误: {e}")
         return {"code": 500, "message": str(e), "data": []}
-
-
-# @app.get("/api/watchlist")
-# async def get_watchlist(user_id: str):
-#     """获取自选股列表"""
-#     try:
-#         engine = get_sync_engine()
-#         df = pd.read_sql(f"""
-#             SELECT stock_code, stock_name, alert_threshold, added_at 
-#             FROM {TABLE_WATCHLIST} WHERE user_id = %s
-#         """, engine, params=[user_id])
-        
-#         # 获取实时价格
-#         up_ranks = await fetch_stock_rank('0')
-#         down_ranks = await fetch_stock_rank('1')
-#         quote_map = {s['stock_code']: s for s in up_ranks + down_ranks}
-        
-#         result = []
-#         for _, row in df.iterrows():
-#             code = row['stock_code']
-#             quote = quote_map.get(code, {})
-#             result.append({
-#                 "stock_code": code,
-#                 "stock_name": row['stock_name'] or code,
-#                 "price": quote.get('price', 0),
-#                 "change_percent": quote.get('change_percent', 0),
-#                 "alert_threshold": float(row['alert_threshold']) if row['alert_threshold'] else 3.0
-#             })
-#         return result
-#     except Exception as e:
-#         logger.error(f"获取自选股错误: {e}")
-#         return []
-
-# @app.post("/api/watchlist")
-# async def add_watchlist(request: Request):
-#     """添加自选股"""
-#     try:
-#         body = await request.json()
-#         user_id = body.get('user_id')
-#         stock_code = body.get('stock_code')
-#         stock_name = body.get('stock_name', '')
-        
-#         pool = await get_db()
-#         async with pool.acquire() as conn:
-#             await conn.execute(f"""
-#                 INSERT INTO {TABLE_WATCHLIST} (user_id, stock_code, stock_name, added_at)
-#                 VALUES ($1, $2, $3, NOW())
-#                 ON CONFLICT (user_id, stock_code) DO NOTHING
-#             """, user_id, stock_code, stock_name)
-        
-#         return {"success": True, "message": "已添加到自选股"}
-#     except Exception as e:
-#         logger.error(f"添加自选股错误: {e}")
-#         return {"success": False, "message": str(e)}
-
-# @app.delete("/api/watchlist")
-# async def remove_watchlist(user_id: str, stock_code: str):
-#     """删除自选股"""
-#     try:
-#         pool = await get_db()
-#         async with pool.acquire() as conn:
-#             await conn.execute(f"DELETE FROM {TABLE_WATCHLIST} WHERE user_id = $1 AND stock_code = $2", 
-#                                user_id, stock_code)
-#         return {"success": True, "message": "已从自选股删除"}
-#     except Exception as e:
-#         logger.error(f"删除自选股错误: {e}")
-#         return {"success": False, "message": str(e)}
 
 
 # ========== 持仓管理接口 ==========
