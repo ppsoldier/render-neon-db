@@ -600,6 +600,68 @@ async def get_watchlist():
         return {"code": 500, "message": str(e), "data": []}
 
 
+# ========== 自选股管理接口 ==========
+WATCHLIST_TABLE = f"{SCHEMA_NAME}.watchlist"
+
+
+@app.get("/api/watchlist")
+async def get_watchlist():
+    """获取自选股列表（含最新行情）"""
+    try:
+        engine = get_sync_engine()
+        
+        # 1. 查询自选股列表
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(f"""
+                    SELECT code, name, added_date
+                    FROM {WATCHLIST_TABLE}
+                    ORDER BY added_date DESC
+                """)
+            ).fetchall()
+        
+        if not rows:
+            return {"code": 200, "data": [], "message": "暂无自选股"}
+        
+        # 提取股票代码
+        stock_codes = [row[0] for row in rows]
+        placeholders = ','.join(['%s'] * len(stock_codes))
+        
+        # 2. 获取最新行情
+        with engine.connect() as conn:
+            quotes = conn.execute(
+                text(f"""
+                    SELECT DISTINCT ON (code) code, price, change_pct
+                    FROM {TABLE_STOCKS}
+                    WHERE code IN ({placeholders})
+                    ORDER BY code, date DESC
+                """),
+                stock_codes
+            ).fetchall()
+        
+        quote_map = {q[0]: {"price": float(q[1]) if q[1] else 0, 
+                           "change_pct": float(q[2]) if q[2] else 0} for q in quotes}
+        
+        # 3. 组装返回数据
+        result = []
+        for row in rows:
+            code = row[0]
+            name = row[1]
+            quote = quote_map.get(code, {"price": 0, "change_pct": 0})
+            result.append({
+                "stock_code": code,
+                "stock_name": name,
+                "price": quote["price"],
+                "change_pct": quote["change_pct"]
+            })
+        
+        return {"code": 200, "data": result, "message": "success"}
+        
+    except Exception as e:
+        logger.error(f"获取自选股列表错误: {e}")
+        return {"code": 500, "message": str(e), "data": []}
+
+
 @app.post("/api/watchlist")
 async def add_watchlist(request: Request):
     """添加自选股"""
@@ -612,16 +674,18 @@ async def add_watchlist(request: Request):
             return {"code": 400, "message": "股票代码和名称不能为空"}
         
         engine = get_sync_engine()
+        
         with engine.connect() as conn:
-            # 检查是否已存在（基于 code 字段）
+            # 检查是否已存在
             existing = conn.execute(
                 text(f"SELECT code FROM {WATCHLIST_TABLE} WHERE code = :code"),
                 {"code": stock_code}
             ).fetchone()
+            
             if existing:
                 return {"code": 400, "message": "该股票已在自选股中"}
             
-            # 插入新记录（使用实际字段名 code, name, added_date）
+            # 插入新记录
             conn.execute(
                 text(f"""
                     INSERT INTO {WATCHLIST_TABLE} (code, name, added_date)
@@ -643,6 +707,7 @@ async def delete_watchlist(stock_code: str = Query(..., description="股票代�
     """删除自选股"""
     try:
         engine = get_sync_engine()
+        
         with engine.connect() as conn:
             result = conn.execute(
                 text(f"DELETE FROM {WATCHLIST_TABLE} WHERE code = :code"),
@@ -662,18 +727,20 @@ async def delete_watchlist(stock_code: str = Query(..., description="股票代�
 
 @app.get("/api/stock/search")
 async def search_stock(keyword: str = Query(..., description="搜索关键词")):
-    """从 stocks_data 表搜索股票（基于最新日期的数据）"""
+    """从 stocks_data 表搜索股票"""
     try:
         engine = get_sync_engine()
+        
         with engine.connect() as conn:
-            # 获取最新数据日期
+            # 获取最新日期
             latest = conn.execute(
                 text(f"SELECT MAX(date) FROM {TABLE_STOCKS}")
             ).fetchone()[0]
+            
             if not latest:
                 return {"code": 200, "data": [], "message": "暂无股票数据"}
             
-            # 搜索匹配的股票（不区分大小写）
+            # 搜索匹配的股票
             rows = conn.execute(
                 text(f"""
                     SELECT DISTINCT code, name
@@ -685,7 +752,6 @@ async def search_stock(keyword: str = Query(..., description="搜索关键词"))
                 {"latest": latest, "kw": f"%{keyword}%"}
             ).fetchall()
         
-        # 返回前端期望的字段名
         data = [{"stock_code": r[0], "stock_name": r[1]} for r in rows]
         return {"code": 200, "data": data, "message": "success"}
         
