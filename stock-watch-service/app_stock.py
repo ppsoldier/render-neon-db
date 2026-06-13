@@ -74,117 +74,117 @@ async def init_database():
         await conn.execute(f"CREATE SCHEMA IF NOT EXISTS {SCHEMA_NAME}")
         await conn.execute(f"SET search_path TO {SCHEMA_NAME}")
         
-        # 市场数据表
-        await conn.execute(f"""
-            CREATE TABLE IF NOT EXISTS market_data (
-                id SERIAL PRIMARY KEY,
-                date DATE NOT NULL,
-                market_state VARCHAR(50),
-                market_score INTEGER,
-                position_ratio DECIMAL(5,2),
-                advice TEXT,
-                trend_strength DECIMAL(10,4),
-                volatility DECIMAL(10,2),
-                ma_deviation DECIMAL(10,2),
-                ma_arrangement VARCHAR(50),
-                index_position DECIMAL(10,2),
-                recent_return DECIMAL(10,2),
-                vol_ratio DECIMAL(10,2),
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
+        # # 市场数据表
+        # await conn.execute(f"""
+        #     CREATE TABLE IF NOT EXISTS market_data (
+        #         id SERIAL PRIMARY KEY,
+        #         date DATE NOT NULL,
+        #         market_state VARCHAR(50),
+        #         market_score INTEGER,
+        #         position_ratio DECIMAL(5,2),
+        #         advice TEXT,
+        #         trend_strength DECIMAL(10,4),
+        #         volatility DECIMAL(10,2),
+        #         ma_deviation DECIMAL(10,2),
+        #         ma_arrangement VARCHAR(50),
+        #         index_position DECIMAL(10,2),
+        #         recent_return DECIMAL(10,2),
+        #         vol_ratio DECIMAL(10,2),
+        #         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        #     )
+        # """)
         
-        # 个股数据表
-        await conn.execute(f"""
-            CREATE TABLE IF NOT EXISTS stocks_data (
-                id SERIAL PRIMARY KEY,
-                date DATE NOT NULL,
-                code VARCHAR(10) NOT NULL,
-                name VARCHAR(50),
-                price DECIMAL(10,2),
-                change_pct DECIMAL(10,2),
-                market_cap DECIMAL(20,2),
-                pe_ratio DECIMAL(10,2),
-                turnover_rate DECIMAL(10,2),
-                volume_ratio DECIMAL(10,2),
-                main_inflow DECIMAL(20,2),
-                amplitude DECIMAL(10,2),
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
+        # # 个股数据表
+        # await conn.execute(f"""
+        #     CREATE TABLE IF NOT EXISTS stocks_data (
+        #         id SERIAL PRIMARY KEY,
+        #         date DATE NOT NULL,
+        #         code VARCHAR(10) NOT NULL,
+        #         name VARCHAR(50),
+        #         price DECIMAL(10,2),
+        #         change_pct DECIMAL(10,2),
+        #         market_cap DECIMAL(20,2),
+        #         pe_ratio DECIMAL(10,2),
+        #         turnover_rate DECIMAL(10,2),
+        #         volume_ratio DECIMAL(10,2),
+        #         main_inflow DECIMAL(20,2),
+        #         amplitude DECIMAL(10,2),
+        #         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        #     )
+        # """)
         
-        # 概念板块数据表
-        await conn.execute(f"""
-            CREATE TABLE IF NOT EXISTS concepts_data (
-                id SERIAL PRIMARY KEY,
-                date DATE NOT NULL,
-                concept_name VARCHAR(100),
-                concept_code VARCHAR(20),
-                change_pct DECIMAL(10,2),
-                leading_stock VARCHAR(50),
-                stock_count INTEGER,
-                up_count INTEGER,
-                fundflow DECIMAL(20,2),
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
+        # # 概念板块数据表
+        # await conn.execute(f"""
+        #     CREATE TABLE IF NOT EXISTS concepts_data (
+        #         id SERIAL PRIMARY KEY,
+        #         date DATE NOT NULL,
+        #         concept_name VARCHAR(100),
+        #         concept_code VARCHAR(20),
+        #         change_pct DECIMAL(10,2),
+        #         leading_stock VARCHAR(50),
+        #         stock_count INTEGER,
+        #         up_count INTEGER,
+        #         fundflow DECIMAL(20,2),
+        #         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        #     )
+        # """)
         
-        # 行业板块数据表
-        await conn.execute(f"""
-            CREATE TABLE IF NOT EXISTS industries_data (
-                id SERIAL PRIMARY KEY,
-                date DATE NOT NULL,
-                industry_name VARCHAR(100),
-                change_pct DECIMAL(10,2),
-                leading_stock VARCHAR(50),
-                stock_count INTEGER,
-                up_count INTEGER,
-                fundflow DECIMAL(20,2),
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
+        # # 行业板块数据表
+        # await conn.execute(f"""
+        #     CREATE TABLE IF NOT EXISTS industries_data (
+        #         id SERIAL PRIMARY KEY,
+        #         date DATE NOT NULL,
+        #         industry_name VARCHAR(100),
+        #         change_pct DECIMAL(10,2),
+        #         leading_stock VARCHAR(50),
+        #         stock_count INTEGER,
+        #         up_count INTEGER,
+        #         fundflow DECIMAL(20,2),
+        #         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        #     )
+        # """)
         
-        # 选股结果表
-        await conn.execute(f"""
-            CREATE TABLE IF NOT EXISTS selected_stocks (
-                id SERIAL PRIMARY KEY,
-                date DATE NOT NULL,
-                code VARCHAR(10) NOT NULL,
-                name VARCHAR(50),
-                price DECIMAL(10,2),
-                change_pct DECIMAL(10,2),
-                total_score DECIMAL(10,2),
-                advice VARCHAR(50),
-                fin_rating VARCHAR(50),
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
+        # # 选股结果表
+        # await conn.execute(f"""
+        #     CREATE TABLE IF NOT EXISTS selected_stocks (
+        #         id SERIAL PRIMARY KEY,
+        #         date DATE NOT NULL,
+        #         code VARCHAR(10) NOT NULL,
+        #         name VARCHAR(50),
+        #         price DECIMAL(10,2),
+        #         change_pct DECIMAL(10,2),
+        #         total_score DECIMAL(10,2),
+        #         advice VARCHAR(50),
+        #         fin_rating VARCHAR(50),
+        #         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        #     )
+        # """)
         
-        # 自选股表
-        await conn.execute(f"""
-            CREATE TABLE IF NOT EXISTS watchlist (
-                id SERIAL PRIMARY KEY,
-                user_id VARCHAR(64) NOT NULL,
-                stock_code VARCHAR(10) NOT NULL,
-                stock_name VARCHAR(50),
-                alert_threshold DECIMAL(8,3) DEFAULT 3.0,
-                alert_enabled BOOLEAN DEFAULT TRUE,
-                added_at TIMESTAMP DEFAULT NOW(),
-                UNIQUE(user_id, stock_code)
-            )
-        """)
+        # # 自选股表
+        # await conn.execute(f"""
+        #     CREATE TABLE IF NOT EXISTS watchlist (
+        #         id SERIAL PRIMARY KEY,
+        #         user_id VARCHAR(64) NOT NULL,
+        #         stock_code VARCHAR(10) NOT NULL,
+        #         stock_name VARCHAR(50),
+        #         alert_threshold DECIMAL(8,3) DEFAULT 3.0,
+        #         alert_enabled BOOLEAN DEFAULT TRUE,
+        #         added_at TIMESTAMP DEFAULT NOW(),
+        #         UNIQUE(user_id, stock_code)
+        #     )
+        # """)
         
-        # 操作日志表
-        await conn.execute(f"""
-            CREATE TABLE IF NOT EXISTS operation_logs (
-                id SERIAL PRIMARY KEY,
-                log_date DATE NOT NULL,
-                log_level VARCHAR(20),
-                module VARCHAR(50),
-                content TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
+        # # 操作日志表
+        # await conn.execute(f"""
+        #     CREATE TABLE IF NOT EXISTS operation_logs (
+        #         id SERIAL PRIMARY KEY,
+        #         log_date DATE NOT NULL,
+        #         log_level VARCHAR(20),
+        #         module VARCHAR(50),
+        #         content TEXT,
+        #         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        #     )
+        # """)
         
         logger.info(f"数据库初始化完成 (Schema: {SCHEMA_NAME})")
 
@@ -275,7 +275,7 @@ async def fetch_stock_rank(sort_type: str):
     """获取股票涨跌幅排行"""
     # ... 保持原有实现 ...
     stock_rank = []
-    for page in range(1, 10):
+    for page in range(1, 9):
         timestamp = str(int(time.time() * 1000))
         params = {
             'pageNum': str(page),
@@ -342,7 +342,7 @@ async def fetch_sector_rank(hq_type_code: str):
     hq_type_code: 'HY' 行业, 'GN' 概念
     """
     sector_rank = []
-    for page in range(1, 6):
+    for page in range(1, 4):
         timestamp = str(int(time.time() * 1000))
         params = {
             'hqTypeCode': hq_type_code,
@@ -802,20 +802,6 @@ async def search_stock(keyword: str = Query(..., description="搜索关键词"))
 
 
 # ========== 持仓管理接口 ==========
-
-# 持仓数据结构
-# {
-#     "code": "600519",
-#     "name": "贵州茅台", 
-#     "quantity": 100,
-#     "cost_price": 1680.00,
-#     "current_price": 1700.00,
-#     "market_value": 170000.00,
-#     "pnl": 2000.00,
-#     "pnl_pct": 1.19,
-#     "updated_at": "2026-06-12 10:30:00"
-# }
-
 @app.get("/api/holdings")
 async def get_holdings():
     """获取持仓列表（全局共享）"""
