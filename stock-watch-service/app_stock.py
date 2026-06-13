@@ -73,119 +73,7 @@ async def init_database():
     async with pool.acquire() as conn:
         await conn.execute(f"CREATE SCHEMA IF NOT EXISTS {SCHEMA_NAME}")
         await conn.execute(f"SET search_path TO {SCHEMA_NAME}")
-        
-        # # 市场数据表
-        # await conn.execute(f"""
-        #     CREATE TABLE IF NOT EXISTS market_data (
-        #         id SERIAL PRIMARY KEY,
-        #         date DATE NOT NULL,
-        #         market_state VARCHAR(50),
-        #         market_score INTEGER,
-        #         position_ratio DECIMAL(5,2),
-        #         advice TEXT,
-        #         trend_strength DECIMAL(10,4),
-        #         volatility DECIMAL(10,2),
-        #         ma_deviation DECIMAL(10,2),
-        #         ma_arrangement VARCHAR(50),
-        #         index_position DECIMAL(10,2),
-        #         recent_return DECIMAL(10,2),
-        #         vol_ratio DECIMAL(10,2),
-        #         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        #     )
-        # """)
-        
-        # # 个股数据表
-        # await conn.execute(f"""
-        #     CREATE TABLE IF NOT EXISTS stocks_data (
-        #         id SERIAL PRIMARY KEY,
-        #         date DATE NOT NULL,
-        #         code VARCHAR(10) NOT NULL,
-        #         name VARCHAR(50),
-        #         price DECIMAL(10,2),
-        #         change_pct DECIMAL(10,2),
-        #         market_cap DECIMAL(20,2),
-        #         pe_ratio DECIMAL(10,2),
-        #         turnover_rate DECIMAL(10,2),
-        #         volume_ratio DECIMAL(10,2),
-        #         main_inflow DECIMAL(20,2),
-        #         amplitude DECIMAL(10,2),
-        #         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        #     )
-        # """)
-        
-        # # 概念板块数据表
-        # await conn.execute(f"""
-        #     CREATE TABLE IF NOT EXISTS concepts_data (
-        #         id SERIAL PRIMARY KEY,
-        #         date DATE NOT NULL,
-        #         concept_name VARCHAR(100),
-        #         concept_code VARCHAR(20),
-        #         change_pct DECIMAL(10,2),
-        #         leading_stock VARCHAR(50),
-        #         stock_count INTEGER,
-        #         up_count INTEGER,
-        #         fundflow DECIMAL(20,2),
-        #         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        #     )
-        # """)
-        
-        # # 行业板块数据表
-        # await conn.execute(f"""
-        #     CREATE TABLE IF NOT EXISTS industries_data (
-        #         id SERIAL PRIMARY KEY,
-        #         date DATE NOT NULL,
-        #         industry_name VARCHAR(100),
-        #         change_pct DECIMAL(10,2),
-        #         leading_stock VARCHAR(50),
-        #         stock_count INTEGER,
-        #         up_count INTEGER,
-        #         fundflow DECIMAL(20,2),
-        #         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        #     )
-        # """)
-        
-        # # 选股结果表
-        # await conn.execute(f"""
-        #     CREATE TABLE IF NOT EXISTS selected_stocks (
-        #         id SERIAL PRIMARY KEY,
-        #         date DATE NOT NULL,
-        #         code VARCHAR(10) NOT NULL,
-        #         name VARCHAR(50),
-        #         price DECIMAL(10,2),
-        #         change_pct DECIMAL(10,2),
-        #         total_score DECIMAL(10,2),
-        #         advice VARCHAR(50),
-        #         fin_rating VARCHAR(50),
-        #         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        #     )
-        # """)
-        
-        # # 自选股表
-        # await conn.execute(f"""
-        #     CREATE TABLE IF NOT EXISTS watchlist (
-        #         id SERIAL PRIMARY KEY,
-        #         user_id VARCHAR(64) NOT NULL,
-        #         stock_code VARCHAR(10) NOT NULL,
-        #         stock_name VARCHAR(50),
-        #         alert_threshold DECIMAL(8,3) DEFAULT 3.0,
-        #         alert_enabled BOOLEAN DEFAULT TRUE,
-        #         added_at TIMESTAMP DEFAULT NOW(),
-        #         UNIQUE(user_id, stock_code)
-        #     )
-        # """)
-        
-        # # 操作日志表
-        # await conn.execute(f"""
-        #     CREATE TABLE IF NOT EXISTS operation_logs (
-        #         id SERIAL PRIMARY KEY,
-        #         log_date DATE NOT NULL,
-        #         log_level VARCHAR(20),
-        #         module VARCHAR(50),
-        #         content TEXT,
-        #         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        #     )
-        # """)
-        
+        #数据库表已经创建
         logger.info(f"数据库初始化完成 (Schema: {SCHEMA_NAME})")
 
 # ========== 数据保存函数 ==========
@@ -648,10 +536,11 @@ async def get_sentiment_data():
         logger.error(f"获取情绪数据错误: {e}")
         return {"code": 500, "message": str(e), "data": {"concepts": [], "industries": []}}
 
-# ========== 自选股管理接口（适配实际表结构）==========
-# 假设表名为 stock_data.watchlist，字段为 code, name, added_date
+# ========== 自选股管理接口（直接指定表名和字段）==========
 
-WATCHLIST_TABLE = f"{SCHEMA_NAME}.watchlist"
+# 直接指定完整的表名（不依赖常量，避免配置错误）
+WATCHLIST_TABLE = "stock_data.watchlist"   # 根据您的实际 schema 和表名调整
+
 
 @app.get("/api/watchlist")
 async def get_watchlist():
@@ -659,11 +548,11 @@ async def get_watchlist():
     try:
         engine = get_sync_engine()
         
-        # 1. 查询自选股列表，使用别名 stock_code, stock_name
+        # 1. 查询自选股列表（使用实际字段名 code, name）
         with engine.connect() as conn:
             rows = conn.execute(
                 text(f"""
-                    SELECT code AS stock_code, name AS stock_name, added_date
+                    SELECT code, name, added_date
                     FROM {WATCHLIST_TABLE}
                     ORDER BY added_date DESC
                 """)
@@ -672,6 +561,7 @@ async def get_watchlist():
         if not rows:
             return {"code": 200, "data": [], "message": "暂无自选股"}
         
+        # 提取股票代码列表
         stock_codes = [row[0] for row in rows]
         placeholders = ','.join(['%s'] * len(stock_codes))
         
@@ -687,17 +577,18 @@ async def get_watchlist():
                 stock_codes
             ).fetchall()
         
-        quote_map = {q[0]: {"price": float(q[1]), "change_pct": float(q[2])} for q in quotes}
+        quote_map = {q[0]: {"price": float(q[1]) if q[1] else 0, 
+                           "change_pct": float(q[2]) if q[2] else 0} for q in quotes}
         
-        # 3. 组装返回数据
+        # 3. 组装返回数据（前端期望 stock_code, stock_name, price, change_pct）
         result = []
         for row in rows:
-            stock_code = row[0]
-            stock_name = row[1]
-            quote = quote_map.get(stock_code, {"price": 0, "change_pct": 0})
+            code = row[0]
+            name = row[1]
+            quote = quote_map.get(code, {"price": 0, "change_pct": 0})
             result.append({
-                "stock_code": stock_code,
-                "stock_name": stock_name,
+                "stock_code": code,
+                "stock_name": name,
                 "price": quote["price"],
                 "change_pct": quote["change_pct"]
             })
@@ -722,15 +613,15 @@ async def add_watchlist(request: Request):
         
         engine = get_sync_engine()
         with engine.connect() as conn:
-            # 检查重复（基于 code 字段）
+            # 检查是否已存在（基于 code 字段）
             existing = conn.execute(
-                text(f"SELECT id FROM {WATCHLIST_TABLE} WHERE code = :code"),
+                text(f"SELECT code FROM {WATCHLIST_TABLE} WHERE code = :code"),
                 {"code": stock_code}
             ).fetchone()
             if existing:
                 return {"code": 400, "message": "该股票已在自选股中"}
             
-            # 插入记录（使用 code, name, added_date）
+            # 插入新记录（使用实际字段名 code, name, added_date）
             conn.execute(
                 text(f"""
                     INSERT INTO {WATCHLIST_TABLE} (code, name, added_date)
@@ -775,12 +666,14 @@ async def search_stock(keyword: str = Query(..., description="搜索关键词"))
     try:
         engine = get_sync_engine()
         with engine.connect() as conn:
+            # 获取最新数据日期
             latest = conn.execute(
                 text(f"SELECT MAX(date) FROM {TABLE_STOCKS}")
             ).fetchone()[0]
             if not latest:
                 return {"code": 200, "data": [], "message": "暂无股票数据"}
             
+            # 搜索匹配的股票（不区分大小写）
             rows = conn.execute(
                 text(f"""
                     SELECT DISTINCT code, name
@@ -792,7 +685,7 @@ async def search_stock(keyword: str = Query(..., description="搜索关键词"))
                 {"latest": latest, "kw": f"%{keyword}%"}
             ).fetchall()
         
-        # 返回字段使用 stock_code, stock_name 以匹配前端
+        # 返回前端期望的字段名
         data = [{"stock_code": r[0], "stock_name": r[1]} for r in rows]
         return {"code": 200, "data": data, "message": "success"}
         
