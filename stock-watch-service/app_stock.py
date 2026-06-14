@@ -536,42 +536,31 @@ async def get_sentiment_data():
         logger.error(f"获取情绪数据错误: {e}")
         return {"code": 500, "message": str(e), "data": {"concepts": [], "industries": []}}
 
-# ========== 自选股管理接口（纯 psycopg2，无 SQLAlchemy）==========
+# ========== 自选股管理接口（使用 asyncpg，最简版本）==========
 
 @app.get("/api/watchlist")
 async def get_watchlist():
     """获取自选股列表"""
-    import psycopg2
-    conn = None
-    cur = None
     try:
-        # 直接连接数据库（不使用 SQLAlchemy）
-        conn = psycopg2.connect(
-            host=DB_CONFIG['host'],
-            user=DB_CONFIG['user'],
-            password=DB_CONFIG['password'],
-            database=DB_CONFIG['database'],
-            port=DB_CONFIG['port'],
-            sslmode='require'
-        )
-        cur = conn.cursor()
+        pool = await get_db()
         
-        # 查询自选股表
-        cur.execute("""
-            SELECT code, name, added_date
-            FROM stock_data.watchlist
-            ORDER BY added_date DESC
-        """)
-        rows = cur.fetchall()
+        async with pool.acquire() as conn:
+            # 直接查询自选股表
+            rows = await conn.fetch("""
+                SELECT code, name, added_date
+                FROM stock_data.watchlist
+                ORDER BY added_date DESC
+            """)
         
         if not rows:
             return {"code": 200, "data": [], "message": "暂无自选股"}
         
+        # 组装返回数据
         result = []
         for row in rows:
             result.append({
-                "stock_code": row[0],
-                "stock_name": row[1] if row[1] else row[0],
+                "stock_code": row["code"],
+                "stock_name": row["name"] if row["name"] else row["code"],
                 "price": 0,
                 "change_pct": 0
             })
@@ -581,19 +570,11 @@ async def get_watchlist():
     except Exception as e:
         logger.error(f"获取自选股列表错误: {e}")
         return {"code": 500, "message": str(e), "data": []}
-    finally:
-        if cur:
-            cur.close()
-        if conn:
-            conn.close()
 
 
 @app.post("/api/watchlist")
 async def add_watchlist(request: Request):
     """添加自选股"""
-    import psycopg2
-    conn = None
-    cur = None
     try:
         body = await request.json()
         stock_code = body.get('stock_code')
@@ -602,63 +583,44 @@ async def add_watchlist(request: Request):
         if not stock_code or not stock_name:
             return {"code": 400, "message": "股票代码和名称不能为空"}
         
-        conn = psycopg2.connect(
-            host=DB_CONFIG['host'],
-            user=DB_CONFIG['user'],
-            password=DB_CONFIG['password'],
-            database=DB_CONFIG['database'],
-            port=DB_CONFIG['port'],
-            sslmode='require'
-        )
-        cur = conn.cursor()
+        pool = await get_db()
         
-        # 检查是否已存在
-        cur.execute("SELECT code FROM stock_data.watchlist WHERE code = %s", (stock_code,))
-        if cur.fetchone():
-            return {"code": 400, "message": "该股票已在自选股中"}
-        
-        # 插入新记录
-        cur.execute("""
-            INSERT INTO stock_data.watchlist (code, name, added_date)
-            VALUES (%s, %s, CURRENT_DATE)
-        """, (stock_code, stock_name))
-        conn.commit()
+        async with pool.acquire() as conn:
+            # 检查是否已存在
+            existing = await conn.fetchrow(
+                "SELECT code FROM stock_data.watchlist WHERE code = $1",
+                stock_code
+            )
+            if existing:
+                return {"code": 400, "message": "该股票已在自选股中"}
+            
+            # 插入新记录
+            await conn.execute("""
+                INSERT INTO stock_data.watchlist (code, name, added_date)
+                VALUES ($1, $2, CURRENT_DATE)
+            """, stock_code, stock_name)
         
         return {"code": 200, "message": "添加成功"}
         
     except Exception as e:
         logger.error(f"添加自选股错误: {e}")
         return {"code": 500, "message": str(e)}
-    finally:
-        if cur:
-            cur.close()
-        if conn:
-            conn.close()
 
 
 @app.delete("/api/watchlist")
 async def delete_watchlist(stock_code: str = Query(..., description="股票代码")):
     """删除自选股"""
-    import psycopg2
-    conn = None
-    cur = None
     try:
-        conn = psycopg2.connect(
-            host=DB_CONFIG['host'],
-            user=DB_CONFIG['user'],
-            password=DB_CONFIG['password'],
-            database=DB_CONFIG['database'],
-            port=DB_CONFIG['port'],
-            sslmode='require'
-        )
-        cur = conn.cursor()
+        pool = await get_db()
         
-        cur.execute("DELETE FROM stock_data.watchlist WHERE code = %s", (stock_code,))
-        conn.commit()
+        async with pool.acquire() as conn:
+            result = await conn.execute(
+                "DELETE FROM stock_data.watchlist WHERE code = $1",
+                stock_code
+            )
         
-        affected = cur.rowcount
-        
-        if affected > 0:
+        # 检查是否删除了记录
+        if result == "DELETE 1":
             return {"code": 200, "message": "删除成功"}
         else:
             return {"code": 404, "message": "自选股不存在"}
@@ -666,60 +628,38 @@ async def delete_watchlist(stock_code: str = Query(..., description="股票代�
     except Exception as e:
         logger.error(f"删除自选股错误: {e}")
         return {"code": 500, "message": str(e)}
-    finally:
-        if cur:
-            cur.close()
-        if conn:
-            conn.close()
 
 
 @app.get("/api/stock/search")
 async def search_stock(keyword: str = Query(..., description="搜索关键词")):
     """搜索股票"""
-    import psycopg2
-    conn = None
-    cur = None
     try:
-        conn = psycopg2.connect(
-            host=DB_CONFIG['host'],
-            user=DB_CONFIG['user'],
-            password=DB_CONFIG['password'],
-            database=DB_CONFIG['database'],
-            port=DB_CONFIG['port'],
-            sslmode='require'
-        )
-        cur = conn.cursor()
+        pool = await get_db()
         
-        # 获取最新日期
-        cur.execute("SELECT MAX(date) FROM stock_data.stocks_data")
-        latest = cur.fetchone()[0]
+        async with pool.acquire() as conn:
+            # 获取最新日期
+            latest = await conn.fetchval("""
+                SELECT MAX(date) FROM stock_data.stocks_data
+            """)
+            
+            if not latest:
+                return {"code": 200, "data": [], "message": "暂无股票数据"}
+            
+            # 搜索股票
+            rows = await conn.fetch("""
+                SELECT DISTINCT code, name
+                FROM stock_data.stocks_data
+                WHERE date = $1
+                  AND (code ILIKE $2 OR name ILIKE $2)
+                LIMIT 20
+            """, latest, f'%{keyword}%')
         
-        if not latest:
-            return {"code": 200, "data": [], "message": "暂无股票数据"}
-        
-        # 搜索股票
-        cur.execute("""
-            SELECT DISTINCT code, name
-            FROM stock_data.stocks_data
-            WHERE date = %s
-              AND (code ILIKE %s OR name ILIKE %s)
-            LIMIT 20
-        """, (latest, f'%{keyword}%', f'%{keyword}%'))
-        
-        rows = cur.fetchall()
-        
-        data = [{"stock_code": r[0], "stock_name": r[1]} for r in rows]
+        data = [{"stock_code": r["code"], "stock_name": r["name"]} for r in rows]
         return {"code": 200, "data": data, "message": "success"}
         
     except Exception as e:
         logger.error(f"搜索股票错误: {e}")
         return {"code": 500, "message": str(e), "data": []}
-    finally:
-        if cur:
-            cur.close()
-        if conn:
-            conn.close()
-
 
 
 
