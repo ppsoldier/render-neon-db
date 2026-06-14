@@ -1318,7 +1318,28 @@ async def get_latest_research(limit: int = Query(20, ge=1, le=50)):
         return {"code": 500, "message": str(e), "data": []}
 
         
-
+@app.post("/api/user/login")
+async def user_login(request: Request):
+    """
+    股票系统模拟登录接口
+    """
+    try:
+        body = await request.json()
+        code = body.get('code')
+        user_id = body.get('user_id')
+        
+        # 这里不做任何实际验证，直接返回成功
+        return {
+            "code": 200,
+            "data": {
+                "id": user_id or "stock_user",
+                "name": "股票用户",
+                "role": "user",
+                "openid": code or user_id or "mock_openid"
+            }
+        }
+    except Exception as e:
+        return {"code": 500, "message": str(e)}
 
 # ========== 启动事件 ==========
 @asynccontextmanager
