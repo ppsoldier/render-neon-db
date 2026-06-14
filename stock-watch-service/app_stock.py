@@ -17,6 +17,94 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
+# ========== 股票名称映射表加载 ==========
+STOCK_MAPPING_FILE = os.path.join(os.path.dirname(__file__), "stock_mapping_full.txt")
+STOCK_MAPPING = {}  # 代码 -> 名称
+STOCK_MAPPING_BY_NAME = {}  # 名称 -> 代码
+STOCK_MAPPING_BY_PY = {}  # 拼音首字母 -> 代码列表
+
+
+def load_stock_mapping():
+    """加载股票名称映射表"""
+    global STOCK_MAPPING, STOCK_MAPPING_BY_NAME, STOCK_MAPPING_BY_PY
+    
+    if not os.path.exists(STOCK_MAPPING_FILE):
+        logger.warning(f"股票映射文件不存在: {STOCK_MAPPING_FILE}")
+        return
+    
+    try:
+        with open(STOCK_MAPPING_FILE, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                parts = line.split('->')
+                if len(parts) != 2:
+                    continue
+                right_part = parts[1].strip()
+                code_parts = right_part.split(',')
+                if len(code_parts) >= 2:
+                    code = code_parts[0].strip()
+                    name = code_parts[1].strip()
+                    # 清理名称中的特殊字符
+                    name = name.replace('*', '').replace('ST', '').strip()
+                    py_code = code_parts[2].strip() if len(code_parts) > 2 else ''
+                    
+                    STOCK_MAPPING[code] = name
+                    STOCK_MAPPING_BY_NAME[name] = code
+                    if py_code:
+                        STOCK_MAPPING_BY_PY.setdefault(py_code.upper(), []).append(code)
+        
+        logger.info(f"加载股票映射完成: {len(STOCK_MAPPING)} 只股票")
+    except Exception as e:
+        logger.error(f"加载股票映射失败: {e}")
+
+
+def search_stock_by_keyword(keyword: str, limit: int = 20):
+    """根据关键词搜索股票（支持代码、名称、拼音首字母）"""
+    results = []
+    keyword_lower = keyword.lower().strip()
+    
+    if not keyword_lower:
+        return results
+    
+    # 1. 精确匹配股票代码
+    if keyword_lower in STOCK_MAPPING:
+        results.append({
+            "stock_code": keyword_lower,
+            "stock_name": STOCK_MAPPING[keyword_lower]
+        })
+        return results[:limit]
+    
+    # 2. 模糊匹配股票代码（前缀匹配）
+    for code, name in STOCK_MAPPING.items():
+        if code.startswith(keyword_lower):
+            results.append({"stock_code": code, "stock_name": name})
+            if len(results) >= limit:
+                break
+    
+    if len(results) >= limit:
+        return results[:limit]
+    
+    # 3. 拼音首字母匹配
+    if keyword_lower in STOCK_MAPPING_BY_PY:
+        for code in STOCK_MAPPING_BY_PY[keyword_lower]:
+            if code in STOCK_MAPPING:
+                results.append({"stock_code": code, "stock_name": STOCK_MAPPING[code]})
+                if len(results) >= limit:
+                    return results[:limit]
+    
+    # 4. 模糊匹配股票名称
+    for code, name in STOCK_MAPPING.items():
+        if keyword_lower in name.lower():
+            results.append({"stock_code": code, "stock_name": name})
+            if len(results) >= limit:
+                break
+    
+    return results[:limit]
+# 应用启动时加载映射表
+load_stock_mapping()
+
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
