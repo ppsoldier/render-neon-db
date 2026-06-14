@@ -18,7 +18,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 
-# ========== 配置日志 ==========
+# 配置日志
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("stock-watch")
 
@@ -31,160 +31,9 @@ STOCK_MAPPING_BY_NAME = {}   # 名称 -> 代码
 STOCK_MAPPING_BY_PY = {}     # 拼音首字母 -> 代码列表
 
 
-def load_stock_mapping():
-    """加载股票名称映射表（支持拼音首字母）"""
-    global STOCK_MAPPING, STOCK_MAPPING_BY_CODE, STOCK_MAPPING_BY_NAME, STOCK_MAPPING_BY_PY
-    
-    if not os.path.exists(STOCK_MAPPING_FILE):
-        logger.warning(f"股票映射文件不存在: {STOCK_MAPPING_FILE}")
-        return
-    
-    try:
-        with open(STOCK_MAPPING_FILE, 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith('#') or line.startswith('='):
-                    continue
-                
-                # 格式: py_code -> code,name,price
-                parts = line.split('->')
-                if len(parts) != 2:
-                    continue
-                
-                py_code = parts[0].strip().upper()  # 拼音首字母，转大写
-                right_part = parts[1].strip()
-                right_parts = right_part.split(',')
-                
-                if len(right_parts) >= 2:
-                    code = right_parts[0].strip()
-                    name = right_parts[1].strip()
-                    price = right_parts[2].strip() if len(right_parts) > 2 else ''
-                    
-                    # 清理名称中的特殊字符
-                    name = name.replace('*', '').replace('ST', '').strip()
-                    
-                    STOCK_MAPPING[code] = name
-                    STOCK_MAPPING_BY_CODE[code] = name
-                    STOCK_MAPPING_BY_NAME[name] = code
-                    
-                    # 拼音首字母映射（支持多个股票对应同一个拼音）
-                    if py_code not in STOCK_MAPPING_BY_PY:
-                        STOCK_MAPPING_BY_PY[py_code] = []
-                    STOCK_MAPPING_BY_PY[py_code].append({
-                        "code": code,
-                        "name": name,
-                        "price": price
-                    })
-        
-        logger.info(f"加载股票映射完成: 代码 {len(STOCK_MAPPING_BY_CODE)} 只, 拼音 {len(STOCK_MAPPING_BY_PY)} 条")
-    except Exception as e:
-        logger.error(f"加载股票映射失败: {e}")
 
 
-def search_stock_by_keyword(keyword: str, limit: int = 20):
-    """根据关键词搜索股票（支持代码、名称、拼音首字母）"""
-    results = []
-    keyword_upper = keyword.strip().upper()
-    keyword_lower = keyword.strip().lower()
-    
-    if not keyword_upper:
-        return results
-    
-    # 1. 拼音首字母精确匹配（支持多个结果）
-    if keyword_upper in STOCK_MAPPING_BY_PY:
-        for stock in STOCK_MAPPING_BY_PY[keyword_upper]:
-            results.append({
-                "stock_code": stock["code"],
-                "stock_name": stock["name"],
-                "price": stock.get("price", "")
-            })
-        if len(results) >= limit:
-            return results[:limit]
-    
-    # 2. 股票代码精确匹配
-    if keyword_lower in STOCK_MAPPING_BY_CODE:
-        results.append({
-            "stock_code": keyword_lower,
-            "stock_name": STOCK_MAPPING_BY_CODE[keyword_lower],
-            "price": ""
-        })
-        if len(results) >= limit:
-            return results[:limit]
-    
-    # 3. 股票代码前缀匹配
-    for code, name in STOCK_MAPPING_BY_CODE.items():
-        if code.startswith(keyword_lower):
-            results.append({"stock_code": code, "stock_name": name, "price": ""})
-            if len(results) >= limit:
-                break
-    
-    if len(results) >= limit:
-        return results[:limit]
-    
-    # 4. 股票名称模糊匹配
-    for code, name in STOCK_MAPPING_BY_CODE.items():
-        if keyword_lower in name.lower():
-            results.append({"stock_code": code, "stock_name": name, "price": ""})
-            if len(results) >= limit:
-                break
-    
-    # 5. 去重（按股票代码）
-    seen = set()
-    unique_results = []
-    for r in results:
-        if r["stock_code"] not in seen:
-            seen.add(r["stock_code"])
-            unique_results.append(r)
-    
-    return unique_results[:limit]
 
-
-# 应用启动时加载映射表
-load_stock_mapping()
-
-
-@app.get("/api/stock/search")
-async def search_stock(keyword: str = Query(..., description="搜索关键词")):
-    """搜索股票（支持代码、名称、拼音首字母）"""
-    try:
-        # 优先使用映射表搜索
-        results = search_stock_by_keyword(keyword)
-        
-        if results:
-            return {"code": 200, "data": results, "message": "success", "source": "mapping"}
-        
-        # 如果映射表没有结果，从数据库查询
-        engine = get_sync_engine()
-        with engine.connect() as conn:
-            latest = conn.execute(
-                text(f"SELECT MAX(date) FROM {TABLE_STOCKS}")
-            ).fetchone()[0]
-            
-            if latest:
-                rows = conn.execute(
-                    text(f"""
-                        SELECT DISTINCT code, name
-                        FROM {TABLE_STOCKS}
-                        WHERE date = :latest
-                          AND (code ILIKE :kw OR name ILIKE :kw)
-                        LIMIT 20
-                    """),
-                    {"latest": latest, "kw": f"%{keyword}%"}
-                ).fetchall()
-                
-                data = [{"stock_code": r[0], "stock_name": r[1], "price": ""} for r in rows]
-                if data:
-                    return {"code": 200, "data": data, "message": "success", "source": "database"}
-        
-        return {"code": 200, "data": [], "message": "未找到相关股票"}
-        
-    except Exception as e:
-        logger.error(f"搜索股票错误: {e}")
-        return {"code": 500, "message": str(e), "data": []}
-
-# 配置日志
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("stock-watch")
 
 # ========== 数据库配置 ==========
 # 使用环境变量，支持同步和异步连接
@@ -563,6 +412,157 @@ async def get_limit_stats():
         logger.error(f"获取涨跌停统计错误: {e}")
         # 返回默认值
         return {"limit_up_count": 0, "limit_down_count": 0, "sentiment": 50}
+
+def load_stock_mapping():
+    """加载股票名称映射表（支持拼音首字母）"""
+    global STOCK_MAPPING, STOCK_MAPPING_BY_CODE, STOCK_MAPPING_BY_NAME, STOCK_MAPPING_BY_PY
+    
+    if not os.path.exists(STOCK_MAPPING_FILE):
+        logger.warning(f"股票映射文件不存在: {STOCK_MAPPING_FILE}")
+        return
+    
+    try:
+        with open(STOCK_MAPPING_FILE, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#') or line.startswith('='):
+                    continue
+                
+                # 格式: py_code -> code,name,price
+                parts = line.split('->')
+                if len(parts) != 2:
+                    continue
+                
+                py_code = parts[0].strip().upper()  # 拼音首字母，转大写
+                right_part = parts[1].strip()
+                right_parts = right_part.split(',')
+                
+                if len(right_parts) >= 2:
+                    code = right_parts[0].strip()
+                    name = right_parts[1].strip()
+                    price = right_parts[2].strip() if len(right_parts) > 2 else ''
+                    
+                    # 清理名称中的特殊字符
+                    name = name.replace('*', '').replace('ST', '').strip()
+                    
+                    STOCK_MAPPING[code] = name
+                    STOCK_MAPPING_BY_CODE[code] = name
+                    STOCK_MAPPING_BY_NAME[name] = code
+                    
+                    # 拼音首字母映射（支持多个股票对应同一个拼音）
+                    if py_code not in STOCK_MAPPING_BY_PY:
+                        STOCK_MAPPING_BY_PY[py_code] = []
+                    STOCK_MAPPING_BY_PY[py_code].append({
+                        "code": code,
+                        "name": name,
+                        "price": price
+                    })
+        
+        logger.info(f"加载股票映射完成: 代码 {len(STOCK_MAPPING_BY_CODE)} 只, 拼音 {len(STOCK_MAPPING_BY_PY)} 条")
+    except Exception as e:
+        logger.error(f"加载股票映射失败: {e}")
+
+
+def search_stock_by_keyword(keyword: str, limit: int = 20):
+    """根据关键词搜索股票（支持代码、名称、拼音首字母）"""
+    results = []
+    keyword_upper = keyword.strip().upper()
+    keyword_lower = keyword.strip().lower()
+    
+    if not keyword_upper:
+        return results
+    
+    # 1. 拼音首字母精确匹配（支持多个结果）
+    if keyword_upper in STOCK_MAPPING_BY_PY:
+        for stock in STOCK_MAPPING_BY_PY[keyword_upper]:
+            results.append({
+                "stock_code": stock["code"],
+                "stock_name": stock["name"],
+                "price": stock.get("price", "")
+            })
+        if len(results) >= limit:
+            return results[:limit]
+    
+    # 2. 股票代码精确匹配
+    if keyword_lower in STOCK_MAPPING_BY_CODE:
+        results.append({
+            "stock_code": keyword_lower,
+            "stock_name": STOCK_MAPPING_BY_CODE[keyword_lower],
+            "price": ""
+        })
+        if len(results) >= limit:
+            return results[:limit]
+    
+    # 3. 股票代码前缀匹配
+    for code, name in STOCK_MAPPING_BY_CODE.items():
+        if code.startswith(keyword_lower):
+            results.append({"stock_code": code, "stock_name": name, "price": ""})
+            if len(results) >= limit:
+                break
+    
+    if len(results) >= limit:
+        return results[:limit]
+    
+    # 4. 股票名称模糊匹配
+    for code, name in STOCK_MAPPING_BY_CODE.items():
+        if keyword_lower in name.lower():
+            results.append({"stock_code": code, "stock_name": name, "price": ""})
+            if len(results) >= limit:
+                break
+    
+    # 5. 去重（按股票代码）
+    seen = set()
+    unique_results = []
+    for r in results:
+        if r["stock_code"] not in seen:
+            seen.add(r["stock_code"])
+            unique_results.append(r)
+    
+    return unique_results[:limit]
+
+
+# 应用启动时加载映射表
+load_stock_mapping()
+
+
+@app.get("/api/stock/search")
+async def search_stock(keyword: str = Query(..., description="搜索关键词")):
+    """搜索股票（支持代码、名称、拼音首字母）"""
+    try:
+        # 优先使用映射表搜索
+        results = search_stock_by_keyword(keyword)
+        
+        if results:
+            return {"code": 200, "data": results, "message": "success", "source": "mapping"}
+        
+        # 如果映射表没有结果，从数据库查询
+        engine = get_sync_engine()
+        with engine.connect() as conn:
+            latest = conn.execute(
+                text(f"SELECT MAX(date) FROM {TABLE_STOCKS}")
+            ).fetchone()[0]
+            
+            if latest:
+                rows = conn.execute(
+                    text(f"""
+                        SELECT DISTINCT code, name
+                        FROM {TABLE_STOCKS}
+                        WHERE date = :latest
+                          AND (code ILIKE :kw OR name ILIKE :kw)
+                        LIMIT 20
+                    """),
+                    {"latest": latest, "kw": f"%{keyword}%"}
+                ).fetchall()
+                
+                data = [{"stock_code": r[0], "stock_name": r[1], "price": ""} for r in rows]
+                if data:
+                    return {"code": 200, "data": data, "message": "success", "source": "database"}
+        
+        return {"code": 200, "data": [], "message": "未找到相关股票"}
+        
+    except Exception as e:
+        logger.error(f"搜索股票错误: {e}")
+        return {"code": 500, "message": str(e), "data": []}
 
 
 
