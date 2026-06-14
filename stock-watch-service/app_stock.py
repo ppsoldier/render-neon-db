@@ -17,6 +17,12 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
+
+# ========== 配置日志 ==========
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("stock-watch")
+
+
 # ========== 股票名称映射表加载 ==========
 STOCK_MAPPING_FILE = os.path.join(os.path.dirname(__file__), "stock_mapping_full.txt")
 STOCK_MAPPING = {}           # 代码 -> 名称
