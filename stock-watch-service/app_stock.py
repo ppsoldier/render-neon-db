@@ -1091,14 +1091,62 @@ async def search_stock(keyword: str):
 
 # ========== 研报接口 ==========
 
+# ========== 研报模块 ==========
+
+def get_stock_report(page: int = 1, page_size: int = 20):
+    """从东方财富获取研报数据"""
+    results = []
+    headers = {
+        'Referer': 'https://data.eastmoney.com/report/stock.jshtml',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    }
+
+    end_date = datetime.now().strftime('%Y-%m-%d')
+    start_date = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+
+    json_data = {
+        'beginTime': start_date,
+        'endTime': end_date,
+        'industryCode': '*',
+        'ratingChange': None,
+        'rating': None,
+        'orgCode': None,
+        'code': '*',
+        'rcode': '',
+        'pageSize': page_size,
+        'pageIndex': page,
+    }
+
+    try:
+        response = requests.post('https://reportapi.eastmoney.com/report/list2', headers=headers, json=json_data, timeout=15)
+        data = response.json().get('data', [])
+        
+        for item in data:
+            results.append({
+                "id": item.get('reportId', ''),
+                "stock_code": item.get('stockCode', ''),
+                "stock_name": item.get('stockName', ''),
+                "title": item.get('title', ''),
+                "rating": item.get('emRatingName', '关注'),
+                "industry": item.get('indvInduName', ''),
+                "publish_date": item.get('publishDate', ''),
+                "summary": item.get('title', '')[:100] + '...' if len(item.get('title', '')) > 100 else item.get('title', '')
+            })
+        return results
+    except Exception as e:
+        logger.error(f"获取研报错误: {e}")
+        return []
+
+
 @app.get("/api/research/jiufang")
 async def get_jiufang_research(
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=100, description="每页数量")
 ):
-    """获取九方智投研报列表"""
+    """获取研报列表（从东方财富）"""
     try:
-        reports = await fetch_research_reports(page-1, page_size)
+        reports = get_stock_report(page, page_size)
+        
         if reports:
             return {
                 "code": 200,
@@ -1116,7 +1164,7 @@ async def get_jiufang_research(
                 "message": "暂无研报数据"
             }
     except Exception as e:
-        logger.error(f"获取九方智投研报异常: {e}")
+        logger.error(f"获取研报异常: {e}")
         return {"code": 500, "message": str(e), "data": []}
 
 
@@ -1127,7 +1175,15 @@ async def get_stock_research(
 ):
     """获取个股研报"""
     try:
-        all_reports = await fetch_research_reports(0, 100)
+        # 多抓几页筛选个股研报
+        all_reports = []
+        for page in range(1, 4):
+            reports = get_stock_report(page, 30)
+            if not reports:
+                break
+            all_reports.extend(reports)
+            time.sleep(0.3)
+        
         filtered = [r for r in all_reports if r['stock_code'] == stock_code][:limit]
         return {
             "code": 200,
@@ -1143,7 +1199,7 @@ async def get_stock_research(
 async def get_latest_research(limit: int = Query(20, ge=1, le=50)):
     """获取最新研报"""
     try:
-        reports = await fetch_research_reports(0, limit)
+        reports = get_stock_report(1, limit)
         return {
             "code": 200,
             "data": reports,
