@@ -32,9 +32,6 @@ STOCK_MAPPING_BY_PY = {}     # 拼音首字母 -> 代码列表
 
 
 
-
-
-
 # ========== 数据库配置 ==========
 # 使用环境变量，支持同步和异步连接
 DB_HOST = os.environ.get("DB_HOST", "ep-rapid-frog-ani7chkm.c-6.us-east-1.aws.neon.tech")
