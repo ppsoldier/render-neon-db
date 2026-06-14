@@ -540,32 +540,55 @@ async def get_sentiment_data():
 
 @app.get("/api/watchlist")
 async def get_watchlist():
-    """获取自选股列表"""
+    """获取自选股列表（含最新行情）"""
     try:
         pool = await get_db()
         
         async with pool.acquire() as conn:
-            # 直接查询自选股表
-            rows = await conn.fetch("""
+            # 1. 查询自选股列表
+            watchlist = await conn.fetch("""
                 SELECT code, name, added_date
                 FROM stock_data.watchlist
                 ORDER BY added_date DESC
             """)
-        
-        if not rows:
-            return {"code": 200, "data": [], "message": "暂无自选股"}
-        
-        # 组装返回数据
-        result = []
-        for row in rows:
-            result.append({
-                "stock_code": row["code"],
-                "stock_name": row["name"] if row["name"] else row["code"],
-                "price": 0,
-                "change_pct": 0
-            })
-        
-        return {"code": 200, "data": result, "message": "success"}
+            
+            if not watchlist:
+                return {"code": 200, "data": [], "message": "暂无自选股"}
+            
+            # 提取股票代码列表
+            stock_codes = [row["code"] for row in watchlist]
+            
+            # 2. 查询每个股票的最新行情
+            # 使用 unnest 数组查询
+            quotes = await conn.fetch("""
+                SELECT DISTINCT ON (code) code, price, change_pct
+                FROM stock_data.stocks_data
+                WHERE code = ANY($1::text[])
+                ORDER BY code, date DESC
+            """, stock_codes)
+            
+            # 构建行情映射
+            quote_map = {}
+            for q in quotes:
+                quote_map[q["code"]] = {
+                    "price": float(q["price"]) if q["price"] else 0,
+                    "change_pct": float(q["change_pct"]) if q["change_pct"] else 0
+                }
+            
+            # 3. 组装返回数据
+            result = []
+            for row in watchlist:
+                code = row["code"]
+                name = row["name"] if row["name"] else code
+                quote = quote_map.get(code, {"price": 0, "change_pct": 0})
+                result.append({
+                    "stock_code": code,
+                    "stock_name": name,
+                    "price": quote["price"],
+                    "change_pct": quote["change_pct"]
+                })
+            
+            return {"code": 200, "data": result, "message": "success"}
         
     except Exception as e:
         logger.error(f"获取自选股列表错误: {e}")
