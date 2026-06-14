@@ -1006,29 +1006,29 @@ async def refresh_holdings_prices(user_id: str):
         
 
 
-# ========== 个股详情接口 ==========
-@app.get("/api/stock/detail")
-async def get_stock_detail(stock_code: str):
-    """获取个股详情"""
-    try:
-        up_ranks = await fetch_stock_rank('0')
-        down_ranks = await fetch_stock_rank('1')
-        all_stocks = {s['stock_code']: s for s in up_ranks + down_ranks}
-        stock_info = all_stocks.get(stock_code, {})
+# # ========== 个股详情接口 ==========
+# @app.get("/api/stock/detail")
+# async def get_stock_detail(stock_code: str):
+#     """获取个股详情"""
+#     try:
+#         up_ranks = await fetch_stock_rank('0')
+#         down_ranks = await fetch_stock_rank('1')
+#         all_stocks = {s['stock_code']: s for s in up_ranks + down_ranks}
+#         stock_info = all_stocks.get(stock_code, {})
         
-        return {
-            "stock_code": stock_code,
-            "stock_name": stock_info.get('stock_name', stock_code),
-            "quote": {
-                "last_price": stock_info.get('price', 0),
-                "change_percent": stock_info.get('change_percent', 0),
-                "volume": stock_info.get('volume', 0),
-                "amount": stock_info.get('amount', 0)
-            }
-        }
-    except Exception as e:
-        logger.error(f"获取个股详情错误: {e}")
-        return {"stock_code": stock_code, "stock_name": stock_code, "quote": {}}
+#         return {
+#             "stock_code": stock_code,
+#             "stock_name": stock_info.get('stock_name', stock_code),
+#             "quote": {
+#                 "last_price": stock_info.get('price', 0),
+#                 "change_percent": stock_info.get('change_percent', 0),
+#                 "volume": stock_info.get('volume', 0),
+#                 "amount": stock_info.get('amount', 0)
+#             }
+#         }
+#     except Exception as e:
+#         logger.error(f"获取个股详情错误: {e}")
+#         return {"stock_code": stock_code, "stock_name": stock_code, "quote": {}}
 
 
 @app.get("/api/stock/picks/history")
@@ -1094,111 +1094,70 @@ async def search_stock(keyword: str):
         return []
 
 
+# ========== 研报接口 ==========
 
-@app.post("/api/stock/init-test-data")
-async def init_test_data():
-    """初始化测试数据（仅用于开发测试）"""
+@app.get("/api/research/jiufang")
+async def get_jiufang_research(
+    page: int = Query(1, ge=1, description="页码"),
+    page_size: int = Query(20, ge=1, le=100, description="每页数量")
+):
+    """获取九方智投研报列表"""
     try:
-        today = datetime.now().strftime('%Y-%m-%d')
-        engine = get_sync_engine()
-        
-        # ========== 1. 插入选股数据 ==========
-        test_picks = [
-            (today, '600519', '贵州茅台', 1680.00, 2.5, 85, '持有', '优秀'),
-            (today, '000858', '五粮液', 145.00, 3.2, 82, '买入', '良好'),
-            (today, '300750', '宁德时代', 220.00, 4.0, 88, '强烈买入', '优秀')
-        ]
-        
-        with engine.connect() as conn:
-            conn.execute(text(f"DELETE FROM {TABLE_SELECTED} WHERE date = :date"), {"date": today})
-            conn.commit()
-            
-            for pick in test_picks:
-                conn.execute(
-                    text(f"""
-                        INSERT INTO {TABLE_SELECTED} 
-                        (date, code, name, price, change_pct, total_score, advice, fin_rating)
-                        VALUES (:date, :code, :name, :price, :change_pct, :total_score, :advice, :fin_rating)
-                    """),
-                    {"date": pick[0], "code": pick[1], "name": pick[2],
-                     "price": pick[3], "change_pct": pick[4],
-                     "total_score": pick[5], "advice": pick[6], "fin_rating": pick[7]}
-                )
-            conn.commit()
-        
-        # ========== 2. 插入市场数据 ==========
-        with engine.connect() as conn:
-            conn.execute(text(f"DELETE FROM {TABLE_MARKET} WHERE date = :date"), {"date": today})
-            conn.commit()
-            
-            conn.execute(
-                text(f"""
-                    INSERT INTO {TABLE_MARKET} 
-                    (date, market_state, market_score, position_ratio, advice, trend_strength, volatility, ma_arrangement)
-                    VALUES (:date, :market_state, :market_score, :position_ratio, :advice, :trend_strength, :volatility, :ma_arrangement)
-                """),
-                {"date": today, "market_state": "震荡市", "market_score": 65,
-                 "position_ratio": 0.5, "advice": "控制仓位，高抛低吸", "trend_strength": 45,
-                 "volatility": 18, "ma_arrangement": "多头排列"}
-            )
-            conn.commit()
-        
-        # ========== 3. 插入概念板块数据 ==========
-        test_concepts = [
-            (today, '人工智能', 3.5, '科大讯飞'),
-            (today, '新能源', 2.8, '宁德时代'),
-            (today, '半导体', 1.9, '中芯国际'),
-            (today, '国产软件', 2.5, '金山办公'),
-            (today, '军工', 1.8, '航发动力')
-        ]
-        
-        with engine.connect() as conn:
-            conn.execute(text(f"DELETE FROM {TABLE_CONCEPTS} WHERE date = :date"), {"date": today})
-            conn.commit()
-            
-            for concept in test_concepts:
-                conn.execute(
-                    text(f"""
-                        INSERT INTO {TABLE_CONCEPTS} 
-                        (date, concept_name, change_pct, leading_stock)
-                        VALUES (:date, :concept_name, :change_pct, :leading_stock)
-                    """),
-                    {"date": concept[0], "concept_name": concept[1], "change_pct": concept[2], "leading_stock": concept[3]}
-                )
-            conn.commit()
-        
-        # ========== 4. 插入行业板块数据 ==========
-        test_industries = [
-            (today, '白酒', 2.1, '贵州茅台'),
-            (today, '电池', 3.2, '宁德时代'),
-            (today, '家电', 1.5, '美的集团'),
-            (today, '半导体', 2.0, '中芯国际'),
-            (today, '证券', 1.2, '中信证券')
-        ]
-        
-        with engine.connect() as conn:
-            conn.execute(text(f"DELETE FROM {TABLE_INDUSTRIES} WHERE date = :date"), {"date": today})
-            conn.commit()
-            
-            for industry in test_industries:
-                conn.execute(
-                    text(f"""
-                        INSERT INTO {TABLE_INDUSTRIES} 
-                        (date, industry_name, change_pct, leading_stock)
-                        VALUES (:date, :industry_name, :change_pct, :leading_stock)
-                    """),
-                    {"date": industry[0], "industry_name": industry[1], "change_pct": industry[2], "leading_stock": industry[3]}
-                )
-            conn.commit()
-        
+        reports = await fetch_research_reports(page-1, page_size)
+        if reports:
+            return {
+                "code": 200,
+                "data": reports,
+                "total": len(reports),
+                "page": page,
+                "page_size": page_size,
+                "message": "success"
+            }
+        else:
+            return {
+                "code": 200,
+                "data": [],
+                "total": 0,
+                "message": "暂无研报数据"
+            }
+    except Exception as e:
+        logger.error(f"获取九方智投研报异常: {e}")
+        return {"code": 500, "message": str(e), "data": []}
+
+
+@app.get("/api/research/stock")
+async def get_stock_research(
+    stock_code: str = Query(..., description="股票代码"),
+    limit: int = Query(20, ge=1, le=50, description="返回数量")
+):
+    """获取个股研报"""
+    try:
+        all_reports = await fetch_research_reports(0, 100)
+        filtered = [r for r in all_reports if r['stock_code'] == stock_code][:limit]
         return {
             "code": 200,
-            "message": f"测试数据初始化完成！选股：{len(test_picks)}条，概念：{len(test_concepts)}条，行业：{len(test_industries)}条"
+            "data": filtered,
+            "message": "success"
         }
-        
     except Exception as e:
-        logger.error(f"初始化测试数据失败: {e}")
-        return {"code": 500, "message": str(e)}
+        logger.error(f"获取个股研报错误: {e}")
+        return {"code": 500, "message": str(e), "data": []}
+
+
+@app.get("/api/research/latest")
+async def get_latest_research(limit: int = Query(20, ge=1, le=50)):
+    """获取最新研报"""
+    try:
+        reports = await fetch_research_reports(0, limit)
+        return {
+            "code": 200,
+            "data": reports,
+            "message": "success"
+        }
+    except Exception as e:
+        logger.error(f"获取最新研报错误: {e}")
+        return {"code": 500, "message": str(e), "data": []}
+
         
 
 
