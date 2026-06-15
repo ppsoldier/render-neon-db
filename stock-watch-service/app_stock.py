@@ -346,7 +346,103 @@ async def health_check():
 
 
 
+#自选股指数实时接口
+def fetch_index_quote_from_tencent(code):
+    """从腾讯财经获取指数实时行情"""
+    # 腾讯指数代码：sh000001, sz399001, sz399006
+    if code == '000001':
+        symbol = 'sh000001'
+    elif code in ('399001', '399006'):
+        symbol = f'sz{code}'
+    else:
+        return None
+    url = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={symbol},day,,,1"
+    try:
+        resp = requests.get(url, timeout=5)
+        data = resp.json()
+        if data.get('code') == 0:
+            # 数据在 data['data'][symbol]['qt'][symbol]
+            qt = data['data'][symbol]['qt'][symbol]
+            # 字段：... 38 是当前价, 37 是昨收
+            current = float(qt[38]) if qt[38] else 0
+            last_close = float(qt[37]) if qt[37] else 0
+            change = round((current - last_close) / last_close * 100, 2) if last_close else 0
+            name = qt[1]  # 指数名称
+            return {'price': current, 'change_pct': change, 'name': name}
+    except Exception as e:
+        logger.error(f"腾讯指数获取失败 {code}: {e}")
+    return None
 
+def fetch_realtime_quotes(stock_codes):
+    if not stock_codes:
+        return {}
+    
+    INDEX_CODES = {'000001','399001','399006','000300','000905','399005'}
+    symbols = []
+    for code in stock_codes:
+        code = str(code)
+        if code.startswith('6'):
+            symbols.append(f"sh{code}")
+        elif code.startswith('0') or code.startswith('3'):
+            symbols.append(f"sz{code}")
+        else:
+            symbols.append(f"sh{code}")
+    
+    # 先处理指数（单独请求腾讯接口）
+    result = {}
+    for code in INDEX_CODES:
+        if code in stock_codes:
+            quote = fetch_index_quote_from_tencent(code)
+            if quote:
+                result[code] = quote
+    
+    # 剩余非指数股票使用新浪接口
+    stock_symbols = [s for s in symbols if s[2:] not in INDEX_CODES]
+    if not stock_symbols:
+        return result
+    
+    url = f"http://hq.sinajs.cn/list={','.join(stock_symbols)}"
+    headers = {"Referer": "http://finance.sina.com.cn"}
+    try:
+        resp = requests.get(url, headers=headers, timeout=5)
+        resp.encoding = 'gbk'
+        lines = resp.text.strip().split('\n')
+    except Exception as e:
+        logger.error(f"新浪接口请求失败: {e}")
+        return result
+    
+    for line in lines:
+        if '="' not in line:
+            continue
+        match = re.search(r'hq_str_(s[hz]\d{6})', line)
+        if not match:
+            continue
+        full_code = match.group(1)
+        code = full_code[2:]
+        if code in result:  # 已通过腾讯获取，跳过
+            continue
+        parts = line.split('="')[1].split(',')
+        if len(parts) < 4:
+            continue
+        name = parts[0]
+        # 普通股票：昨收=parts[2], 现价=parts[3]
+        last_close = parts[2]
+        current = parts[3]
+        try:
+            last_close = float(last_close) if last_close else 0
+            current = float(current) if current else 0
+            change = round((current - last_close) / last_close * 100, 2) if last_close else 0
+        except:
+            change = 0
+            current = 0
+        result[code] = {'price': current, 'change_pct': change, 'name': name}
+    return result
+
+
+
+
+
+#自选股新浪实时接口
 def fetch_realtime_quotes(stock_codes):
     if not stock_codes:
         return {}
