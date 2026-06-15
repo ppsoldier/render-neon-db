@@ -353,6 +353,10 @@ import logging
 logger = logging.getLogger("stock-watch")
 
 def fetch_realtime_quotes(stock_codes):
+    """
+    批量获取股票/指数实时行情（新浪接口）
+    返回字典 { code: {"price": float, "change_pct": float, "name": str} }
+    """
     if not stock_codes:
         return {}
     
@@ -376,7 +380,7 @@ def fetch_realtime_quotes(stock_codes):
     
     result = {}
     
-    # 1. 处理普通股票和其他指数（个股格式）
+    # 处理普通股票和其他指数（个股格式）
     all_stock_codes = stock_codes_clean + other_codes
     if all_stock_codes:
         symbols = []
@@ -398,33 +402,23 @@ def fetch_realtime_quotes(stock_codes):
                 if not match:
                     continue
                 full_code = match.group(1)
-                code = full_code[2:]  # 去掉前缀，作为返回的key
+                code = full_code[2:]   # 去掉 sh/sz 前缀，作为返回的 key
                 parts = line.split('="')[1].split(',')
-                if len(parts) < 5:
+                if len(parts) < 10:
                     continue
-                # 打印完整 parts 数组（前20个字段），用于调试
-                logger.info(f"DEBUG [{code}] parts: {parts[:20]}")
                 name = parts[0]
-                # 现价通常在索引3
                 try:
-                    current = float(parts[3])
-                except:
+                    last_close = float(parts[2])   # 昨收（索引2）
+                    current = float(parts[3])      # 现价（索引3）
+                    change_pct = round((current - last_close) / last_close * 100, 2) if last_close != 0 else 0
+                except (ValueError, IndexError):
                     current = 0
-                # 涨跌幅可能在索引4（百分比数值）或索引5（带%号），根据实际情况调整
-                try:
-                    # 尝试索引4（纯数字涨跌幅）
-                    change_pct = float(parts[4])
-                except:
-                    # 如果索引4不是数字，尝试索引5（去掉%）
-                    try:
-                        change_pct = float(parts[5].replace('%', ''))
-                    except:
-                        change_pct = 0
+                    change_pct = 0
                 result[code] = {"price": current, "change_pct": change_pct, "name": name}
         except Exception as e:
             logger.error(f"股票/其他指数请求失败: {e}")
     
-    # 2. 处理上证指数（简化版）
+    # 处理上证指数（简化版）
     if sh_codes:
         url = f"http://hq.sinajs.cn/list={','.join(sh_codes)}"
         headers = {"Referer": "http://finance.sina.com.cn"}
@@ -440,16 +434,14 @@ def fetch_realtime_quotes(stock_codes):
                     continue
                 full_code = match.group(1)
                 parts = line.split('="')[1].split(',')
-                if len(parts) < 6:
+                if len(parts) < 4:
                     continue
-                logger.info(f"DEBUG [{full_code}] parts: {parts[:10]}")
                 name = parts[0]
                 try:
-                    current = float(parts[1])   # 上证指数现价
+                    current = float(parts[1])          # 上证指数现价
                 except:
                     current = 0
                 try:
-                    # 涨跌幅通常在索引3（例如 "-0.86%"）
                     change_str = parts[3].replace('%', '')
                     change_pct = float(change_str)
                 except:
