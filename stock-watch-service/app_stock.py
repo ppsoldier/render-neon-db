@@ -378,107 +378,98 @@ import requests
 import logging
 logger = logging.getLogger("stock-watch")
 
+import re
+import requests
+import logging
+
+logger = logging.getLogger("stock-watch")
+
 def fetch_realtime_quotes(stock_codes):
-    """获取实时行情（股票用新浪，指数用腾讯）"""
+    """
+    批量获取股票/指数实时行情（新浪接口）
+    返回字典 { code: {"price": float, "change_pct": float, "name": str} }
+    """
     if not stock_codes:
         return {}
     
-    INDEX_CODES = {'000001','399001','399006','000300','000905','399005'}
-    result = {}
+    # 常见指数代码
+    INDEX_CODES = {'000001', '399001', '399006', '000300', '000905', '399005'}
     
-    # 1. 处理指数：使用腾讯接口
-    for code in INDEX_CODES:
-        if code in stock_codes:
-            quote = fetch_index_from_tencent(code)
-            if quote:
-                result[code] = quote
-                logger.info(f"指数 {code} 行情获取成功: {quote}")
-            else:
-                logger.warning(f"指数 {code} 行情获取失败")
-    
-    # 2. 处理普通股票：使用新浪接口
-    stock_codes_to_fetch = [c for c in stock_codes if c not in INDEX_CODES]
-    if not stock_codes_to_fetch:
-        return result
-    
+    # 构建新浪符号列表
     symbols = []
-    for code in stock_codes_to_fetch:
+    for code in stock_codes:
         code = str(code)
         if code.startswith('6'):
             symbols.append(f"sh{code}")
         elif code.startswith('0') or code.startswith('3'):
             symbols.append(f"sz{code}")
         else:
-            symbols.append(f"sh{code}")
+            symbols.append(f"sh{code}")   # 默认沪市
+    
+    if not symbols:
+        return {}
     
     url = f"http://hq.sinajs.cn/list={','.join(symbols)}"
     headers = {"Referer": "http://finance.sina.com.cn"}
     try:
-        resp = requests.get(url, headers=headers, timeout=5)
-        resp.encoding = 'gbk'
-        lines = resp.text.strip().split('\n')
+        response = requests.get(url, headers=headers, timeout=5)
+        response.encoding = 'gbk'
+        lines = response.text.strip().split('\n')
     except Exception as e:
         logger.error(f"新浪接口请求失败: {e}")
-        return result
+        return {}
     
+    result = {}
     for line in lines:
         if '="' not in line:
             continue
+        # 提取代码（sh600001 或 sz000001）
         match = re.search(r'hq_str_(s[hz]\d{6})', line)
         if not match:
             continue
-        code = match.group(1)[2:]
+        full_code = match.group(1)
+        code = full_code[2:]   # 去掉 sh/sz 前缀
         parts = line.split('="')[1].split(',')
-        if len(parts) < 4:
+        if len(parts) < 10:
             continue
+        
         name = parts[0]
-        last_close = parts[2]
-        current = parts[3]
-        try:
-            last_close = float(last_close) if last_close else 0
-            current = float(current) if current else 0
-            change = round((current - last_close) / last_close * 100, 2) if last_close else 0
-        except:
-            change = 0
-            current = 0
-        result[code] = {'price': current, 'change_pct': change, 'name': name}
-    return result
-
-def fetch_index_from_tencent(code):
-    """从腾讯财经获取指数实时行情"""
-    # 腾讯指数代码映射
-    if code == '000001':
-        symbol = 'sh000001'
-    elif code == '399001':
-        symbol = 'sz399001'
-    elif code == '399006':
-        symbol = 'sz399006'
-    elif code == '000300':
-        symbol = 'sh000300'
-    elif code == '000905':
-        symbol = 'sh000905'
-    elif code == '399005':
-        symbol = 'sz399005'
-    else:
-        return None
-    url = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={symbol},day,,,1"
-    try:
-        resp = requests.get(url, timeout=5)
-        data = resp.json()
-        if data.get('code') == 0:
-            # 获取行情数据
-            qt = data['data'][symbol]['qt'][symbol]
-            # 常见字段索引: 1=名称, 37=昨收, 38=现价, 40=涨跌幅% (可能已有)
-            current = float(qt[38]) if qt[38] else 0
-            last_close = float(qt[37]) if qt[37] else 0
-            change = round((current - last_close) / last_close * 100, 2) if last_close else 0
-            name = qt[1]
-            return {'price': current, 'change_pct': change, 'name': name}
+        if code in INDEX_CODES:
+            # 指数格式: 名称,昨收,今开,现价,最高,最低,...
+            # 但新浪有时字段位置会变，这里打印原始数据以便调试
+            logger.info(f"指数 {code} 原始数据: {parts[:6]}")
+            try:
+                last_close = float(parts[1])   # 昨收
+                current = float(parts[3])      # 现价
+            except (ValueError, IndexError):
+                last_close = 0
+                current = 0
         else:
-            logger.warning(f"腾讯接口返回错误: code={data.get('code')}")
-    except Exception as e:
-        logger.error(f"腾讯指数获取异常 {code}: {e}")
-    return None
+            # 普通股票格式: 名称,今开,昨收,现价,...
+            try:
+                last_close = float(parts[2])
+                current = float(parts[3])
+            except (ValueError, IndexError):
+                last_close = 0
+                current = 0
+        
+        # 计算涨跌幅
+        if last_close != 0:
+            change_pct = round((current - last_close) / last_close * 100, 2)
+        else:
+            change_pct = 0
+        
+        result[code] = {
+            "price": current,
+            "change_pct": change_pct,
+            "name": name
+        }
+        
+        # 特别记录指数数据
+        if code in INDEX_CODES:
+            logger.info(f"指数 {code} 解析结果: 昨收={last_close}, 现价={current}, 涨跌幅={change_pct}%")
+    
+    return result
 
 
 
