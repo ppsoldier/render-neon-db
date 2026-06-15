@@ -419,6 +419,45 @@ async def fetch_eastmoney_stock_rank(rank_type: str, page: int = 1, page_size: i
 
 
 
+
+async def fetch_tencent_stock_rank(rank_type: str, page: int = 1, page_size: int = 30):
+    """
+    腾讯财经股票涨跌幅排行榜
+    rank_type: 'up' 涨幅榜, 'down' 跌幅榜
+    文档参考: https://gu.qq.com/ 接口
+    """
+    # 腾讯接口: up 涨幅榜对应 "1", down 跌幅榜对应 "-1"
+    sort_type = "1" if rank_type == "up" else "-1"
+    url = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=hs,{sort_type},,{page},{page_size}"
+    try:
+        response = requests.get(url, timeout=8)
+        data = response.json()
+        # 腾讯返回格式: { "code": 0, "data": [ ... ] }
+        if data.get('code') == 0:
+            stock_list = data.get('data', [])
+            results = []
+            for item in stock_list:
+                code = item.get('symbol', '')
+                # 去掉前缀
+                if code.startswith('sh') or code.startswith('sz'):
+                    code = code[2:]
+                results.append({
+                    "stock_code": code,
+                    "stock_name": item.get('name', ''),
+                    "price": float(item.get('price', 0)),
+                    "change_percent": float(item.get('percent', 0)),
+                    "volume": item.get('volume', 0),
+                    "amount": item.get('amount', 0)
+                })
+            return results
+    except Exception as e:
+        logger.error(f"腾讯排行榜请求失败: {e}")
+    return []
+
+
+
+
+
 # ========== FastAPI 应用 ==========
 app = FastAPI(title="股票看盘系统", version="2.0.0")
 
@@ -502,14 +541,20 @@ def fetch_realtime_quotes(stock_codes):
 # ========== 实时行情接口 ==========
 @app.get("/api/realtime/ranks")
 async def get_realtime_ranks(rank_type: str = Query("up", description="up/down")):
+    """获取实时涨跌幅榜单（腾讯财经）"""
     try:
-        ranks = await fetch_eastmoney_stock_rank(rank_type, page=1, page_size=30)
-        return {
-            "code": 200,
-            "data": ranks,
-            "update_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "source": "东方财富"
-        }
+        ranks = await fetch_tencent_stock_rank(rank_type, page=1, page_size=30)
+        if ranks:
+            return {
+                "code": 200,
+                "message": "success",
+                "data": ranks,
+                "update_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "source": "腾讯财经"
+            }
+        else:
+            # 如果腾讯接口也无数据，返回空数组
+            return {"code": 200, "data": [], "message": "暂无数据", "source": "腾讯财经"}
     except Exception as e:
         logger.error(f"获取榜单错误: {e}")
         return {"code": 500, "message": str(e), "data": []}
