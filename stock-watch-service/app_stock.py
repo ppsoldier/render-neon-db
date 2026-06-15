@@ -540,24 +540,10 @@ def fetch_realtime_quotes(stock_codes):
 
 # ========== 实时行情接口 ==========
 @app.get("/api/realtime/ranks")
-async def get_realtime_ranks(rank_type: str = Query("up", description="up/down")):
-    """获取实时涨跌幅榜单（腾讯财经）"""
-    try:
-        ranks = await fetch_tencent_stock_rank(rank_type, page=1, page_size=30)
-        if ranks:
-            return {
-                "code": 200,
-                "message": "success",
-                "data": ranks,
-                "update_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "source": "腾讯财经"
-            }
-        else:
-            # 如果腾讯接口也无数据，返回空数组
-            return {"code": 200, "data": [], "message": "暂无数据", "source": "腾讯财经"}
-    except Exception as e:
-        logger.error(f"获取榜单错误: {e}")
-        return {"code": 500, "message": str(e), "data": []}
+async def get_realtime_ranks(rank_type: str = Query("up")):
+    sort_type = '0' if rank_type == 'up' else '1'
+    data = await fetch_stock_rank(sort_type)
+    return {"code": 200, "data": data, "update_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "source": "九方智投"}
 
 
 
