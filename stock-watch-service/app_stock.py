@@ -876,6 +876,8 @@ async def delete_watchlist(stock_code: str = Query(..., description="股票代�
 @app.get("/api/holdings")
 async def get_holdings():
     """获取持仓列表（含实时行情）"""
+    conn = None
+    cur = None
     try:
         conn = psycopg2.connect(
             host=DB_CONFIG['host'],
@@ -892,30 +894,40 @@ async def get_holdings():
             ORDER BY code
         """)
         rows = cur.fetchall()
-        cur.close()
-        conn.close()
         
         if not rows:
+            logger.info("持仓表无数据")
             return {"code": 200, "data": [], "stats": {"total_value": 0, "total_cost": 0, "total_pnl": 0, "total_pnl_pct": 0}}
         
+        # 提取股票代码
         stock_codes = [row[0] for row in rows]
-        quotes = fetch_realtime_quotes(stock_codes)
+        
+        # 获取实时行情（若失败则返回空字典，不影响后续）
+        quotes = {}
+        try:
+            quotes = fetch_realtime_quotes(stock_codes)
+        except Exception as e:
+            logger.error(f"获取实时行情失败: {e}")
         
         holdings = []
         total_market_value = 0
         total_cost = 0
+        
         for row in rows:
             code = row[0]
-            name = row[1]
+            name = row[1] if row[1] else code
             quantity = row[2]
             cost_price = row[3]
+            
+            # 从实时行情中获取价格，若无则使用成本价
             quote = quotes.get(code, {})
-            current_price = quote.get('price', cost_price)
+            current_price = quote.get('price') if quote.get('price') else cost_price
             change_pct = quote.get('change_pct', 0)
+            
             market_value = current_price * quantity
             cost = cost_price * quantity
             pnl = market_value - cost
-            pnl_pct = (pnl / cost * 100) if cost > 0 else 0
+            pnl_pct = round((pnl / cost * 100), 2) if cost > 0 else 0
             
             holdings.append({
                 "code": code,
@@ -925,28 +937,37 @@ async def get_holdings():
                 "current_price": round(current_price, 2),
                 "market_value": round(market_value, 2),
                 "pnl": round(pnl, 2),
-                "pnl_pct": round(pnl_pct, 2),
+                "pnl_pct": pnl_pct,
                 "change_pct": change_pct
             })
             total_market_value += market_value
             total_cost += cost
         
         total_pnl = total_market_value - total_cost
-        total_pnl_pct = (total_pnl / total_cost * 100) if total_cost > 0 else 0
+        total_pnl_pct = round((total_pnl / total_cost * 100), 2) if total_cost > 0 else 0
         
-        return {
+        result = {
             "code": 200,
             "data": holdings,
             "stats": {
                 "total_value": round(total_market_value, 2),
                 "total_cost": round(total_cost, 2),
                 "total_pnl": round(total_pnl, 2),
-                "total_pnl_pct": round(total_pnl_pct, 2)
+                "total_pnl_pct": total_pnl_pct
             }
         }
+        logger.info(f"返回持仓数据: {len(holdings)} 条")
+        return result
+        
     except Exception as e:
         logger.error(f"获取持仓错误: {e}")
         return {"code": 500, "message": str(e), "data": [], "stats": {}}
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
+            
 
 
 @app.post("/api/holdings")
