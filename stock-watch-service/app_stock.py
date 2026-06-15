@@ -310,6 +310,67 @@ async def root():
 async def health_check():
     return {"status": "healthy", "service": "stock-watch"}
 
+
+import re
+
+
+def fetch_realtime_quotes(stock_codes):
+    """批量获取股票实时行情（新浪接口）"""
+    if not stock_codes:
+        return {}
+    
+    symbols = []
+    for code in stock_codes:
+        code = str(code)
+        if code.startswith('6'):
+            symbols.append(f"sh{code}")
+        elif code.startswith('0') or code.startswith('3'):
+            symbols.append(f"sz{code}")
+        else:
+            symbols.append(f"sh{code}")  # 默认 sh
+    
+    url = f"http://hq.sinajs.cn/list={','.join(symbols)}"
+    headers = {"Referer": "http://finance.sina.com.cn"}
+    try:
+        response = requests.get(url, headers=headers, timeout=5)
+        response.encoding = 'gbk'
+        lines = response.text.strip().split('\n')
+    except Exception as e:
+        logger.error(f"新浪接口请求失败: {e}")
+        return {}
+    
+    result = {}
+    for line in lines:
+        if '="' not in line:
+            continue
+        match = re.search(r'hq_str_(s[hz]\d{6})', line)
+        if not match:
+            continue
+        full_code = match.group(1)
+        code = full_code[2:]  # 去掉 sh/sz 前缀
+        parts = line.split('="')[1].split(',')
+        if len(parts) < 10:
+            continue
+        name = parts[0]
+        last_close = parts[2]
+        current_price = parts[3]
+        try:
+            last_close = float(last_close) if last_close else 0
+            current_price = float(current_price) if current_price else 0
+            change_pct = round((current_price - last_close) / last_close * 100, 2) if last_close != 0 else 0
+        except:
+            change_pct = 0
+            current_price = 0
+        result[code] = {
+            'price': current_price,
+            'change_pct': change_pct,
+            'name': name
+        }
+    return result
+
+
+
+
 # ========== 实时行情接口 ==========
 @app.get("/api/realtime/ranks")
 async def get_realtime_ranks(rank_type: str = Query("up", description="up/down")):
@@ -701,54 +762,38 @@ async def get_sentiment_data():
 
 @app.get("/api/watchlist")
 async def get_watchlist():
-    """获取自选股列表（按数据库原始顺序）"""
+    """获取自选股列表（含实时行情）"""
     try:
         pool = await get_db()
-        
         async with pool.acquire() as conn:
-            # 查询自选股列表，按 id 升序（原始插入顺序）
-            watchlist = await conn.fetch("""
+            rows = await conn.fetch("""
                 SELECT code, name, added_date
                 FROM stock_data.watchlist
                 ORDER BY id ASC
             """)
-            
-            if not watchlist:
-                return {"code": 200, "data": [], "message": "暂无自选股"}
-            
-            result = []
-            for row in watchlist:
-                code = row["code"]
-                name = row["name"] if row["name"] else code
-                
-                # 查询最新行情
-                quote = await conn.fetchrow("""
-                    SELECT price, change_pct
-                    FROM stock_data.stocks_data
-                    WHERE code = $1
-                    ORDER BY date DESC
-                    LIMIT 1
-                """, code)
-                
-                if quote:
-                    price = float(quote["price"]) if quote["price"] else 0
-                    change_pct = float(quote["change_pct"]) if quote["change_pct"] else 0
-                else:
-                    price = 0
-                    change_pct = 0
-                
-                result.append({
-                    "stock_code": code,
-                    "stock_name": name,
-                    "price": price,
-                    "change_pct": change_pct
-                })
-            
-            return {"code": 200, "data": result, "message": "success"}
         
+        if not rows:
+            return {"code": 200, "data": [], "message": "暂无自选股"}
+        
+        stock_codes = [row['code'] for row in rows]
+        quotes = fetch_realtime_quotes(stock_codes)
+        
+        result = []
+        for row in rows:
+            code = row['code']
+            name = row['name'] if row['name'] else code
+            quote = quotes.get(code, {})
+            result.append({
+                "stock_code": code,
+                "stock_name": name,
+                "price": quote.get('price', 0),
+                "change_pct": quote.get('change_pct', 0)
+            })
+        return {"code": 200, "data": result, "message": "success"}
     except Exception as e:
         logger.error(f"获取自选股列表错误: {e}")
         return {"code": 500, "message": str(e), "data": []}
+        
 
 
 @app.post("/api/watchlist")
@@ -814,62 +859,75 @@ async def delete_watchlist(stock_code: str = Query(..., description="股票代�
 # ========== 持仓管理接口 ==========
 @app.get("/api/holdings")
 async def get_holdings():
-    """获取持仓列表（全局共享）"""
+    """获取持仓列表（含实时行情）"""
     try:
-        engine = get_sync_engine()
+        conn = psycopg2.connect(
+            host=DB_CONFIG['host'],
+            user=DB_CONFIG['user'],
+            password=DB_CONFIG['password'],
+            database=DB_CONFIG['database'],
+            port=DB_CONFIG['port'],
+            sslmode='require'
+        )
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT code, name, quantity, cost_price
+            FROM stock_data.current_positions
+            ORDER BY code
+        """)
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
         
-        with engine.connect() as conn:
-            result = conn.execute(
-                text(f"""
-                    SELECT code, name, quantity, cost_price, market_price, 
-                           market_value, pnl, pnl_pct, updated_at
-                    FROM {TABLE_CURRENT_POSITIONS}
-                    ORDER BY market_value DESC
-                """)
-            )
-            rows = result.fetchall()
+        if not rows:
+            return {"code": 200, "data": [], "stats": {"total_value": 0, "total_cost": 0, "total_pnl": 0, "total_pnl_pct": 0}}
+        
+        stock_codes = [row[0] for row in rows]
+        quotes = fetch_realtime_quotes(stock_codes)
         
         holdings = []
-        total_value = 0
+        total_market_value = 0
         total_cost = 0
-        
         for row in rows:
-            quantity = float(row[2]) if row[2] else 0
-            cost_price = float(row[3]) if row[3] else 0
-            current_price = float(row[4]) if row[4] else cost_price
-            market_value = float(row[5]) if row[5] else current_price * quantity
-            pnl = float(row[6]) if row[6] else 0
-            pnl_pct = float(row[7]) if row[7] else 0
+            code = row[0]
+            name = row[1]
+            quantity = row[2]
+            cost_price = row[3]
+            quote = quotes.get(code, {})
+            current_price = quote.get('price', cost_price)
+            change_pct = quote.get('change_pct', 0)
+            market_value = current_price * quantity
+            cost = cost_price * quantity
+            pnl = market_value - cost
+            pnl_pct = (pnl / cost * 100) if cost > 0 else 0
             
             holdings.append({
-                "code": row[0],
-                "name": row[1],
+                "code": code,
+                "name": name,
                 "quantity": quantity,
                 "cost_price": cost_price,
-                "current_price": current_price,
-                "market_value": market_value,
-                "pnl": pnl,
-                "pnl_pct": pnl_pct,
-                "updated_at": str(row[8]) if row[8] else None
+                "current_price": round(current_price, 2),
+                "market_value": round(market_value, 2),
+                "pnl": round(pnl, 2),
+                "pnl_pct": round(pnl_pct, 2),
+                "change_pct": change_pct
             })
-            
-            total_value += market_value
-            total_cost += cost_price * quantity
+            total_market_value += market_value
+            total_cost += cost
         
-        total_pnl = total_value - total_cost
+        total_pnl = total_market_value - total_cost
         total_pnl_pct = (total_pnl / total_cost * 100) if total_cost > 0 else 0
         
         return {
             "code": 200,
             "data": holdings,
             "stats": {
-                "total_value": round(total_value, 2),
+                "total_value": round(total_market_value, 2),
                 "total_cost": round(total_cost, 2),
                 "total_pnl": round(total_pnl, 2),
                 "total_pnl_pct": round(total_pnl_pct, 2)
             }
         }
-        
     except Exception as e:
         logger.error(f"获取持仓错误: {e}")
         return {"code": 500, "message": str(e), "data": [], "stats": {}}
