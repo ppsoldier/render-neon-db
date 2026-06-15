@@ -382,6 +382,43 @@ async def fetch_sina_stock_rank(rank_type: str, page: int = 1, page_size: int = 
 
 
 
+async def fetch_eastmoney_stock_rank(rank_type: str, page: int = 1, page_size: int = 30):
+    """
+    东方财富股票涨跌幅排行榜
+    rank_type: 'up' 涨幅榜, 'down' 跌幅榜
+    """
+    # 排序方式：涨幅榜为负序（po=1），跌幅榜为正序（po=0）
+    po = 1 if rank_type == 'up' else 0
+    url = f"https://push2.eastmoney.com/api/qt/clist/get?pn={page}&pz={page_size}&po={po}&np=1&fltt=2&invt=2&ut=8d5d68c48cb7b0b2c551c7fa87ad5abe&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23&fields=f12,f14,f2,f3,f4,f5,f6,f7,f8,f15,f16,f17"
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        data = response.json()
+        if data.get('data') and data['data'].get('diff'):
+            items = data['data']['diff']
+            results = []
+            for item in items:
+                code = item.get('f12', '')
+                name = item.get('f14', '')
+                price = item.get('f2', 0)
+                change_percent = item.get('f3', 0)
+                results.append({
+                    "stock_code": code,
+                    "stock_name": name,
+                    "price": float(price),
+                    "change_percent": float(change_percent),
+                    "volume": item.get('f5', 0),
+                    "amount": item.get('f6', 0)
+                })
+            return results
+    except Exception as e:
+        logger.error(f"东方财富排行榜请求失败: {e}")
+    return []
+
+
+
+
+
 # ========== FastAPI 应用 ==========
 app = FastAPI(title="股票看盘系统", version="2.0.0")
 
@@ -465,20 +502,20 @@ def fetch_realtime_quotes(stock_codes):
 # ========== 实时行情接口 ==========
 @app.get("/api/realtime/ranks")
 async def get_realtime_ranks(rank_type: str = Query("up", description="up/down")):
-    """获取实时涨跌幅榜单（新浪接口）"""
     try:
-        # 获取第一页20只股票（可根据需要增加页数合并）
-        ranks = await fetch_sina_stock_rank(rank_type, page=1, page_size=30)
+        ranks = await fetch_eastmoney_stock_rank(rank_type, page=1, page_size=30)
         return {
             "code": 200,
-            "message": "success",
             "data": ranks,
             "update_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "source": "新浪"
+            "source": "东方财富"
         }
     except Exception as e:
-        logger.error(f"获取新浪榜单错误: {e}")
+        logger.error(f"获取榜单错误: {e}")
         return {"code": 500, "message": str(e), "data": []}
+
+
+
         
 
 @app.get("/api/realtime/industry")
