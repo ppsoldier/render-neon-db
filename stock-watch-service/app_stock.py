@@ -315,12 +315,11 @@ import re
 
 
 def fetch_realtime_quotes(stock_codes):
-    """批量获取股票实时行情，正确支持指数"""
+    """新浪实时行情，自动区分指数和股票"""
     if not stock_codes:
         return {}
     
-    INDEX_CODES = {'000001','399001','399006','000300','000905','399005'}  # 常见指数
-    
+    INDEX_SET = {'000001', '399001', '399006', '000300', '000905', '399005'}
     symbols = []
     for code in stock_codes:
         code = str(code)
@@ -338,31 +337,28 @@ def fetch_realtime_quotes(stock_codes):
         resp.encoding = 'gbk'
         lines = resp.text.strip().split('\n')
     except Exception as e:
-        logger.error(f"新浪接口失败: {e}")
+        logger.error(f"新浪请求失败: {e}")
         return {}
     
     result = {}
     for line in lines:
         if '="' not in line:
             continue
-        match = re.search(r'hq_str_(s[hz]\d{6})', line)
-        if not match:
+        m = re.search(r'hq_str_(s[hz]\d{6})', line)
+        if not m:
             continue
-        code = match.group(1)[2:]  # 去掉前缀
+        code = m.group(1)[2:]
         parts = line.split('="')[1].split(',')
         if len(parts) < 4:
             continue
-        
         name = parts[0]
-        if code in INDEX_CODES:
-            # 指数格式: 名称,昨收,今开,现价,...
-            last_close = parts[1]
-            current = parts[3]
+        # 指数与股票字段位置不同
+        if code in INDEX_SET:
+            last_close = parts[1]   # 昨日收盘
+            current = parts[3]      # 最新价
         else:
-            # 普通股票: 名称,今开,昨收,现价,...
-            last_close = parts[2]
-            current = parts[3]
-        
+            last_close = parts[2]   # 昨日收盘
+            current = parts[3]      # 最新价
         try:
             last_close = float(last_close) if last_close else 0
             current = float(current) if current else 0
@@ -370,10 +366,9 @@ def fetch_realtime_quotes(stock_codes):
         except:
             change = 0
             current = 0
-        
         result[code] = {'price': current, 'change_pct': change, 'name': name}
     return result
-
+    
 
 
 # ========== 实时行情接口 ==========
@@ -767,29 +762,20 @@ async def get_sentiment_data():
 
 @app.get("/api/watchlist")
 async def get_watchlist():
-    """获取自选股列表（含实时行情）"""
     try:
         pool = await get_db()
         async with pool.acquire() as conn:
-            rows = await conn.fetch("""
-                SELECT code, name, added_date
-                FROM stock_data.watchlist
-                ORDER BY id ASC
-            """)
-        
+            rows = await conn.fetch("SELECT code, name FROM stock_data.watchlist ORDER BY id ASC")
         if not rows:
             return {"code": 200, "data": [], "message": "暂无自选股"}
-        
-        stock_codes = [row['code'] for row in rows]
-        quotes = fetch_realtime_quotes(stock_codes)
-        
+        codes = [row['code'] for row in rows]
+        quotes = fetch_realtime_quotes(codes)
         result = []
         for row in rows:
             code = row['code']
             db_name = row['name']
             quote = quotes.get(code, {})
-            # 优先使用新浪返回的实时名称，若没有则用数据库中的名称
-            name = quote.get('name') if quote.get('name') else db_name if db_name else code
+            name = quote.get('name') if quote.get('name') else (db_name or code)
             result.append({
                 "stock_code": code,
                 "stock_name": name,
@@ -798,7 +784,7 @@ async def get_watchlist():
             })
         return {"code": 200, "data": result, "message": "success"}
     except Exception as e:
-        logger.error(f"获取自选股列表错误: {e}")
+        logger.error(f"自选股接口错误: {e}")
         return {"code": 500, "message": str(e), "data": []}
         
 
@@ -866,11 +852,14 @@ async def delete_watchlist(stock_code: str = Query(..., description="股票代�
 # ========== 持仓管理接口 ==========
 @app.get("/api/holdings")
 async def get_holdings():
-    """获取持仓列表（含实时行情）"""
     try:
         conn = psycopg2.connect(**DB_CONFIG, sslmode='require')
         cur = conn.cursor()
-        cur.execute("SELECT code, name, quantity, cost_price FROM stock_data.current_positions ORDER BY code")
+        cur.execute("""
+            SELECT code, name, quantity, cost_price
+            FROM stock_data.current_positions
+            ORDER BY code
+        """)
         rows = cur.fetchall()
         cur.close()
         conn.close()
@@ -888,24 +877,26 @@ async def get_holdings():
             quote = quotes.get(code, {})
             price = quote.get('price', cost)
             change = quote.get('change_pct', 0)
-            mv = price * qty
-            cst = cost * qty
-            pnl = mv - cst
-            pnl_pct = (pnl / cst * 100) if cst else 0
+            # 如果新浪返回了更准确的名称，可以覆盖数据库中的名称（尤其是指数）
+            display_name = quote.get('name') if quote.get('name') else (name or code)
+            market_value = price * qty
+            cost_sum = cost * qty
+            pnl = market_value - cost_sum
+            pnl_pct = (pnl / cost_sum * 100) if cost_sum else 0
             
             holdings.append({
                 "code": code,
-                "name": name or code,
+                "name": display_name,
                 "quantity": qty,
                 "cost_price": cost,
                 "current_price": round(price, 2),
-                "market_value": round(mv, 2),
+                "market_value": round(market_value, 2),
                 "pnl": round(pnl, 2),
                 "pnl_pct": round(pnl_pct, 2),
                 "change_pct": change
             })
-            total_mv += mv
-            total_cost += cst
+            total_mv += market_value
+            total_cost += cost_sum
         
         total_pnl = total_mv - total_cost
         total_pnl_pct = (total_pnl / total_cost * 100) if total_cost else 0
@@ -914,10 +905,10 @@ async def get_holdings():
             "code": 200,
             "data": holdings,
             "stats": {
-                "total_value": round(total_mv,2),
-                "total_cost": round(total_cost,2),
-                "total_pnl": round(total_pnl,2),
-                "total_pnl_pct": round(total_pnl_pct,2)
+                "total_value": round(total_mv, 2),
+                "total_cost": round(total_cost, 2),
+                "total_pnl": round(total_pnl, 2),
+                "total_pnl_pct": round(total_pnl_pct, 2)
             }
         }
     except Exception as e:
