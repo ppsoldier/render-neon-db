@@ -355,90 +355,102 @@ logger = logging.getLogger("stock-watch")
 def fetch_realtime_quotes(stock_codes):
     """
     批量获取股票/指数实时行情（新浪接口）
-    参数 stock_codes: 可以是带前缀（sh/sz）或不带前缀的代码列表
-    返回字典：{ code: {"price": float, "change_pct": float, "name": str} }
+    直接使用接口返回的涨跌幅，避免计算错误。
     """
     if not stock_codes:
         return {}
     
-    # 指数代码集合（使用新浪返回的完整代码，带前缀）
-    INDEX_SYMBOLS = {'sh000001', 'sz399001', 'sz399006', 'sh000300', 'sh000905', 'sz399005'}
+    # 上证指数（简化版）
+    SH_INDEX = {'sh000001'}
+    # 其他指数（个股格式）
+    OTHER_INDEX = {'sz399001', 'sz399006', 'sh000300', 'sh000905', 'sz399005'}
     
-    # 构建新浪符号列表，并建立映射关系
-    symbols = []
-    code_map = {}   # 新浪符号 -> 原始代码
+    # 分类
+    sh_codes = []
+    other_codes = []
+    stock_codes_clean = []
     for code in stock_codes:
         code_str = str(code)
-        # 如果已经带前缀，直接使用；否则根据数字前缀添加
-        if code_str.startswith('sh') or code_str.startswith('sz'):
-            sym = code_str
-        elif code_str.startswith('6'):
-            sym = f"sh{code_str}"
-        elif code_str.startswith('0') or code_str.startswith('3'):
-            sym = f"sz{code_str}"
+        if code_str in SH_INDEX:
+            sh_codes.append(code_str)
+        elif code_str in OTHER_INDEX:
+            other_codes.append(code_str)
         else:
-            sym = f"sh{code_str}"
-        symbols.append(sym)
-        code_map[sym] = code_str
-    
-    url = f"http://hq.sinajs.cn/list={','.join(symbols)}"
-    headers = {"Referer": "http://finance.sina.com.cn"}
-    try:
-        response = requests.get(url, headers=headers, timeout=5)
-        response.encoding = 'gbk'
-        lines = response.text.strip().split('\n')
-    except Exception as e:
-        logger.error(f"新浪接口请求失败: {e}")
-        return {}
+            stock_codes_clean.append(code_str)
     
     result = {}
-    for line in lines:
-        if '="' not in line:
-            continue
-        match = re.search(r'hq_str_(s[hz]\d{6})', line)
-        if not match:
-            continue
-        full_sym = match.group(1)   # 如 sh000001
-        parts = line.split('="')[1].split(',')
-        if len(parts) < 10:
-            continue
-        
-        name = parts[0]
-        # 获取原始代码
-        original_code = code_map.get(full_sym, full_sym[2:])
-        
-        # 判断是否为指数
-        if full_sym in INDEX_SYMBOLS:
-            # 指数格式：名称,昨收,今开,现价,最高,最低,...
-            try:
-                last_close = float(parts[1])
-                current = float(parts[3])
-            except (ValueError, IndexError):
-                last_close = 0
-                current = 0
-        else:
-            # 普通股票格式：名称,今开,昨收,现价,...
-            try:
-                last_close = float(parts[2])
-                current = float(parts[3])
-            except (ValueError, IndexError):
-                last_close = 0
-                current = 0
-        
-        if last_close != 0:
-            change_pct = round((current - last_close) / last_close * 100, 2)
-        else:
-            change_pct = 0
-        
-        result[original_code] = {
-            "price": current,
-            "change_pct": change_pct,
-            "name": name
-        }
-        
-        # 调试日志：打印上证指数、深证成指、创业板指的解析结果
-        if original_code in ('sh000001', '000001', '399001', '399006'):
-            logger.info(f"解析 {original_code}: 昨收={last_close}, 现价={current}, 涨跌幅={change_pct}%")
+    
+    # 1. 处理普通股票和其他指数（个股格式）
+    all_stock_codes = stock_codes_clean + other_codes
+    if all_stock_codes:
+        symbols = []
+        for code in all_stock_codes:
+            if code.startswith('6'):
+                symbols.append(f"sh{code}")
+            else:
+                symbols.append(f"sz{code}")
+        url = f"http://hq.sinajs.cn/list={','.join(symbols)}"
+        headers = {"Referer": "http://finance.sina.com.cn"}
+        try:
+            resp = requests.get(url, headers=headers, timeout=5)
+            resp.encoding = 'gbk'
+            lines = resp.text.strip().split('\n')
+            for line in lines:
+                if '="' not in line:
+                    continue
+                match = re.search(r'hq_str_(s[hz]\d{6})', line)
+                if not match:
+                    continue
+                full_code = match.group(1)
+                code = full_code[2:]  # 去掉前缀，作为返回的key
+                parts = line.split('="')[1].split(',')
+                if len(parts) < 5:
+                    continue
+                name = parts[0]
+                # 现价
+                try:
+                    current = float(parts[3])
+                except:
+                    current = 0
+                # 涨跌幅：个股格式中涨跌幅在 parts[4]（百分比，如 1.23）
+                try:
+                    change_pct = float(parts[4])
+                except:
+                    change_pct = 0
+                result[code] = {"price": current, "change_pct": change_pct, "name": name}
+        except Exception as e:
+            logger.error(f"股票/其他指数请求失败: {e}")
+    
+    # 2. 处理上证指数（简化版）
+    if sh_codes:
+        url = f"http://hq.sinajs.cn/list={','.join(sh_codes)}"
+        headers = {"Referer": "http://finance.sina.com.cn"}
+        try:
+            resp = requests.get(url, headers=headers, timeout=5)
+            resp.encoding = 'gbk'
+            lines = resp.text.strip().split('\n')
+            for line in lines:
+                if '="' not in line:
+                    continue
+                match = re.search(r'hq_str_(s[hz]\d{6})', line)
+                if not match:
+                    continue
+                full_code = match.group(1)
+                parts = line.split('="')[1].split(',')
+                if len(parts) < 6:
+                    continue
+                name = parts[0]
+                try:
+                    current = float(parts[1])   # 上证指数现价
+                except:
+                    current = 0
+                try:
+                    change_pct = float(parts[3])  # 上证指数涨跌幅
+                except:
+                    change_pct = 0
+                result[full_code] = {"price": current, "change_pct": change_pct, "name": name}
+        except Exception as e:
+            logger.error(f"上证指数请求失败: {e}")
     
     return result
 
