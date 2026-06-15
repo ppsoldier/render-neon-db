@@ -170,11 +170,10 @@ def get_research_signature(params):
     return sign, timestamp
 
 # ========== 实时数据采集函数（保持原有）==========
-async def fetch_stock_rank(sort_type: str):
-    """获取股票涨跌幅排行（支持涨幅榜 sort_type='0'，跌幅榜 sort_type='1'）"""
+async def fetch_stock_rank(sort_type: str, max_pages: int = 3):
+    """获取股票涨跌幅排行，max_pages 控制翻页数量"""
     stock_rank = []
-    
-    for page in range(1, 9):
+    for page in range(1, max_pages + 1):
         timestamp = str(int(time.time() * 1000))
         params = {
             'pageNum': str(page),
@@ -384,27 +383,30 @@ import logging
 
 logger = logging.getLogger("stock-watch")
 
+import re
+import requests
+import logging
+logger = logging.getLogger("stock-watch")
+
 def fetch_realtime_quotes(stock_codes):
-    """
-    批量获取股票/指数实时行情（新浪接口）
-    返回字典 { code: {"price": float, "change_pct": float, "name": str} }
-    """
     if not stock_codes:
         return {}
     
-    # 常见指数代码
-    INDEX_CODES = {'000001', '399001', '399006', '000300', '000905', '399005'}
+    # 指数代码集合（使用新浪返回的完整代码，带前缀）
+    INDEX_CODES = {'sh000001', 'sz399001', 'sz399006', 'sh000300', 'sh000905', 'sz399005'}
     
-    # 构建新浪符号列表
+    # 构建新浪符号列表：如果传入的代码已经带 sh/sz，直接使用；否则根据规则添加
     symbols = []
     for code in stock_codes:
         code = str(code)
-        if code.startswith('6'):
+        if code.startswith('sh') or code.startswith('sz'):
+            symbols.append(code)          # 已带前缀，直接使用
+        elif code.startswith('6'):
             symbols.append(f"sh{code}")
         elif code.startswith('0') or code.startswith('3'):
             symbols.append(f"sz{code}")
         else:
-            symbols.append(f"sh{code}")   # 默认沪市
+            symbols.append(f"sh{code}")
     
     if not symbols:
         return {}
@@ -423,29 +425,25 @@ def fetch_realtime_quotes(stock_codes):
     for line in lines:
         if '="' not in line:
             continue
-        # 提取代码（sh600001 或 sz000001）
         match = re.search(r'hq_str_(s[hz]\d{6})', line)
         if not match:
             continue
-        full_code = match.group(1)
-        code = full_code[2:]   # 去掉 sh/sz 前缀
+        full_code = match.group(1)   # 如 sh000001
         parts = line.split('="')[1].split(',')
         if len(parts) < 10:
             continue
         
         name = parts[0]
-        if code in INDEX_CODES:
-            # 指数格式: 名称,昨收,今开,现价,最高,最低,...
-            # 但新浪有时字段位置会变，这里打印原始数据以便调试
-            logger.info(f"指数 {code} 原始数据: {parts[:6]}")
+        if full_code in INDEX_CODES:
+            # 指数：昨收=parts[1], 现价=parts[3]
             try:
-                last_close = float(parts[1])   # 昨收
-                current = float(parts[3])      # 现价
+                last_close = float(parts[1])
+                current = float(parts[3])
             except (ValueError, IndexError):
                 last_close = 0
                 current = 0
         else:
-            # 普通股票格式: 名称,今开,昨收,现价,...
+            # 普通股票：昨收=parts[2], 现价=parts[3]
             try:
                 last_close = float(parts[2])
                 current = float(parts[3])
@@ -453,24 +451,17 @@ def fetch_realtime_quotes(stock_codes):
                 last_close = 0
                 current = 0
         
-        # 计算涨跌幅
         if last_close != 0:
             change_pct = round((current - last_close) / last_close * 100, 2)
         else:
             change_pct = 0
         
-        result[code] = {
+        result[full_code] = {
             "price": current,
             "change_pct": change_pct,
             "name": name
         }
-        
-        # 特别记录指数数据
-        if code in INDEX_CODES:
-            logger.info(f"指数 {code} 解析结果: 昨收={last_close}, 现价={current}, 涨跌幅={change_pct}%")
-    
     return result
-
 
 
 
@@ -932,8 +923,7 @@ async def get_watchlist():
         if not rows:
             return {"code": 200, "data": [], "message": "暂无自选股"}
         
-        # 直接使用数据库中的原始代码（可能包含 sh/sz 前缀）
-        codes = [row['code'] for row in rows]
+        codes = [row['code'] for row in rows]  # 原始代码（可能带 sh/sz）
         quotes = fetch_realtime_quotes(codes)
         
         result = []
@@ -941,7 +931,6 @@ async def get_watchlist():
             code = row['code']
             db_name = row['name']
             quote = quotes.get(code, {})
-            # 优先使用新浪返回的名称（如上证指数），否则用数据库中的名称
             name = quote.get('name') if quote.get('name') else (db_name if db_name else code)
             result.append({
                 "stock_code": code,
