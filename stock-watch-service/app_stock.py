@@ -834,11 +834,10 @@ async def get_watchlist():
             code = row['code']
             db_name = row['name']
             quote = quotes.get(code, {})
-            # 如果没取到，尝试用去掉前缀的代码（兼容性）
+            # 若未获取到行情，尝试去掉前缀后再取（兼容）
             if not quote and (code.startswith('sh') or code.startswith('sz')):
                 alt_code = code[2:]
                 quote = quotes.get(alt_code, {})
-            # 优先使用新浪返回的名称，否则使用数据库中的名称
             name = quote.get('name') if quote.get('name') else (db_name if db_name else code)
             result.append({
                 "stock_code": code,
