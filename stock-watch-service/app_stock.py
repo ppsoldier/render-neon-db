@@ -722,16 +722,18 @@ async def get_stock_picks():
 
 @app.get("/api/stock/market")
 async def get_market_data():
-    """获取市场分析数据"""
+    """获取市场分析数据（含涨停跌停、上涨下跌家数）"""
     try:
         today = datetime.now().strftime('%Y-%m-%d')
         engine = get_sync_engine()
         
         with engine.connect() as conn:
+            # 查询市场统计表
             result = conn.execute(
                 text(f"""
                     SELECT market_state, market_score, position_ratio, advice, 
-                           trend_strength, volatility, ma_arrangement
+                           trend_strength, volatility, ma_arrangement,
+                           limit_up_count, limit_down_count, up_count, down_count, advance_percent
                     FROM {TABLE_MARKET}
                     WHERE date = :date
                 """),
@@ -740,16 +742,39 @@ async def get_market_data():
             row = result.fetchone()
         
         if not row:
-            return {"code": 200, "data": None, "msg": "暂无市场数据"}
+            # 如果没有数据，返回默认值
+            return {
+                "code": 200,
+                "data": {
+                    "market_state": "震荡市",
+                    "market_score": 50,
+                    "position_ratio": 0.5,
+                    "advice": "控制仓位，高抛低吸",
+                    "trend_strength": 0,
+                    "volatility": 0,
+                    "ma_arrangement": "震荡",
+                    "limit_up_count": 0,
+                    "limit_down_count": 0,
+                    "up_count": 0,
+                    "down_count": 0,
+                    "advance_percent": 0
+                },
+                "msg": "暂无市场数据"
+            }
         
         market_data = {
-            "market_state": row[0],
-            "market_score": row[1],
+            "market_state": row[0] or "震荡市",
+            "market_score": row[1] if row[1] is not None else 50,
             "position_ratio": float(row[2]) if row[2] else 0.5,
-            "advice": row[3] or '',
+            "advice": row[3] or "控制仓位，高抛低吸",
             "trend_strength": float(row[4]) if row[4] else 0,
             "volatility": float(row[5]) if row[5] else 0,
-            "ma_arrangement": row[6] or ''
+            "ma_arrangement": row[6] or "震荡",
+            "limit_up_count": row[7] or 0,
+            "limit_down_count": row[8] or 0,
+            "up_count": row[9] or 0,
+            "down_count": row[10] or 0,
+            "advance_percent": float(row[11]) if row[11] else 0
         }
         
         return {"code": 200, "data": market_data}
@@ -757,6 +782,8 @@ async def get_market_data():
     except Exception as e:
         logger.error(f"获取市场数据错误: {e}")
         return {"code": 500, "message": str(e), "data": None}
+
+
 
 @app.get("/api/stock/sentiment")
 async def get_sentiment_data():
