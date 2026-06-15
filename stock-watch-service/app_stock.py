@@ -315,9 +315,11 @@ import re
 
 
 def fetch_realtime_quotes(stock_codes):
-    """批量获取股票实时行情（新浪接口），支持指数"""
+    """批量获取股票实时行情，正确支持指数"""
     if not stock_codes:
         return {}
+    
+    INDEX_CODES = {'000001','399001','399006','000300','000905','399005'}  # 常见指数
     
     symbols = []
     for code in stock_codes:
@@ -327,20 +329,17 @@ def fetch_realtime_quotes(stock_codes):
         elif code.startswith('0') or code.startswith('3'):
             symbols.append(f"sz{code}")
         else:
-            symbols.append(f"sh{code}")  # 默认 sh
+            symbols.append(f"sh{code}")
     
     url = f"http://hq.sinajs.cn/list={','.join(symbols)}"
     headers = {"Referer": "http://finance.sina.com.cn"}
     try:
-        response = requests.get(url, headers=headers, timeout=5)
-        response.encoding = 'gbk'
-        lines = response.text.strip().split('\n')
+        resp = requests.get(url, headers=headers, timeout=5)
+        resp.encoding = 'gbk'
+        lines = resp.text.strip().split('\n')
     except Exception as e:
-        logger.error(f"新浪接口请求失败: {e}")
+        logger.error(f"新浪接口失败: {e}")
         return {}
-    
-    # 常见指数代码列表（需要特殊解析的）
-    index_codes = {'000001', '399001', '399006', '000300', '000905', '399005'}
     
     result = {}
     for line in lines:
@@ -349,38 +348,30 @@ def fetch_realtime_quotes(stock_codes):
         match = re.search(r'hq_str_(s[hz]\d{6})', line)
         if not match:
             continue
-        full_code = match.group(1)
-        code = full_code[2:]  # 去掉 sh/sz 前缀
+        code = match.group(1)[2:]  # 去掉前缀
         parts = line.split('="')[1].split(',')
         if len(parts) < 4:
             continue
         
-        # 根据代码类型解析字段
-        if code in index_codes:
-            # 指数格式: 名称,昨收,今开,现价,最高,最低,... 
-            # 示例: 上证指数,2915.37,2886.65,2890.67,...
-            name = parts[0]
+        name = parts[0]
+        if code in INDEX_CODES:
+            # 指数格式: 名称,昨收,今开,现价,...
             last_close = parts[1]
-            current_price = parts[3] if len(parts) > 3 else parts[1]
+            current = parts[3]
         else:
-            # 普通股票格式: 名称,今开,昨收,现价,...
-            name = parts[0]
+            # 普通股票: 名称,今开,昨收,现价,...
             last_close = parts[2]
-            current_price = parts[3]
+            current = parts[3]
         
         try:
             last_close = float(last_close) if last_close else 0
-            current_price = float(current_price) if current_price else 0
-            change_pct = round((current_price - last_close) / last_close * 100, 2) if last_close != 0 else 0
+            current = float(current) if current else 0
+            change = round((current - last_close) / last_close * 100, 2) if last_close else 0
         except:
-            change_pct = 0
-            current_price = 0
+            change = 0
+            current = 0
         
-        result[code] = {
-            'price': current_price,
-            'change_pct': change_pct,
-            'name': name
-        }
+        result[code] = {'price': current, 'change_pct': change, 'name': name}
     return result
 
 
@@ -876,97 +867,62 @@ async def delete_watchlist(stock_code: str = Query(..., description="股票代�
 @app.get("/api/holdings")
 async def get_holdings():
     """获取持仓列表（含实时行情）"""
-    conn = None
-    cur = None
     try:
-        conn = psycopg2.connect(
-            host=DB_CONFIG['host'],
-            user=DB_CONFIG['user'],
-            password=DB_CONFIG['password'],
-            database=DB_CONFIG['database'],
-            port=DB_CONFIG['port'],
-            sslmode='require'
-        )
+        conn = psycopg2.connect(**DB_CONFIG, sslmode='require')
         cur = conn.cursor()
-        cur.execute("""
-            SELECT code, name, quantity, cost_price
-            FROM stock_data.current_positions
-            ORDER BY code
-        """)
+        cur.execute("SELECT code, name, quantity, cost_price FROM stock_data.current_positions ORDER BY code")
         rows = cur.fetchall()
+        cur.close()
+        conn.close()
         
         if not rows:
-            logger.info("持仓表无数据")
-            return {"code": 200, "data": [], "stats": {"total_value": 0, "total_cost": 0, "total_pnl": 0, "total_pnl_pct": 0}}
+            return {"code": 200, "data": [], "stats": {"total_value":0,"total_cost":0,"total_pnl":0,"total_pnl_pct":0}}
         
-        # 提取股票代码
-        stock_codes = [row[0] for row in rows]
-        
-        # 获取实时行情（若失败则返回空字典，不影响后续）
-        quotes = {}
-        try:
-            quotes = fetch_realtime_quotes(stock_codes)
-        except Exception as e:
-            logger.error(f"获取实时行情失败: {e}")
+        codes = [r[0] for r in rows]
+        quotes = fetch_realtime_quotes(codes)
         
         holdings = []
-        total_market_value = 0
+        total_mv = 0
         total_cost = 0
-        
-        for row in rows:
-            code = row[0]
-            name = row[1] if row[1] else code
-            quantity = row[2]
-            cost_price = row[3]
-            
-            # 从实时行情中获取价格，若无则使用成本价
+        for code, name, qty, cost in rows:
             quote = quotes.get(code, {})
-            current_price = quote.get('price') if quote.get('price') else cost_price
-            change_pct = quote.get('change_pct', 0)
-            
-            market_value = current_price * quantity
-            cost = cost_price * quantity
-            pnl = market_value - cost
-            pnl_pct = round((pnl / cost * 100), 2) if cost > 0 else 0
+            price = quote.get('price', cost)
+            change = quote.get('change_pct', 0)
+            mv = price * qty
+            cst = cost * qty
+            pnl = mv - cst
+            pnl_pct = (pnl / cst * 100) if cst else 0
             
             holdings.append({
                 "code": code,
-                "name": name,
-                "quantity": quantity,
-                "cost_price": cost_price,
-                "current_price": round(current_price, 2),
-                "market_value": round(market_value, 2),
+                "name": name or code,
+                "quantity": qty,
+                "cost_price": cost,
+                "current_price": round(price, 2),
+                "market_value": round(mv, 2),
                 "pnl": round(pnl, 2),
-                "pnl_pct": pnl_pct,
-                "change_pct": change_pct
+                "pnl_pct": round(pnl_pct, 2),
+                "change_pct": change
             })
-            total_market_value += market_value
-            total_cost += cost
+            total_mv += mv
+            total_cost += cst
         
-        total_pnl = total_market_value - total_cost
-        total_pnl_pct = round((total_pnl / total_cost * 100), 2) if total_cost > 0 else 0
+        total_pnl = total_mv - total_cost
+        total_pnl_pct = (total_pnl / total_cost * 100) if total_cost else 0
         
-        result = {
+        return {
             "code": 200,
             "data": holdings,
             "stats": {
-                "total_value": round(total_market_value, 2),
-                "total_cost": round(total_cost, 2),
-                "total_pnl": round(total_pnl, 2),
-                "total_pnl_pct": total_pnl_pct
+                "total_value": round(total_mv,2),
+                "total_cost": round(total_cost,2),
+                "total_pnl": round(total_pnl,2),
+                "total_pnl_pct": round(total_pnl_pct,2)
             }
         }
-        logger.info(f"返回持仓数据: {len(holdings)} 条")
-        return result
-        
     except Exception as e:
-        logger.error(f"获取持仓错误: {e}")
+        logger.error(f"持仓接口错误: {e}")
         return {"code": 500, "message": str(e), "data": [], "stats": {}}
-    finally:
-        if cur:
-            cur.close()
-        if conn:
-            conn.close()
             
 
 
