@@ -861,6 +861,202 @@ def student_delete():
         return jsonify({"code": 500, "msg": f"删除失败: {str(e)}"}), 500
 
 
+
+
+# ==================== 文档翻译模块 ====================
+import hashlib
+import random
+import re
+import json
+import time
+from io import BytesIO
+from docx import Document
+
+def md5_hex(text):
+    return hashlib.md5(text.encode('utf-8')).hexdigest()
+
+def generate_sign(params, secret_key):
+    i = params.copy()
+    keys_to_delete = [k for k, v in i.items() if v == ""]
+    for k in keys_to_delete:
+        del i[k]
+    o = sorted([k for k in i.keys() if i[k] is not None])
+    o.append("key")
+    i["key"] = secret_key
+    a = "&".join([f"{k}={i[k]}" for k in o])
+    sign = md5_hex(a)
+    point_param = ",".join(o[:-1])
+    return sign, point_param
+
+def get_yduuid():
+    random_num = str(random.randint(100, 9999))
+    return md5_hex(random_num)
+
+def extract_translation_from_sse(response_text):
+    pattern = r'data:{"model":"yd_agent","content":"(.*?)"}'
+    matches = re.findall(pattern, response_text)
+    if matches:
+        return "".join(matches)
+    pattern2 = r'"content":"([^"]*)"'
+    matches2 = re.findall(pattern2, response_text)
+    if matches2:
+        return "".join([m for m in matches2 if m])
+    return None
+
+def extract_by_line_parsing(response_text):
+    translation_parts = []
+    lines = response_text.strip().split('\n')
+    for line in lines:
+        if line.startswith('data:'):
+            data_str = line[5:]
+            try:
+                data = json.loads(data_str)
+                if 'content' in data:
+                    translation_parts.append(data['content'])
+            except:
+                match = re.search(r'"content":"(.*?)"', data_str)
+                if match:
+                    translation_parts.append(match.group(1))
+    return "".join(translation_parts)
+
+def translate_text(text):
+    if not text:
+        return ""
+    # 分段处理长文本（每段5000字符）
+    max_len = 5000
+    if len(text) > max_len:
+        paragraphs = text.split('\n\n')
+        chunks = []
+        current = ""
+        for para in paragraphs:
+            if len(current) + len(para) + 2 <= max_len:
+                if current:
+                    current += "\n\n" + para
+                else:
+                    current = para
+            else:
+                if current:
+                    chunks.append(current)
+                current = para
+        if current:
+            chunks.append(current)
+        results = []
+        for chunk in chunks:
+            trans = _single_translate(chunk)
+            if trans:
+                results.append(trans)
+            time.sleep(1)
+        return "\n\n".join(results)
+    else:
+        return _single_translate(text)
+
+def _single_translate(text):
+    yduuid = get_yduuid()
+    headers = {
+        'Referer': 'https://fanyi.youdao.com/',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    }
+    token_url = f'https://luna-ai.youdao.com/translate_llm/secret?keyid=ai-translate-llm-pre&sign=dd26324657a782cf42f707647fa67d08&client=fanyideskweb&product=webfanyi&appVersion=12.0.0&vendor=web&pointParam=client,mysticTime,product&mysticTime=1776899320882&keyfrom=fanyi.web&mid=1&screen=1&model=1&network=wifi&abtest=0&yduuid={yduuid}'
+    res = requests.get(url=token_url, headers=headers)
+    token = res.json()['data']['token']
+    time_stamp = int(time.time() * 1000)
+
+    params_for_sign = {
+        "appVersion": "12.0.0",
+        "client": "webaitrans",
+        "free": "false",
+        "fromLang": "auto",
+        "functionEnglishName": "LLM_translate",
+        "imei": "1",
+        "input": text,
+        "keyfrom": "webfanyi.webaitrans",
+        "keyid": "ai-translate-llm",
+        "mid": "1",
+        "model": "1",
+        "mysticTime": str(time_stamp),
+        "network": "wifi",
+        "product": "webfanyi",
+        "roundNo": "1",
+        "screen": "1",
+        "showSuggest": "0",
+        "singleBox": "false",
+        "source": "webaitrans",
+        "token": token,
+        "useTerm": "0",
+        "vendor": "web",
+        "yduuid": yduuid
+    }
+    sign, point_param = generate_sign(params_for_sign, "QGCmKoX7N7wACtICx3PSaWzoPJza2DSC")
+    post_data = {**params_for_sign, "sign": sign, "pointParam": point_param}
+    cookies = {
+        'OUTFOX_SEARCH_USER_ID': '-1116170267@113.111.81.100',
+        'OUTFOX_SEARCH_USER_ID_NCOO': '31318005.898740534',
+    }
+    headers_post = {
+        'Accept': '*/*',
+        'Accept-Language': 'zh-CN,zh;q=0.9',
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Origin': 'https://fanyi.youdao.com',
+        'Referer': 'https://fanyi.youdao.com/',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    }
+    response = requests.post(
+        'https://luna-ai.youdao.com/translate_llm/v3/chat',
+        cookies=cookies,
+        headers=headers_post,
+        data=post_data,
+        timeout=30
+    )
+    translation = extract_translation_from_sse(response.text)
+    if not translation:
+        translation = extract_by_line_parsing(response.text)
+    return translation
+
+def read_word_file(file_bytes):
+    doc = Document(BytesIO(file_bytes))
+    paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+    return "\n\n".join(paragraphs)
+
+@app.route("/api/translate/text", methods=["POST"])
+def translate_text_api():
+    data = request.get_json()
+    text = data.get('text', '')
+    if not text:
+        return jsonify({"code": 400, "msg": "文本不能为空"})
+    try:
+        result = translate_text(text)
+        return jsonify({"code": 200, "data": result})
+    except Exception as e:
+        print(f"翻译错误: {str(e)}")
+        return jsonify({"code": 500, "msg": str(e)})
+
+@app.route("/api/translate/docx", methods=["POST"])
+def translate_docx_api():
+    if 'file' not in request.files:
+        return jsonify({"code": 400, "msg": "未上传文件"})
+    file = request.files['file']
+    if not file.filename.endswith('.docx'):
+        return jsonify({"code": 400, "msg": "仅支持 .docx 格式"})
+    try:
+        content = read_word_file(file.read())
+        if not content:
+            return jsonify({"code": 400, "msg": "文档内容为空"})
+        result = translate_text(content)
+        return jsonify({"code": 200, "data": result})
+    except Exception as e:
+        print(f"文档翻译错误: {str(e)}")
+        return jsonify({"code": 500, "msg": str(e)})
+
+
+
+
+
+
+
+
+
+
+
 # ==================== 教师管理模块 ====================
 @app.route("/api/teacher/list", methods=["GET"])
 def teacher_list():
