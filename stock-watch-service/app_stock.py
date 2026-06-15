@@ -430,87 +430,70 @@ def fetch_realtime_quotes(stock_codes):
 import time
 import hashlib
 
-def _gen_updown_sign(timestamp):
-    """生成涨跌分布接口签名"""
+def _gen_updown_sign(timestamp: str) -> str:
     secret = "sjdxfnqogbzoun13d971ckh8p"
-    base_string = f"{secret}{timestamp}"
-    return hashlib.md5(base_string.encode()).hexok()
+    return hashlib.md5(f"{secret}{timestamp}".encode()).hexdigest()
 
+@app.get("/api/realtime/market-stats")
+async def get_realtime_market_stats():
+    """
+    获取实时全市场统计数据（涨停/跌停/上涨/下跌家数）
+    数据源: 九方智投实时接口
+    """
+    timestamp = str(int(time.time() * 1000))
+    headers = {
+        "accept": "*/*",
+        "origin": "https://www.9fzt.com",
+        "referer": "https://www.9fzt.com/",
+        "signature": _gen_updown_sign(timestamp),
+        "timestamp": timestamp,
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    }
+    url = "https://api-hq.chongnengjihua.com/finance/api/1/stock/up/down/distributed"
 
-@app.get("/api/market/stats")
-async def get_market_stats():
-    """获取全市场统计数据（涨停/跌停/上涨/下跌家数）"""
     try:
-        timestamp = str(int(time.time() * 1000))
-        headers = {
-            "accept": "*/*",
-            "origin": "https://www.9fzt.com",
-            "referer": "https://www.9fzt.com/",
-            "signature": _gen_updown_sign(timestamp),
-            "timestamp": timestamp,
-            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        }
-        url = "https://api-hq.chongnengjihua.com/finance/api/1/stock/up/down/distributed"
-        
-        response = requests.get(url, headers=headers, timeout=10)
-        data = response.json()
-        
+        resp = requests.get(url, headers=headers, timeout=10)
+        data = resp.json()
+        logger.info(f"实时市场统计接口返回: {data}")
+
         if data.get('code') == 1 and data.get('data'):
             result = data['data']
-            up_count = result.get('up', 0)
-            down_count = result.get('down', 0)
-            flat_count = result.get('flat', 0)
-            total = up_count + down_count + flat_count
-            limit_up_count = result.get('upLimit', 0)
-            limit_down_count = result.get('downLimit', 0)
-            advance_percent = round(up_count / total * 100, 2) if total > 0 else 0
-            
-            logger.info(f"全市场统计: 总数={total}, 上涨={up_count}({advance_percent}%), "
-                        f"下跌={down_count}, 涨停={limit_up_count}, 跌停={limit_down_count}")
-            
+            up_cnt = result.get('up', 0)
+            down_cnt = result.get('down', 0)
+            flat_cnt = result.get('flat', 0)
+            total = up_cnt + down_cnt + flat_cnt
+            limit_up = result.get('upLimit', 0)
+            limit_down = result.get('downLimit', 0)
+            advance_percent = round(up_cnt / total * 100, 2) if total > 0 else 0
+
             return {
                 "code": 200,
                 "data": {
                     "total": total,
-                    "up_count": up_count,
-                    "down_count": down_count,
-                    "flat_count": flat_count,
-                    "limit_up_count": limit_up_count,
-                    "limit_down_count": limit_down_count,
+                    "up_count": up_cnt,
+                    "down_count": down_cnt,
+                    "flat_count": flat_cnt,
+                    "limit_up_count": limit_up,
+                    "limit_down_count": limit_down,
                     "advance_percent": advance_percent
                 },
                 "update_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             }
         else:
-            logger.warning(f"涨跌分布接口返回异常: {data}")
-            return {
-                "code": 200,
-                "data": {
-                    "total": 0,
-                    "up_count": 0,
-                    "down_count": 0,
-                    "flat_count": 0,
-                    "limit_up_count": 0,
-                    "limit_down_count": 0,
-                    "advance_percent": 0
-                }
-            }
+            logger.warning(f"实时市场统计接口返回异常: {data}")
+            return _empty_market_stats()
     except Exception as e:
-        logger.error(f"获取市场统计数据失败: {e}")
-        return {
-            "code": 500,
-            "message": str(e),
-            "data": {
-                "total": 0,
-                "up_count": 0,
-                "down_count": 0,
-                "flat_count": 0,
-                "limit_up_count": 0,
-                "limit_down_count": 0,
-                "advance_percent": 0
-            }
-        }
+        logger.error(f"获取实时市场统计数据失败: {e}")
+        return _empty_market_stats()
 
+def _empty_market_stats():
+    return {
+        "code": 200,
+        "data": {
+            "total": 0, "up_count": 0, "down_count": 0, "flat_count": 0,
+            "limit_up_count": 0, "limit_down_count": 0, "advance_percent": 0
+        }
+    }
     
 
 
@@ -557,9 +540,9 @@ async def get_realtime_concept():
 
 @app.get("/api/market/limit-stats")
 async def get_limit_stats():
-    """获取涨跌停统计（复用市场统计数据）"""
+    """获取涨跌停统计（基于实时数据）"""
     try:
-        stats = await get_market_stats()
+        stats = await get_realtime_market_stats()
         if stats.get('code') == 200:
             data = stats.get('data', {})
             limit_up = data.get('limit_up_count', 0)
@@ -569,9 +552,10 @@ async def get_limit_stats():
             return {
                 "limit_up_count": limit_up,
                 "limit_down_count": limit_down,
-                "sentiment": sentiment
+                "sentiment": sentiment,
+                "source": "realtime"
             }
-        return {"limit_up_count": 0, "limit_down_count": 0, "sentiment": 50}
+        return {"limit_up_count": 0, "limit_down_count": 0, "sentiment": 50, "source": "default"}
     except Exception as e:
         logger.error(f"获取涨跌停统计错误: {e}")
         return {"limit_up_count": 0, "limit_down_count": 0, "sentiment": 50}
