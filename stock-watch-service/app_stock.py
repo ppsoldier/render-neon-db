@@ -17,6 +17,7 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
+import re
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -170,9 +171,9 @@ def get_research_signature(params):
 
 # ========== 实时数据采集函数（保持原有）==========
 async def fetch_stock_rank(sort_type: str):
-    """获取股票涨跌幅排行"""
-    # ... 保持原有实现 ...
+    """获取股票涨跌幅排行（支持涨幅榜 sort_type='0'，跌幅榜 sort_type='1'）"""
     stock_rank = []
+    
     for page in range(1, 9):
         timestamp = str(int(time.time() * 1000))
         params = {
@@ -205,42 +206,70 @@ async def fetch_stock_rank(sort_type: str):
         
         try:
             response = requests.get(url=url, params=params, headers=headers, timeout=10)
-            data = response.json()
+            # 先检查状态码
+            if response.status_code != 200:
+                logger.warning(f"股票排行接口状态码异常: {response.status_code}")
+                break
             
+            # 尝试解析 JSON
+            try:
+                data = response.json()
+            except ValueError as e:
+                # 非 JSON 内容，打印响应文本前200字符供排查
+                logger.error(f"股票排行接口返回非JSON内容: {response.text[:200]}")
+                break
+            
+            # 检查数据结构
             if not data or 'data' not in data or 'infos' not in data['data']:
+                logger.debug(f"第{page}页无有效数据，停止翻页")
                 break
             
             infos = data['data']['infos']
+            if not infos:
+                break
+            
             for item in infos:
+                # 获取价格（优先使用 closePx，否则 lastPx）
                 price = item.get('closePx')
                 if price is None:
                     price = item.get('lastPx', 0)
                 if price is None:
                     price = 0
                 
+                # 转换涨跌幅（原始值为小数，如0.032 => 3.2%）
+                change_raw = item.get('pxChangeRate', 0)
+                change_percent = round(float(change_raw) * 100, 2) if change_raw else 0
+                
                 stock_rank.append({
                     "stock_code": item.get('symbol', ''),
                     "stock_name": item.get('prodName', ''),
                     "price": float(price) if price else 0,
-                    "change_percent": round(float(item.get('pxChangeRate', 0)) * 100, 2) if item.get('pxChangeRate') else 0,
+                    "change_percent": change_percent,
                     "volume": item.get('businessAmount', 0),
                     "amount": item.get('businessBalance', 0)
                 })
+            
+            # 避免请求过快
             await asyncio.sleep(0.5)
+            
+        except requests.exceptions.Timeout:
+            logger.error(f"股票排行接口请求超时 (page={page})")
+            break
         except Exception as e:
-            logger.error(f"获取股票排行错误: {e}")
-            continue
+            logger.error(f"获取股票排行未知错误 (page={page}): {e}")
+            break
     
     return stock_rank
+
+
+
 
 # ========== 九方智投数据采集函数 ==========
 
 async def fetch_sector_rank(hq_type_code: str):
-    """获取行业/概念板块排行
-    hq_type_code: 'HY' 行业, 'GN' 概念
-    """
+    """获取行业/概念板块排行（hq_type_code: 'HY' 行业，'GN' 概念）"""
     sector_rank = []
-    for page in range(1, 4):
+    for page in range(1, 3):
         timestamp = str(int(time.time() * 1000))
         params = {
             'hqTypeCode': hq_type_code,
@@ -251,7 +280,6 @@ async def fetch_sector_rank(hq_type_code: str):
         }
         
         sign = get_sector_signature(timestamp)
-        
         headers = {
             'accept': 'application/json, text/plain, */*',
             'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
@@ -259,24 +287,27 @@ async def fetch_sector_rank(hq_type_code: str):
             'referer': 'https://stock.9fzt.com/',
             'signature': sign,
             'timestamp': timestamp,
-            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'user-agent': 'Mozilla/5.0...',
         }
         
         url = 'https://hq.chongnengjihua.com/rjhy-quote-sector/api/1/pc/plate/block/quote/list'
         
         try:
-            response = requests.get(url=url, headers=headers, params=params, timeout=10)
-            data = response.json()
+            response = requests.get(url, headers=headers, params=params, timeout=10)
+            if response.status_code != 200:
+                break
+            try:
+                data = response.json()
+            except ValueError:
+                logger.error(f"板块排行接口返回非JSON: {response.text[:200]}")
+                break
             
             if not data or 'data' not in data or 'plate' not in data['data']:
                 break
-            
             plates = data['data']['plate']
             for item in plates:
-                # 获取价格和涨跌幅
                 last_px = item.get('LastPx', 0)
                 px_change_rate = item.get('PxChangeRate', 0)
-                
                 sector_rank.append({
                     "sector_code": item.get('ProdCode', ''),
                     "sector_name": item.get('ProdName', ''),
@@ -286,9 +317,12 @@ async def fetch_sector_rank(hq_type_code: str):
             await asyncio.sleep(0.5)
         except Exception as e:
             logger.error(f"获取板块排行错误: {e}")
-            continue
-    
+            break
     return sector_rank
+
+
+
+
 
 # ========== FastAPI 应用 ==========
 app = FastAPI(title="股票看盘系统", version="2.0.0")
@@ -311,16 +345,14 @@ async def health_check():
     return {"status": "healthy", "service": "stock-watch"}
 
 
-import re
 
 
 def fetch_realtime_quotes(stock_codes):
-    """新浪实时行情，自动区分指数和股票"""
+    """批量获取实时行情，自动区分指数和股票"""
     if not stock_codes:
         return {}
     
-    # INDEX_SET = {'000001', '399001', '399006', '000300', '000905', '399005'}
-    INDEX_SET = {'000001', '000300', '000905', '399005'}
+    INDEX_CODES = {'000001','399001','399006','000300','000905','399005'}
     symbols = []
     for code in stock_codes:
         code = str(code)
@@ -338,28 +370,28 @@ def fetch_realtime_quotes(stock_codes):
         resp.encoding = 'gbk'
         lines = resp.text.strip().split('\n')
     except Exception as e:
-        logger.error(f"新浪请求失败: {e}")
+        logger.error(f"新浪接口请求失败: {e}")
         return {}
     
     result = {}
     for line in lines:
         if '="' not in line:
             continue
-        m = re.search(r'hq_str_(s[hz]\d{6})', line)
-        if not m:
+        match = re.search(r'hq_str_(s[hz]\d{6})', line)
+        if not match:
             continue
-        code = m.group(1)[2:]
+        code = match.group(1)[2:]
         parts = line.split('="')[1].split(',')
         if len(parts) < 4:
             continue
         name = parts[0]
         # 指数与股票字段位置不同
-        if code in INDEX_SET:
-            last_close = parts[1]   # 昨日收盘
-            current = parts[3]      # 最新价
+        if code in INDEX_CODES:
+            last_close = parts[1]   # 指数格式: 名称,昨收,今开,现价,...
+            current = parts[3]
         else:
-            last_close = parts[2]   # 昨日收盘
-            current = parts[3]      # 最新价
+            last_close = parts[2]   # 股票格式: 名称,今开,昨收,现价,...
+            current = parts[3]
         try:
             last_close = float(last_close) if last_close else 0
             current = float(current) if current else 0
@@ -856,33 +888,35 @@ async def delete_watchlist(stock_code: str = Query(..., description="股票代�
 # ========== 持仓管理接口 ==========
 @app.get("/api/holdings")
 async def get_holdings():
+    """获取持仓列表（含实时行情）"""
     try:
-        conn = psycopg2.connect(**DB_CONFIG, sslmode='require')
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT code, name, quantity, cost_price
-            FROM stock_data.current_positions
-            ORDER BY code
-        """)
-        rows = cur.fetchall()
-        cur.close()
-        conn.close()
+        pool = await get_db()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT code, name, quantity, cost_price
+                FROM stock_data.current_positions
+                ORDER BY code
+            """)
         
         if not rows:
             return {"code": 200, "data": [], "stats": {"total_value":0,"total_cost":0,"total_pnl":0,"total_pnl_pct":0}}
         
-        codes = [r[0] for r in rows]
+        codes = [row['code'] for row in rows]
         quotes = fetch_realtime_quotes(codes)
         
         holdings = []
         total_mv = 0
         total_cost = 0
-        for code, name, qty, cost in rows:
+        for row in rows:
+            code = row['code']
+            name = row['name'] if row['name'] else code
+            qty = row['quantity']
+            cost = row['cost_price']
             quote = quotes.get(code, {})
             price = quote.get('price', cost)
             change = quote.get('change_pct', 0)
-            # 如果新浪返回了更准确的名称，可以覆盖数据库中的名称（尤其是指数）
-            display_name = quote.get('name') if quote.get('name') else (name or code)
+            display_name = quote.get('name') if quote.get('name') else name
+            
             market_value = price * qty
             cost_sum = cost * qty
             pnl = market_value - cost_sum
