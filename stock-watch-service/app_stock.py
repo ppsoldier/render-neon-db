@@ -354,71 +354,77 @@ logger = logging.getLogger("stock-watch")
 
 def fetch_realtime_quotes(stock_codes):
     """
-    批量获取股票/指数实时行情（新浪个股格式接口）
-    支持上证指数、深证成指、创业板指等。
+    批量获取股票/指数实时行情，统一使用新浪个股格式接口。
+    返回字典 { code: {"price": float, "change_pct": float, "name": str} }
     """
     if not stock_codes:
         return {}
     
-    # 构建新浪符号列表，统一使用个股格式
+    # 构建新浪符号列表，统一转换为带 sh/sz 前缀的格式
     symbols = []
+    code_map = {}  # 原始代码 -> 新浪符号
     for code in stock_codes:
         code_str = str(code)
+        # 如果已经有前缀，直接使用；否则根据数字添加
         if code_str.startswith('sh') or code_str.startswith('sz'):
-            symbols.append(code_str)
+            sym = code_str
         elif code_str.startswith('6'):
-            symbols.append(f"sh{code_str}")
+            sym = f"sh{code_str}"
         elif code_str.startswith('0') or code_str.startswith('3'):
-            symbols.append(f"sz{code_str}")
+            sym = f"sz{code_str}"
         else:
-            symbols.append(f"sh{code_str}")
+            sym = f"sh{code_str}"
+        symbols.append(sym)
+        code_map[sym] = code_str  # 保留原始代码作为返回的 key
     
-    url = f"http://hq.sinajs.cn/list={','.join(symbols)}"
-    headers = {"Referer": "http://finance.sina.com.cn"}
-    try:
-        resp = requests.get(url, headers=headers, timeout=5)
-        resp.encoding = 'gbk'
-        lines = resp.text.strip().split('\n')
-    except Exception as e:
-        logger.error(f"新浪接口请求失败: {e}")
-        return {}
-    
-    result = {}
-    for line in lines:
-        if '="' not in line:
-            continue
-        match = re.search(r'hq_str_(s[hz]\d{6})', line)
-        if not match:
-            continue
-        full_code = match.group(1)      # 如 sh000001
-        parts = line.split('="')[1].split(',')
-        if len(parts) < 5:
-            continue
-        
-        # 打印前10个字段用于调试（尤其是指数）
-        if full_code in ['sh000001', 'sz399001', 'sz399006']:
-            logger.info(f"DEBUG [{full_code}] parts: {parts[:10]}")
-        
-        name = parts[0]
-        # 个股格式字段：0名称,1今开,2昨收,3现价,4涨跌幅(百分比数值)...
+    # 分批请求，避免一次请求过多（新浪限制）
+    all_quotes = {}
+    batch_size = 50
+    for i in range(0, len(symbols), batch_size):
+        batch = symbols[i:i+batch_size]
+        url = f"http://hq.sinajs.cn/list={','.join(batch)}"
+        headers = {"Referer": "http://finance.sina.com.cn"}
         try:
-            last_close = float(parts[2])   # 昨收
-            current = float(parts[3])      # 现价
-            # 优先使用接口返回的涨跌幅（parts[4]），避免计算误差
-            change_pct = float(parts[4]) if parts[4] else round((current - last_close) / last_close * 100, 2)
-        except (ValueError, IndexError):
-            last_close = 0
-            current = 0
-            change_pct = 0
-        
-        # 使用原始代码作为 key（带前缀）
-        result[full_code] = {
-            "price": current,
-            "change_pct": change_pct,
-            "name": name
-        }
-    
-    return result
+            resp = requests.get(url, headers=headers, timeout=5)
+            resp.encoding = 'gbk'
+            lines = resp.text.strip().split('\n')
+            for line in lines:
+                if '="' not in line:
+                    continue
+                match = re.search(r'hq_str_(s[hz]\d{6})', line)
+                if not match:
+                    continue
+                full_sym = match.group(1)
+                parts = line.split('="')[1].split(',')
+                if len(parts) < 5:
+                    continue
+                # 个股格式字段（适用于所有，包括指数）
+                # parts[0] = 名称
+                # parts[1] = 今开
+                # parts[2] = 昨收
+                # parts[3] = 现价
+                name = parts[0]
+                try:
+                    last_close = float(parts[2])  # 昨收
+                    current = float(parts[3])     # 现价
+                    if last_close != 0:
+                        change_pct = round((current - last_close) / last_close * 100, 2)
+                    else:
+                        change_pct = 0.0
+                except (ValueError, IndexError):
+                    current = 0.0
+                    change_pct = 0.0
+                # 使用原始代码作为 key
+                original_code = code_map.get(full_sym, full_sym[2:])
+                all_quotes[original_code] = {
+                    "price": current,
+                    "change_pct": change_pct,
+                    "name": name
+                }
+        except Exception as e:
+            logger.error(f"新浪接口请求失败: {e}")
+            continue
+    return all_quotes
 
 
 
