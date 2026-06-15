@@ -169,7 +169,7 @@ def get_research_signature(params):
     return sign, timestamp
 
 # ========== 实时数据采集函数（保持原有）==========
-async def fetch_stock_rank(sort_type: str, max_pages: int = 5):
+async def fetch_stock_rank(sort_type: str, max_pages: int = 3):
     """获取股票涨跌幅排行，max_pages 控制翻页数量"""
     stock_rank = []
     for page in range(1, max_pages + 1):
@@ -477,8 +477,8 @@ async def get_limit_stats():
     """获取涨跌停统计"""
     try:
         # 获取涨幅榜和跌幅榜数据（各取前100只，足够统计）
-        up_ranks = await fetch_stock_rank('0', max_pages=20)   # 共100只
-        down_ranks = await fetch_stock_rank('1', max_pages=20)
+        up_ranks = await fetch_stock_rank('0', max_pages=6)   # 共100只
+        down_ranks = await fetch_stock_rank('1', max_pages=6)
         
         limit_up = 0
         limit_down = 0
