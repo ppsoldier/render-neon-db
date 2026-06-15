@@ -348,11 +348,10 @@ async def health_check():
 
 
 def fetch_realtime_quotes(stock_codes):
-    """批量获取实时行情，自动区分指数和股票"""
     if not stock_codes:
         return {}
     
-    INDEX_CODES = {'sh000001','399001','399006','000300','000905','399005'}
+    INDEX_CODES = {'000001','399001','399006','000300','000905','399005'}
     symbols = []
     for code in stock_codes:
         code = str(code)
@@ -380,17 +379,19 @@ def fetch_realtime_quotes(stock_codes):
         match = re.search(r'hq_str_(s[hz]\d{6})', line)
         if not match:
             continue
-        code = match.group(1)[2:]
+        full_code = match.group(1)
+        code = full_code[2:]  # 去掉 sh/sz 前缀
         parts = line.split('="')[1].split(',')
         if len(parts) < 4:
             continue
         name = parts[0]
-        # 指数与股票字段位置不同
         if code in INDEX_CODES:
-            last_close = parts[1]   # 指数格式: 名称,昨收,今开,现价,...
+            # 指数：昨收=parts[1], 现价=parts[3]
+            last_close = parts[1]
             current = parts[3]
         else:
-            last_close = parts[2]   # 股票格式: 名称,今开,昨收,现价,...
+            # 股票：昨收=parts[2], 现价=parts[3]
+            last_close = parts[2]
             current = parts[3]
         try:
             last_close = float(last_close) if last_close else 0
@@ -400,6 +401,9 @@ def fetch_realtime_quotes(stock_codes):
             change = 0
             current = 0
         result[code] = {'price': current, 'change_pct': change, 'name': name}
+        # 添加调试日志
+        if code in INDEX_CODES:
+            logger.info(f"指数 {code}: 昨收={last_close}, 现价={current}, 涨跌幅={change}%")
     return result
     
 
