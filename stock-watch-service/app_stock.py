@@ -931,14 +931,18 @@ async def get_watchlist():
             rows = await conn.fetch("SELECT code, name FROM stock_data.watchlist ORDER BY id ASC")
         if not rows:
             return {"code": 200, "data": [], "message": "暂无自选股"}
+        
+        # 直接使用数据库中的原始代码（可能包含 sh/sz 前缀）
         codes = [row['code'] for row in rows]
         quotes = fetch_realtime_quotes(codes)
+        
         result = []
         for row in rows:
             code = row['code']
             db_name = row['name']
             quote = quotes.get(code, {})
-            name = quote.get('name') if quote.get('name') else (db_name or code)
+            # 优先使用新浪返回的名称（如上证指数），否则用数据库中的名称
+            name = quote.get('name') if quote.get('name') else (db_name if db_name else code)
             result.append({
                 "stock_code": code,
                 "stock_name": name,
@@ -947,7 +951,7 @@ async def get_watchlist():
             })
         return {"code": 200, "data": result, "message": "success"}
     except Exception as e:
-        logger.error(f"自选股接口错误: {e}")
+        logger.error(f"获取自选股列表错误: {e}")
         return {"code": 500, "message": str(e), "data": []}
         
 
