@@ -353,10 +353,6 @@ import logging
 logger = logging.getLogger("stock-watch")
 
 def fetch_realtime_quotes(stock_codes):
-    """
-    批量获取股票/指数实时行情（新浪接口）
-    直接使用接口返回的涨跌幅，避免计算错误。
-    """
     if not stock_codes:
         return {}
     
@@ -406,17 +402,24 @@ def fetch_realtime_quotes(stock_codes):
                 parts = line.split('="')[1].split(',')
                 if len(parts) < 5:
                     continue
+                # 打印完整 parts 数组（前20个字段），用于调试
+                logger.info(f"DEBUG [{code}] parts: {parts[:20]}")
                 name = parts[0]
-                # 现价
+                # 现价通常在索引3
                 try:
                     current = float(parts[3])
                 except:
                     current = 0
-                # 涨跌幅：个股格式中涨跌幅在 parts[4]（百分比，如 1.23）
+                # 涨跌幅可能在索引4（百分比数值）或索引5（带%号），根据实际情况调整
                 try:
+                    # 尝试索引4（纯数字涨跌幅）
                     change_pct = float(parts[4])
                 except:
-                    change_pct = 0
+                    # 如果索引4不是数字，尝试索引5（去掉%）
+                    try:
+                        change_pct = float(parts[5].replace('%', ''))
+                    except:
+                        change_pct = 0
                 result[code] = {"price": current, "change_pct": change_pct, "name": name}
         except Exception as e:
             logger.error(f"股票/其他指数请求失败: {e}")
@@ -439,13 +442,16 @@ def fetch_realtime_quotes(stock_codes):
                 parts = line.split('="')[1].split(',')
                 if len(parts) < 6:
                     continue
+                logger.info(f"DEBUG [{full_code}] parts: {parts[:10]}")
                 name = parts[0]
                 try:
                     current = float(parts[1])   # 上证指数现价
                 except:
                     current = 0
                 try:
-                    change_pct = float(parts[3])  # 上证指数涨跌幅
+                    # 涨跌幅通常在索引3（例如 "-0.86%"）
+                    change_str = parts[3].replace('%', '')
+                    change_pct = float(change_str)
                 except:
                     change_pct = 0
                 result[full_code] = {"price": current, "change_pct": change_pct, "name": name}
@@ -456,65 +462,7 @@ def fetch_realtime_quotes(stock_codes):
 
 
 
-# #自选股新浪实时接口
-# def fetch_realtime_quotes(stock_codes):
-#     if not stock_codes:
-#         return {}
-    
-#     INDEX_CODES = {'000001','399001','399006','000300','000905','399005'}
-#     symbols = []
-#     for code in stock_codes:
-#         code = str(code)
-#         if code.startswith('6'):
-#             symbols.append(f"sh{code}")
-#         elif code.startswith('0') or code.startswith('3'):
-#             symbols.append(f"sz{code}")
-#         else:
-#             symbols.append(f"sh{code}")
-    
-#     url = f"http://hq.sinajs.cn/list={','.join(symbols)}"
-#     headers = {"Referer": "http://finance.sina.com.cn"}
-#     try:
-#         resp = requests.get(url, headers=headers, timeout=5)
-#         resp.encoding = 'gbk'
-#         lines = resp.text.strip().split('\n')
-#     except Exception as e:
-#         logger.error(f"新浪接口请求失败: {e}")
-#         return {}
-    
-#     result = {}
-#     for line in lines:
-#         if '="' not in line:
-#             continue
-#         match = re.search(r'hq_str_(s[hz]\d{6})', line)
-#         if not match:
-#             continue
-#         full_code = match.group(1)
-#         code = full_code[2:]  # 去掉 sh/sz 前缀
-#         parts = line.split('="')[1].split(',')
-#         if len(parts) < 4:
-#             continue
-#         name = parts[0]
-#         if code in INDEX_CODES:
-#             # 指数：昨收=parts[1], 现价=parts[3]
-#             last_close = parts[1]
-#             current = parts[3]
-#         else:
-#             # 股票：昨收=parts[2], 现价=parts[3]
-#             last_close = parts[2]
-#             current = parts[3]
-#         try:
-#             last_close = float(last_close) if last_close else 0
-#             current = float(current) if current else 0
-#             change = round((current - last_close) / last_close * 100, 2) if last_close else 0
-#         except:
-#             change = 0
-#             current = 0
-#         result[code] = {'price': current, 'change_pct': change, 'name': name}
-#         # 添加调试日志
-#         if code in INDEX_CODES:
-#             logger.info(f"指数 {code}: 昨收={last_close}, 现价={current}, 涨跌幅={change}%")
-#     return result
+
     
 
 
