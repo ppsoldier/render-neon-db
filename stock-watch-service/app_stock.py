@@ -427,6 +427,90 @@ def fetch_realtime_quotes(stock_codes):
 
 
 
+import time
+import hashlib
+
+def _gen_updown_sign(timestamp):
+    """生成涨跌分布接口签名"""
+    secret = "sjdxfnqogbzoun13d971ckh8p"
+    base_string = f"{secret}{timestamp}"
+    return hashlib.md5(base_string.encode()).hexok()
+
+
+@app.get("/api/market/stats")
+async def get_market_stats():
+    """获取全市场统计数据（涨停/跌停/上涨/下跌家数）"""
+    try:
+        timestamp = str(int(time.time() * 1000))
+        headers = {
+            "accept": "*/*",
+            "origin": "https://www.9fzt.com",
+            "referer": "https://www.9fzt.com/",
+            "signature": _gen_updown_sign(timestamp),
+            "timestamp": timestamp,
+            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        }
+        url = "https://api-hq.chongnengjihua.com/finance/api/1/stock/up/down/distributed"
+        
+        response = requests.get(url, headers=headers, timeout=10)
+        data = response.json()
+        
+        if data.get('code') == 1 and data.get('data'):
+            result = data['data']
+            up_count = result.get('up', 0)
+            down_count = result.get('down', 0)
+            flat_count = result.get('flat', 0)
+            total = up_count + down_count + flat_count
+            limit_up_count = result.get('upLimit', 0)
+            limit_down_count = result.get('downLimit', 0)
+            advance_percent = round(up_count / total * 100, 2) if total > 0 else 0
+            
+            logger.info(f"全市场统计: 总数={total}, 上涨={up_count}({advance_percent}%), "
+                        f"下跌={down_count}, 涨停={limit_up_count}, 跌停={limit_down_count}")
+            
+            return {
+                "code": 200,
+                "data": {
+                    "total": total,
+                    "up_count": up_count,
+                    "down_count": down_count,
+                    "flat_count": flat_count,
+                    "limit_up_count": limit_up_count,
+                    "limit_down_count": limit_down_count,
+                    "advance_percent": advance_percent
+                },
+                "update_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+        else:
+            logger.warning(f"涨跌分布接口返回异常: {data}")
+            return {
+                "code": 200,
+                "data": {
+                    "total": 0,
+                    "up_count": 0,
+                    "down_count": 0,
+                    "flat_count": 0,
+                    "limit_up_count": 0,
+                    "limit_down_count": 0,
+                    "advance_percent": 0
+                }
+            }
+    except Exception as e:
+        logger.error(f"获取市场统计数据失败: {e}")
+        return {
+            "code": 500,
+            "message": str(e),
+            "data": {
+                "total": 0,
+                "up_count": 0,
+                "down_count": 0,
+                "flat_count": 0,
+                "limit_up_count": 0,
+                "limit_down_count": 0,
+                "advance_percent": 0
+            }
+        }
+
     
 
 
