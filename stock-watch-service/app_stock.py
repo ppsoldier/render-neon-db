@@ -319,7 +319,8 @@ def fetch_realtime_quotes(stock_codes):
     if not stock_codes:
         return {}
     
-    INDEX_SET = {'000001', '399001', '399006', '000300', '000905', '399005'}
+    # INDEX_SET = {'000001', '399001', '399006', '000300', '000905', '399005'}
+    INDEX_SET = {'000001', '000300', '000905', '399005'}
     symbols = []
     for code in stock_codes:
         code = str(code)
@@ -757,6 +758,9 @@ async def get_sentiment_data():
     except Exception as e:
         logger.error(f"获取情绪数据错误: {e}")
         return {"code": 500, "message": str(e), "data": {"concepts": [], "industries": []}}
+
+
+
 
 # ========== 自选股管理接口（使用 asyncpg，最简版本）==========
 
