@@ -315,7 +315,7 @@ import re
 
 
 def fetch_realtime_quotes(stock_codes):
-    """批量获取股票实时行情（新浪接口）"""
+    """批量获取股票实时行情（新浪接口），支持指数"""
     if not stock_codes:
         return {}
     
@@ -339,6 +339,9 @@ def fetch_realtime_quotes(stock_codes):
         logger.error(f"新浪接口请求失败: {e}")
         return {}
     
+    # 常见指数代码列表（需要特殊解析的）
+    index_codes = {'000001', '399001', '399006', '000300', '000905', '399005'}
+    
     result = {}
     for line in lines:
         if '="' not in line:
@@ -349,11 +352,22 @@ def fetch_realtime_quotes(stock_codes):
         full_code = match.group(1)
         code = full_code[2:]  # 去掉 sh/sz 前缀
         parts = line.split('="')[1].split(',')
-        if len(parts) < 10:
+        if len(parts) < 4:
             continue
-        name = parts[0]
-        last_close = parts[2]
-        current_price = parts[3]
+        
+        # 根据代码类型解析字段
+        if code in index_codes:
+            # 指数格式: 名称,昨收,今开,现价,最高,最低,... 
+            # 示例: 上证指数,2915.37,2886.65,2890.67,...
+            name = parts[0]
+            last_close = parts[1]
+            current_price = parts[3] if len(parts) > 3 else parts[1]
+        else:
+            # 普通股票格式: 名称,今开,昨收,现价,...
+            name = parts[0]
+            last_close = parts[2]
+            current_price = parts[3]
+        
         try:
             last_close = float(last_close) if last_close else 0
             current_price = float(current_price) if current_price else 0
@@ -361,13 +375,13 @@ def fetch_realtime_quotes(stock_codes):
         except:
             change_pct = 0
             current_price = 0
+        
         result[code] = {
             'price': current_price,
             'change_pct': change_pct,
             'name': name
         }
     return result
-
 
 
 
@@ -781,8 +795,10 @@ async def get_watchlist():
         result = []
         for row in rows:
             code = row['code']
-            name = row['name'] if row['name'] else code
+            db_name = row['name']
             quote = quotes.get(code, {})
+            # 优先使用新浪返回的实时名称，若没有则用数据库中的名称
+            name = quote.get('name') if quote.get('name') else db_name if db_name else code
             result.append({
                 "stock_code": code,
                 "stock_name": name,
