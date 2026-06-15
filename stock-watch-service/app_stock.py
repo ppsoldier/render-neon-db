@@ -888,7 +888,6 @@ async def delete_watchlist(stock_code: str = Query(..., description="股票代�
 # ========== 持仓管理接口 ==========
 @app.get("/api/holdings")
 async def get_holdings():
-    """获取持仓列表（含实时行情）"""
     try:
         pool = await get_db()
         async with pool.acquire() as conn:
@@ -899,34 +898,34 @@ async def get_holdings():
             """)
         
         if not rows:
-            return {"code": 200, "data": [], "stats": {"total_value":0,"total_cost":0,"total_pnl":0,"total_pnl_pct":0}}
+            return {"code": 200, "data": [], "stats": {...}}
         
         codes = [row['code'] for row in rows]
         quotes = fetch_realtime_quotes(codes)
         
         holdings = []
-        total_mv = 0
-        total_cost = 0
+        total_mv = 0.0
+        total_cost = 0.0
         for row in rows:
             code = row['code']
-            name = row['name'] if row['name'] else code
-            qty = row['quantity']
-            cost = row['cost_price']
+            name = row['name'] or code
+            qty = float(row['quantity'])          # 转换为 float
+            cost = float(row['cost_price'])       # 转换为 float
             quote = quotes.get(code, {})
-            price = quote.get('price', cost)
-            change = quote.get('change_pct', 0)
-            display_name = quote.get('name') if quote.get('name') else name
+            price = float(quote.get('price', cost))
+            change = float(quote.get('change_pct', 0))
+            display_name = quote.get('name') or name
             
             market_value = price * qty
             cost_sum = cost * qty
             pnl = market_value - cost_sum
-            pnl_pct = (pnl / cost_sum * 100) if cost_sum else 0
+            pnl_pct = (pnl / cost_sum * 100) if cost_sum else 0.0
             
             holdings.append({
                 "code": code,
                 "name": display_name,
                 "quantity": qty,
-                "cost_price": cost,
+                "cost_price": round(cost, 2),
                 "current_price": round(price, 2),
                 "market_value": round(market_value, 2),
                 "pnl": round(pnl, 2),
@@ -937,7 +936,7 @@ async def get_holdings():
             total_cost += cost_sum
         
         total_pnl = total_mv - total_cost
-        total_pnl_pct = (total_pnl / total_cost * 100) if total_cost else 0
+        total_pnl_pct = (total_pnl / total_cost * 100) if total_cost else 0.0
         
         return {
             "code": 200,
