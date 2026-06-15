@@ -170,7 +170,7 @@ def get_research_signature(params):
     return sign, timestamp
 
 # ========== 实时数据采集函数（保持原有）==========
-async def fetch_stock_rank(sort_type: str, max_pages: int = 3):
+async def fetch_stock_rank(sort_type: str, max_pages: int = 5):
     """获取股票涨跌幅排行，max_pages 控制翻页数量"""
     stock_rank = []
     for page in range(1, max_pages + 1):
