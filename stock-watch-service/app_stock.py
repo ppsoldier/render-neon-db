@@ -448,20 +448,44 @@ async def get_realtime_concept():
 
 @app.get("/api/market/limit-stats")
 async def get_limit_stats():
-    """获取涨跌停统计（基于新浪实时榜单）"""
+    """获取涨跌停统计"""
     try:
-        up_ranks = await fetch_sina_stock_rank('up', page=1, page_size=100)
-        down_ranks = await fetch_sina_stock_rank('down', page=1, page_size=100)
+        # 获取涨幅榜和跌幅榜数据（各取前100只，足够统计）
+        up_ranks = await fetch_stock_rank('0', max_pages=5)   # 共100只
+        down_ranks = await fetch_stock_rank('1', max_pages=5)
+        
         limit_up = 0
         limit_down = 0
         for stock in up_ranks:
-            if stock['change_percent'] >= 9.5:
-                limit_up += 1
+            # 涨停判断：主板9.5%，创业板/科创板19.5%，北交所29.5%
+            code = stock.get('stock_code', '')
+            change = stock.get('change_percent', 0)
+            if code.startswith(('30', '68')):
+                if change >= 19.5:
+                    limit_up += 1
+            elif code.startswith('8'):
+                if change >= 29.5:
+                    limit_up += 1
+            else:
+                if change >= 9.5:
+                    limit_up += 1
         for stock in down_ranks:
-            if stock['change_percent'] <= -9.5:
-                limit_down += 1
+            code = stock.get('stock_code', '')
+            change = stock.get('change_percent', 0)
+            if code.startswith(('30', '68')):
+                if change <= -19.5:
+                    limit_down += 1
+            elif code.startswith('8'):
+                if change <= -29.5:
+                    limit_down += 1
+            else:
+                if change <= -9.5:
+                    limit_down += 1
+        
+        # 计算市场情绪（0-100）
         sentiment = 50 + (limit_up - limit_down) * 2
         sentiment = max(0, min(100, sentiment))
+        
         return {
             "limit_up_count": limit_up,
             "limit_down_count": limit_down,
@@ -470,6 +494,7 @@ async def get_limit_stats():
     except Exception as e:
         logger.error(f"获取涨跌停统计错误: {e}")
         return {"limit_up_count": 0, "limit_down_count": 0, "sentiment": 50}
+        
 
 
 
