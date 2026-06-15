@@ -901,7 +901,7 @@ async def get_watchlist():
         if not rows:
             return {"code": 200, "data": [], "message": "暂无自选股"}
         
-        codes = [row['code'] for row in rows]  # 原始代码（可能带 sh/sz）
+        codes = [row['code'] for row in rows]
         quotes = fetch_realtime_quotes(codes)
         
         result = []
@@ -909,6 +909,11 @@ async def get_watchlist():
             code = row['code']
             db_name = row['name']
             quote = quotes.get(code, {})
+            # 如果没取到，尝试用去掉前缀的代码（兼容性）
+            if not quote and (code.startswith('sh') or code.startswith('sz')):
+                alt_code = code[2:]
+                quote = quotes.get(alt_code, {})
+            # 优先使用新浪返回的名称，否则使用数据库中的名称
             name = quote.get('name') if quote.get('name') else (db_name if db_name else code)
             result.append({
                 "stock_code": code,
