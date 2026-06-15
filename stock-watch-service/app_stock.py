@@ -352,7 +352,7 @@ def fetch_realtime_quotes(stock_codes):
     if not stock_codes:
         return {}
     
-    INDEX_CODES = {'000001','399001','399006','000300','000905','399005'}
+    INDEX_CODES = {'sh000001','399001','399006','000300','000905','399005'}
     symbols = []
     for code in stock_codes:
         code = str(code)
