@@ -324,6 +324,11 @@ async def fetch_sector_rank(hq_type_code: str):
 
 
 
+import json
+import re
+import time
+import random
+
 async def fetch_sina_stock_rank(rank_type: str, page: int = 1, page_size: int = 20):
     """
     获取新浪股票涨跌幅排行榜
@@ -331,36 +336,38 @@ async def fetch_sina_stock_rank(rank_type: str, page: int = 1, page_size: int = 
     """
     node = '上涨' if rank_type == 'up' else '下跌'
     url = f"http://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getStockRank?node={node}&page={page}&num={page_size}"
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
+        'Referer': 'https://finance.sina.com.cn/',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+    }
     try:
-        response = requests.get(url, timeout=10)
-        # 新浪返回的是 JSONP 格式：如 var data=[...]; 或直接 [...]
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code != 200:
+            logger.warning(f"新浪排行榜状态码异常: {response.status_code}")
+            return []
         text = response.text.strip()
-        # 去除可能的函数调用包装
+        # 清理 JSONP 包装
         if text.startswith('var '):
             text = text.split('=', 1)[1].strip()
         if text.endswith(';'):
             text = text[:-1]
-        # 去掉末尾可能的括号
-        if text.startswith('[') and text.endswith(']'):
-            data = json.loads(text)
+        # 尝试提取数组
+        match = re.search(r'\[\s*\{.*?\}\s*\]', text, re.DOTALL)
+        if match:
+            data = json.loads(match.group())
         else:
-            # 尝试提取数组部分
-            match = re.search(r'\[\s*\{.*?\}\s*\]', text, re.DOTALL)
-            if match:
-                data = json.loads(match.group())
-            else:
-                data = []
+            data = []
     except Exception as e:
-        logger.error(f"新浪排行榜请求失败: {e}")
+        logger.error(f"新浪排行榜解析失败: {e}")
         return []
     
     results = []
     for item in data:
-        # 字段名示例: symbol, name, trade, changepercent, etc.
-        code = item.get('symbol', '')
-        # 去掉前缀 sh/sz
-        if code.startswith('sh') or code.startswith('sz'):
-            code = code[2:]
+        symbol = item.get('symbol', '')
+        # 去掉 sh/sz 前缀
+        code = symbol[2:] if (symbol.startswith('sh') or symbol.startswith('sz')) else symbol
         price = item.get('trade', 0)
         change_percent = item.get('changepercent', 0)
         results.append({
