@@ -354,104 +354,71 @@ logger = logging.getLogger("stock-watch")
 
 def fetch_realtime_quotes(stock_codes):
     """
-    批量获取股票/指数实时行情（新浪接口）
-    返回字典 { code: {"price": float, "change_pct": float, "name": str} }
+    批量获取股票/指数实时行情（新浪个股格式接口）
+    支持上证指数、深证成指、创业板指等。
     """
     if not stock_codes:
         return {}
     
-    # 上证指数（简化版）
-    SH_INDEX = {'sh000001'}
-    # 其他指数（个股格式）
-    OTHER_INDEX = {'sz399001', 'sz399006', 'sh000300', 'sh000905', 'sz399005'}
-    
-    # 分类
-    sh_codes = []
-    other_codes = []
-    stock_codes_clean = []
+    # 构建新浪符号列表，统一使用个股格式
+    symbols = []
     for code in stock_codes:
         code_str = str(code)
-        if code_str in SH_INDEX:
-            sh_codes.append(code_str)
-        elif code_str in OTHER_INDEX:
-            other_codes.append(code_str)
+        if code_str.startswith('sh') or code_str.startswith('sz'):
+            symbols.append(code_str)
+        elif code_str.startswith('6'):
+            symbols.append(f"sh{code_str}")
+        elif code_str.startswith('0') or code_str.startswith('3'):
+            symbols.append(f"sz{code_str}")
         else:
-            stock_codes_clean.append(code_str)
+            symbols.append(f"sh{code_str}")
+    
+    url = f"http://hq.sinajs.cn/list={','.join(symbols)}"
+    headers = {"Referer": "http://finance.sina.com.cn"}
+    try:
+        resp = requests.get(url, headers=headers, timeout=5)
+        resp.encoding = 'gbk'
+        lines = resp.text.strip().split('\n')
+    except Exception as e:
+        logger.error(f"新浪接口请求失败: {e}")
+        return {}
     
     result = {}
-    
-    # 处理普通股票和其他指数（个股格式）
-    all_stock_codes = stock_codes_clean + other_codes
-    if all_stock_codes:
-        symbols = []
-        for code in all_stock_codes:
-            if code.startswith('6'):
-                symbols.append(f"sh{code}")
-            else:
-                symbols.append(f"sz{code}")
-        url = f"http://hq.sinajs.cn/list={','.join(symbols)}"
-        headers = {"Referer": "http://finance.sina.com.cn"}
+    for line in lines:
+        if '="' not in line:
+            continue
+        match = re.search(r'hq_str_(s[hz]\d{6})', line)
+        if not match:
+            continue
+        full_code = match.group(1)      # 如 sh000001
+        parts = line.split('="')[1].split(',')
+        if len(parts) < 5:
+            continue
+        
+        # 打印前10个字段用于调试（尤其是指数）
+        if full_code in ['sh000001', 'sz399001', 'sz399006']:
+            logger.info(f"DEBUG [{full_code}] parts: {parts[:10]}")
+        
+        name = parts[0]
+        # 个股格式字段：0名称,1今开,2昨收,3现价,4涨跌幅(百分比数值)...
         try:
-            resp = requests.get(url, headers=headers, timeout=5)
-            resp.encoding = 'gbk'
-            lines = resp.text.strip().split('\n')
-            for line in lines:
-                if '="' not in line:
-                    continue
-                match = re.search(r'hq_str_(s[hz]\d{6})', line)
-                if not match:
-                    continue
-                full_code = match.group(1)
-                code = full_code[2:]   # 去掉 sh/sz 前缀，作为返回的 key
-                parts = line.split('="')[1].split(',')
-                if len(parts) < 10:
-                    continue
-                name = parts[0]
-                try:
-                    last_close = float(parts[2])   # 昨收（索引2）
-                    current = float(parts[3])      # 现价（索引3）
-                    change_pct = round((current - last_close) / last_close * 100, 2) if last_close != 0 else 0
-                except (ValueError, IndexError):
-                    current = 0
-                    change_pct = 0
-                result[code] = {"price": current, "change_pct": change_pct, "name": name}
-        except Exception as e:
-            logger.error(f"股票/其他指数请求失败: {e}")
-    
-    # 处理上证指数（简化版）
-    if sh_codes:
-        url = f"http://hq.sinajs.cn/list={','.join(sh_codes)}"
-        headers = {"Referer": "http://finance.sina.com.cn"}
-        try:
-            resp = requests.get(url, headers=headers, timeout=5)
-            resp.encoding = 'gbk'
-            lines = resp.text.strip().split('\n')
-            for line in lines:
-                if '="' not in line:
-                    continue
-                match = re.search(r'hq_str_(s[hz]\d{6})', line)
-                if not match:
-                    continue
-                full_code = match.group(1)
-                parts = line.split('="')[1].split(',')
-                if len(parts) < 4:
-                    continue
-                name = parts[0]
-                try:
-                    current = float(parts[1])          # 上证指数现价
-                except:
-                    current = 0
-                try:
-                    change_str = parts[3].replace('%', '')
-                    change_pct = float(change_str)
-                except:
-                    change_pct = 0
-                result[full_code] = {"price": current, "change_pct": change_pct, "name": name}
-        except Exception as e:
-            logger.error(f"上证指数请求失败: {e}")
+            last_close = float(parts[2])   # 昨收
+            current = float(parts[3])      # 现价
+            # 优先使用接口返回的涨跌幅（parts[4]），避免计算误差
+            change_pct = float(parts[4]) if parts[4] else round((current - last_close) / last_close * 100, 2)
+        except (ValueError, IndexError):
+            last_close = 0
+            current = 0
+            change_pct = 0
+        
+        # 使用原始代码作为 key（带前缀）
+        result[full_code] = {
+            "price": current,
+            "change_pct": change_pct,
+            "name": name
+        }
     
     return result
-
 
 
 
