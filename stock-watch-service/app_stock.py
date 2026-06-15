@@ -345,43 +345,7 @@ async def health_check():
 
 
 
-#自选股指数实时接口
-def fetch_index_quote_from_tencent(code):
-    """从腾讯财经获取指数实时行情"""
-    # 腾讯指数代码：sh000001, sz399001, sz399006
-    if code == '000001':
-        symbol = 'sh000001'
-    elif code in ('399001', '399006'):
-        symbol = f'sz{code}'
-    else:
-        return None
-    url = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={symbol},day,,,1"
-    try:
-        resp = requests.get(url, timeout=5)
-        data = resp.json()
-        if data.get('code') == 0:
-            # 数据在 data['data'][symbol]['qt'][symbol]
-            qt = data['data'][symbol]['qt'][symbol]
-            # 字段：... 38 是当前价, 37 是昨收
-            current = float(qt[38]) if qt[38] else 0
-            last_close = float(qt[37]) if qt[37] else 0
-            change = round((current - last_close) / last_close * 100, 2) if last_close else 0
-            name = qt[1]  # 指数名称
-            return {'price': current, 'change_pct': change, 'name': name}
-    except Exception as e:
-        logger.error(f"腾讯指数获取失败 {code}: {e}")
-    return None
 
-import re
-import requests
-import logging
-logger = logging.getLogger("stock-watch")
-
-import re
-import requests
-import logging
-
-logger = logging.getLogger("stock-watch")
 
 import re
 import requests
@@ -389,27 +353,33 @@ import logging
 logger = logging.getLogger("stock-watch")
 
 def fetch_realtime_quotes(stock_codes):
+    """
+    批量获取股票/指数实时行情（新浪接口）
+    参数 stock_codes: 可以是带前缀（sh/sz）或不带前缀的代码列表
+    返回字典：{ code: {"price": float, "change_pct": float, "name": str} }
+    """
     if not stock_codes:
         return {}
     
     # 指数代码集合（使用新浪返回的完整代码，带前缀）
-    INDEX_CODES = {'sh000001', 'sz399001', 'sz399006', 'sh000300', 'sh000905', 'sz399005'}
+    INDEX_SYMBOLS = {'sh000001', 'sz399001', 'sz399006', 'sh000300', 'sh000905', 'sz399005'}
     
-    # 构建新浪符号列表：如果传入的代码已经带 sh/sz，直接使用；否则根据规则添加
+    # 构建新浪符号列表，并建立映射关系
     symbols = []
+    code_map = {}   # 新浪符号 -> 原始代码
     for code in stock_codes:
-        code = str(code)
-        if code.startswith('sh') or code.startswith('sz'):
-            symbols.append(code)          # 已带前缀，直接使用
-        elif code.startswith('6'):
-            symbols.append(f"sh{code}")
-        elif code.startswith('0') or code.startswith('3'):
-            symbols.append(f"sz{code}")
+        code_str = str(code)
+        # 如果已经带前缀，直接使用；否则根据数字前缀添加
+        if code_str.startswith('sh') or code_str.startswith('sz'):
+            sym = code_str
+        elif code_str.startswith('6'):
+            sym = f"sh{code_str}"
+        elif code_str.startswith('0') or code_str.startswith('3'):
+            sym = f"sz{code_str}"
         else:
-            symbols.append(f"sh{code}")
-    
-    if not symbols:
-        return {}
+            sym = f"sh{code_str}"
+        symbols.append(sym)
+        code_map[sym] = code_str
     
     url = f"http://hq.sinajs.cn/list={','.join(symbols)}"
     headers = {"Referer": "http://finance.sina.com.cn"}
@@ -428,14 +398,18 @@ def fetch_realtime_quotes(stock_codes):
         match = re.search(r'hq_str_(s[hz]\d{6})', line)
         if not match:
             continue
-        full_code = match.group(1)   # 如 sh000001
+        full_sym = match.group(1)   # 如 sh000001
         parts = line.split('="')[1].split(',')
         if len(parts) < 10:
             continue
         
         name = parts[0]
-        if full_code in INDEX_CODES:
-            # 指数：昨收=parts[1], 现价=parts[3]
+        # 获取原始代码
+        original_code = code_map.get(full_sym, full_sym[2:])
+        
+        # 判断是否为指数
+        if full_sym in INDEX_SYMBOLS:
+            # 指数格式：名称,昨收,今开,现价,最高,最低,...
             try:
                 last_close = float(parts[1])
                 current = float(parts[3])
@@ -443,7 +417,7 @@ def fetch_realtime_quotes(stock_codes):
                 last_close = 0
                 current = 0
         else:
-            # 普通股票：昨收=parts[2], 现价=parts[3]
+            # 普通股票格式：名称,今开,昨收,现价,...
             try:
                 last_close = float(parts[2])
                 current = float(parts[3])
@@ -456,13 +430,17 @@ def fetch_realtime_quotes(stock_codes):
         else:
             change_pct = 0
         
-        result[full_code] = {
+        result[original_code] = {
             "price": current,
             "change_pct": change_pct,
             "name": name
         }
+        
+        # 调试日志：打印上证指数、深证成指、创业板指的解析结果
+        if original_code in ('sh000001', '000001', '399001', '399006'):
+            logger.info(f"解析 {original_code}: 昨收={last_close}, 现价={current}, 涨跌幅={change_pct}%")
+    
     return result
-
 
 
 
