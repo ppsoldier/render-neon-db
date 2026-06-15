@@ -324,6 +324,57 @@ async def fetch_sector_rank(hq_type_code: str):
 
 
 
+async def fetch_sina_stock_rank(rank_type: str, page: int = 1, page_size: int = 20):
+    """
+    获取新浪股票涨跌幅排行榜
+    rank_type: 'up' 涨幅榜, 'down' 跌幅榜
+    """
+    node = '上涨' if rank_type == 'up' else '下跌'
+    url = f"http://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getStockRank?node={node}&page={page}&num={page_size}"
+    try:
+        response = requests.get(url, timeout=10)
+        # 新浪返回的是 JSONP 格式：如 var data=[...]; 或直接 [...]
+        text = response.text.strip()
+        # 去除可能的函数调用包装
+        if text.startswith('var '):
+            text = text.split('=', 1)[1].strip()
+        if text.endswith(';'):
+            text = text[:-1]
+        # 去掉末尾可能的括号
+        if text.startswith('[') and text.endswith(']'):
+            data = json.loads(text)
+        else:
+            # 尝试提取数组部分
+            match = re.search(r'\[\s*\{.*?\}\s*\]', text, re.DOTALL)
+            if match:
+                data = json.loads(match.group())
+            else:
+                data = []
+    except Exception as e:
+        logger.error(f"新浪排行榜请求失败: {e}")
+        return []
+    
+    results = []
+    for item in data:
+        # 字段名示例: symbol, name, trade, changepercent, etc.
+        code = item.get('symbol', '')
+        # 去掉前缀 sh/sz
+        if code.startswith('sh') or code.startswith('sz'):
+            code = code[2:]
+        price = item.get('trade', 0)
+        change_percent = item.get('changepercent', 0)
+        results.append({
+            "stock_code": code,
+            "stock_name": item.get('name', ''),
+            "price": float(price) if price else 0,
+            "change_percent": float(change_percent),
+            "volume": item.get('volume', 0),
+            "amount": item.get('amount', 0)
+        })
+    return results
+
+
+
 # ========== FastAPI 应用 ==========
 app = FastAPI(title="股票看盘系统", version="2.0.0")
 
@@ -407,19 +458,21 @@ def fetch_realtime_quotes(stock_codes):
 # ========== 实时行情接口 ==========
 @app.get("/api/realtime/ranks")
 async def get_realtime_ranks(rank_type: str = Query("up", description="up/down")):
-    """获取实时涨跌幅榜单"""
-    sort_type = '0' if rank_type == 'up' else '1'
+    """获取实时涨跌幅榜单（新浪接口）"""
     try:
-        ranks = await fetch_stock_rank(sort_type)
+        # 获取第一页20只股票（可根据需要增加页数合并）
+        ranks = await fetch_sina_stock_rank(rank_type, page=1, page_size=30)
         return {
             "code": 200,
             "message": "success",
             "data": ranks,
-            "update_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            "update_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "source": "新浪"
         }
     except Exception as e:
-        logger.error(f"获取实时榜单错误: {e}")
+        logger.error(f"获取新浪榜单错误: {e}")
         return {"code": 500, "message": str(e), "data": []}
+        
 
 @app.get("/api/realtime/industry")
 async def get_realtime_industry():
@@ -454,46 +507,20 @@ async def get_realtime_concept():
 
 @app.get("/api/market/limit-stats")
 async def get_limit_stats():
-    """获取涨跌停统计"""
+    """获取涨跌停统计（基于新浪实时榜单）"""
     try:
-        # 从涨幅榜和跌幅榜中统计涨停/跌停数量
-        up_ranks = await fetch_stock_rank('0')
-        down_ranks = await fetch_stock_rank('1')
-        
-        # 涨停判断：涨幅 >= 9.5%（主板）或 >= 19.5%（创业板/科创板）
+        up_ranks = await fetch_sina_stock_rank('up', page=1, page_size=100)
+        down_ranks = await fetch_sina_stock_rank('down', page=1, page_size=100)
         limit_up = 0
         limit_down = 0
-        
         for stock in up_ranks:
-            change = stock.get('change_percent', 0)
-            code = stock.get('stock_code', '')
-            if code.startswith(('30', '68')):
-                if change >= 19.6:
-                    limit_up += 1
-            elif code.startswith('8'):
-                if change >= 29.6:
-                    limit_up += 1
-            else:
-                if change >= 9.6:
-                    limit_up += 1
-        
+            if stock['change_percent'] >= 9.5:
+                limit_up += 1
         for stock in down_ranks:
-            change = stock.get('change_percent', 0)
-            code = stock.get('stock_code', '')
-            if code.startswith(('30', '68')):
-                if change <= -19.6:
-                    limit_down += 1
-            elif code.startswith('8'):
-                if change <= -29.6:
-                    limit_down += 1
-            else:
-                if change <= -9.6:
-                    limit_down += 1
-        
-        # 市场情绪评分（0-100）
+            if stock['change_percent'] <= -9.5:
+                limit_down += 1
         sentiment = 50 + (limit_up - limit_down) * 2
         sentiment = max(0, min(100, sentiment))
-        
         return {
             "limit_up_count": limit_up,
             "limit_down_count": limit_down,
@@ -501,8 +528,9 @@ async def get_limit_stats():
         }
     except Exception as e:
         logger.error(f"获取涨跌停统计错误: {e}")
-        # 返回默认值
         return {"limit_up_count": 0, "limit_down_count": 0, "sentiment": 50}
+
+
 
 def load_stock_mapping():
     """加载股票名称映射表（支持拼音首字母）"""
