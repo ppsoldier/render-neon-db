@@ -40,7 +40,6 @@ DB_USER = os.environ.get("DB_USER", "neondb_owner")
 DB_PASSWORD = os.environ.get("DB_PASSWORD", "npg_b1QR9lMdusev")
 DB_NAME = os.environ.get("DB_NAME", "neondb")
 DB_PORT = int(os.environ.get("DB_PORT", 5432))
-# SCHEMA_NAME = os.environ.get("DB_SCHEMA", "stock_watch")
 SCHEMA_NAME = os.environ.get("DB_SCHEMA", "stock_data")
 
 # 异步数据库URL（用于asyncpg）
@@ -478,8 +477,8 @@ async def get_limit_stats():
     """获取涨跌停统计"""
     try:
         # 获取涨幅榜和跌幅榜数据（各取前100只，足够统计）
-        up_ranks = await fetch_stock_rank('0', max_pages=8)   # 共100只
-        down_ranks = await fetch_stock_rank('1', max_pages=8)
+        up_ranks = await fetch_stock_rank('0', max_pages=20)   # 共100只
+        down_ranks = await fetch_stock_rank('1', max_pages=20)
         
         limit_up = 0
         limit_down = 0
