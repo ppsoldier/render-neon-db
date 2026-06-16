@@ -1019,6 +1019,7 @@ def read_word_file(file_bytes):
 
 @app.route("/api/translate/text", methods=["POST"])
 def translate_text_api():
+    """文本翻译接口"""
     data = request.get_json()
     text = data.get('text', '')
     if not text:
@@ -1032,6 +1033,7 @@ def translate_text_api():
 
 @app.route("/api/translate/docx", methods=["POST"])
 def translate_docx_api():
+    """Word文档翻译接口"""
     if 'file' not in request.files:
         return jsonify({"code": 400, "msg": "未上传文件"})
     file = request.files['file']
@@ -1046,6 +1048,42 @@ def translate_docx_api():
     except Exception as e:
         print(f"文档翻译错误: {str(e)}")
         return jsonify({"code": 500, "msg": str(e)})
+
+@app.route("/api/translate/export", methods=["POST"])
+def export_translation():
+    """导出翻译结果到Word"""
+    data = request.get_json()
+    text = data.get('text', '')
+    if not text:
+        return jsonify({"code": 400, "msg": "文本不能为空"})
+    try:
+        from docx import Document
+        from docx.shared import Pt
+        from io import BytesIO
+        from datetime import datetime
+        
+        doc = Document()
+        title = doc.add_heading('翻译结果', level=1)
+        title.alignment = 1
+        paragraphs = text.split('\n')
+        for para in paragraphs:
+            if para.strip():
+                p = doc.add_paragraph(para)
+                p.runs[0].font.size = Pt(11)
+            else:
+                doc.add_paragraph()
+        output = BytesIO()
+        doc.save(output)
+        output.seek(0)
+        return send_file(
+            output,
+            mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            as_attachment=True,
+            download_name=f'翻译结果_{datetime.now().strftime("%Y%m%d_%H%M%S")}.docx'
+        )
+    except Exception as e:
+        return jsonify({"code": 500, "msg": str(e)})
+        
 
 
 
