@@ -1086,7 +1086,9 @@ def export_translation():
         
 
 
-
+@app.route("/test")
+def test():
+    return "test ok"
 
 
 
