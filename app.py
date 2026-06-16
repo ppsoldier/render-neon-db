@@ -1162,8 +1162,46 @@ import requests
 import re
 from flask import request, jsonify, send_file
 
-# 在 app.py 顶部添加 subprocess 导入
-import subprocess
+
+
+@app.route('/api/video/download/simple', methods=['POST'])
+def download_video_simple():
+    """仅下载视频，不合成音频"""
+    data = request.get_json()
+    video_url = data.get('url', '')
+    if not video_url:
+        return jsonify({'code': 400, 'msg': '视频链接不能为空'})
+    
+    try:
+        resp = requests.get(video_url, cookies=BILI_COOKIES, headers=BILI_HEADERS, timeout=10)
+        html = resp.text
+        
+        # 提取标题
+        title_match = re.search(r'<title>(.*?)_哔哩哔哩_bilibili</title>', html)
+        title = title_match.group(1).replace(' ', '').replace('|', '').replace("'", '').replace('/', '_') if title_match else 'video'
+        
+        # 提取视频地址
+        video_match = re.search(r'"video".*?"baseUrl":"(.*?)"', html)
+        if not video_match:
+            return jsonify({'code': 404, 'msg': '未找到视频源'})
+        
+        video_url_real = video_match.group(1)
+        
+        # 流式下载并直接返回
+        def generate():
+            response = requests.get(video_url_real, headers=BILI_HEADERS, stream=True, timeout=60)
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:
+                    yield chunk
+        
+        return Response(generate(), mimetype='video/mp4', headers={
+            'Content-Disposition': f'attachment; filename={title}.mp4'
+        })
+    except Exception as e:
+        return jsonify({'code': 500, 'msg': str(e)})
+
+
+
 
 @app.route('/api/video/download', methods=['POST'])
 def download_video():
