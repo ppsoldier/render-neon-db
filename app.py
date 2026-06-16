@@ -1085,6 +1085,144 @@ def export_translation():
 
 
 
+import re
+import requests
+import os
+import time
+from flask import Flask, request, jsonify, send_file
+from concurrent.futures import ThreadPoolExecutor
+import uuid
+
+app = Flask(__name__)
+
+# B站爬虫配置
+BILI_COOKIES = {
+    'buvid3': 'E1AC41CE-8298-B4E8-2B11-711D83FCEB4D07978infoc',
+    'b_nut': '1774395407',
+    'bsource': 'search_bing',
+    '_uuid': '696B6B59-DCBB-93710-106A9-2F84CAC10BCA957649infoc',
+    'home_feed_column': '5',
+    'browser_resolution': '1912-956',
+    'buvid4': '4DB22FA4-9C1B-3FF9-09D1-FC56BA6029AA09187-026032507-s5Db6HTmRJMFxI7gzVHFJA%3D%3D',
+    'buvid_fp': '82d07d9422c9ad7c67f3c53cc409b7e8',
+    'bmg_af_switch': '1',
+    'bmg_src_def_domain': 'i2.hdslb.com',
+    'bili_ticket': 'eyJhbGciOiJIUzI1NiIsImtpZCI6InMwMyIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NzQ2NTQ2MjQsImlhdCI6MTc3NDM5NTM2NCwicGx0IjotMX0.KbRAOmZjhvBQ7MrPSaVnGd_5qhwK_WyiYs25aY5WJ5I',
+    'bili_ticket_expires': '1774654564',
+    'sid': '83jnmdei',
+    'CURRENT_QUALITY': '0',
+    'rpdid': "|(umR~lRuRlJ0J'u~~RJmlRRu",
+    'CURRENT_FNVAL': '4048',
+    'b_lsid': 'C9BCD791_19D225F6A76',
+}
+
+BILI_HEADERS = {
+    'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+    'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
+    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36 Edg/144.0.0.0',
+    'referer': 'https://search.bilibili.com/',
+}
+
+
+@app.route('/api/video/search', methods=['POST'])
+def search_videos():
+    """搜索B站视频"""
+    data = request.get_json()
+    keyword = data.get('keyword', '')
+    if not keyword:
+        return jsonify({'code': 400, 'msg': '请输入搜索关键词'})
+    
+    params = {
+        'keyword': keyword,
+        'from_source': 'webtop_search',
+        'spm_id_from': '333.1007',
+        'search_source': '5',
+    }
+    try:
+        response = requests.get('https://search.bilibili.com/all/', params=params, cookies=BILI_COOKIES, headers=BILI_HEADERS, timeout=10)
+        urls = re.findall(r'<a href="(.*?)"', response.text)
+        video_list = []
+        seen = set()
+        for url in urls:
+            if "video" in url and url not in seen:
+                full_url = 'https:' + url if url.startswith('//') else url
+                seen.add(url)
+                video_list.append(full_url)
+                if len(video_list) >= 20:
+                    break
+        return jsonify({'code': 200, 'data': video_list, 'count': len(video_list)})
+    except Exception as e:
+        return jsonify({'code': 500, 'msg': str(e)})
+
+
+@app.route('/api/video/download', methods=['POST'])
+def download_video():
+    """下载并合成视频"""
+    data = request.get_json()
+    video_url = data.get('url', '')
+    if not video_url:
+        return jsonify({'code': 400, 'msg': '视频链接不能为空'})
+    
+    try:
+        # 获取视频详情页
+        resp = requests.get(video_url, cookies=BILI_COOKIES, headers=BILI_HEADERS, timeout=10)
+        html = resp.text
+        
+        # 提取标题
+        title_match = re.search(r'<title>(.*?)_哔哩哔哩_bilibili</title>', html)
+        if not title_match:
+            return jsonify({'code': 404, 'msg': '未找到视频标题'})
+        title = title_match.group(1).replace(' ', '').replace('|', '').replace("'", '')
+        
+        # 提取视频和音频地址
+        video_match = re.search(r'"video".*?"baseUrl":"(.*?)"', html)
+        audio_match = re.search(r'"audio".*?"baseUrl":"(.*?)"', html)
+        
+        if not video_match or not audio_match:
+            return jsonify({'code': 404, 'msg': '未找到视频或音频源'})
+        
+        video_url_real = video_match.group(1)
+        audio_url_real = audio_match.group(1)
+        
+        # 下载视频和音频
+        video_content = requests.get(video_url_real, headers=BILI_HEADERS, timeout=30).content
+        audio_content = requests.get(audio_url_real, headers=BILI_HEADERS, timeout=30).content
+        
+        # 保存临时文件
+        temp_id = str(uuid.uuid4())[:8]
+        video_path = f'/tmp/{temp_id}_{title}.mp4'
+        audio_path = f'/tmp/{temp_id}_{title}.mp3'
+        output_path = f'/tmp/{temp_id}_{title}_合成.mp4'
+        
+        with open(video_path, 'wb') as f:
+            f.write(video_content)
+        with open(audio_path, 'wb') as f:
+            f.write(audio_content)
+        
+        # FFmpeg合成（使用系统命令，需要服务器安装ffmpeg）
+        import subprocess
+        cmd = f'ffmpeg -i "{video_path}" -i "{audio_path}" -c:v copy -c:a copy "{output_path}" -y -loglevel quiet'
+        subprocess.run(cmd, shell=True, timeout=120)
+        
+        # 返回文件
+        return send_file(
+            output_path,
+            as_attachment=True,
+            download_name=f'{title}.mp4',
+            mimetype='video/mp4'
+        )
+    except subprocess.TimeoutExpired:
+        return jsonify({'code': 500, 'msg': '合成超时'})
+    except Exception as e:
+        return jsonify({'code': 500, 'msg': str(e)})
+    finally:
+        # 清理临时文件
+        for path in [video_path, audio_path, output_path]:
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+            except:
+                pass
 
 
 
