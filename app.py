@@ -1202,40 +1202,50 @@ def download_video_simple():
         return jsonify({'code': 500, 'msg': str(e)})
 
 
+import re
+import requests
+import json
+
 @app.route('/api/video/test', methods=['POST'])
 def video_test():
-    """测试接口，只解析视频信息不下载"""
-    import re
     data = request.get_json()
-    video_url = data.get('url', '')
-    if not video_url:
-        return jsonify({'code': 400, 'msg': '链接为空'})
+    bv_id = data.get('url', '').split('/')[-1].split('?')[0]  # 提取BV号
     
+    # 调用B站公开API获取视频信息
+    api_url = f'https://api.bilibili.com/x/web-interface/view?bvid={bv_id}'
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Referer': 'https://www.bilibili.com/'
+    }
     try:
-        resp = requests.get(video_url, cookies=BILI_COOKIES, headers=BILI_HEADERS, timeout=10)
-        html = resp.text
-        
-        # 提取标题
-        title_match = re.search(r'<title>(.*?)_哔哩哔哩_bilibili</title>', html)
-        title = title_match.group(1) if title_match else '未知标题'
-        
-        # 提取视频地址
-        video_match = re.search(r'"video".*?"baseUrl":"(.*?)"', html)
-        audio_match = re.search(r'"audio".*?"baseUrl":"(.*?)"', html)
-        
-        return jsonify({
-            'code': 200,
-            'data': {
-                'title': title,
-                'video_found': bool(video_match),
-                'audio_found': bool(audio_match),
-                'video_url': video_match.group(1) if video_match else None,
-                'audio_url': audio_match.group(1) if audio_match else None
-            }
-        })
+        resp = requests.get(api_url, headers=headers, timeout=10)
+        data = resp.json()
+        if data.get('code') == 0:
+            video_data = data['data']
+            title = video_data.get('title', '未知标题')
+            cid = video_data.get('cid')
+            # 获取视频下载地址（需要cid）
+            play_url = f'https://api.bilibili.com/x/player/playurl?bvid={bv_id}&cid={cid}&qn=80'
+            play_resp = requests.get(play_url, headers=headers, timeout=10)
+            play_data = play_resp.json()
+            if play_data.get('code') == 0:
+                dash = play_data['data'].get('dash', {})
+                video_url = dash['video'][0]['baseUrl'] if dash.get('video') else None
+                audio_url = dash['audio'][0]['baseUrl'] if dash.get('audio') else None
+                return jsonify({
+                    'code': 200,
+                    'data': {
+                        'title': title,
+                        'video_found': bool(video_url),
+                        'audio_found': bool(audio_url),
+                        'video_url': video_url,
+                        'audio_url': audio_url,
+                        'source': 'bilibili_api'
+                    }
+                })
+        return jsonify({'code': 404, 'msg': '获取视频信息失败'})
     except Exception as e:
         return jsonify({'code': 500, 'msg': str(e)})
-
 
 
 
