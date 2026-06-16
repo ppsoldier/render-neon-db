@@ -1202,48 +1202,63 @@ def download_video_simple():
         return jsonify({'code': 500, 'msg': str(e)})
 
 
-import re
-import requests
-import json
-
 @app.route('/api/video/test', methods=['POST'])
 def video_test():
+    """使用 B站官方 API 获取视频信息（无需 Cookie）"""
     data = request.get_json()
-    bv_id = data.get('url', '').split('/')[-1].split('?')[0]  # 提取BV号
+    video_url = data.get('url', '')
+    if not video_url:
+        return jsonify({'code': 400, 'msg': '链接为空'})
     
-    # 调用B站公开API获取视频信息
-    api_url = f'https://api.bilibili.com/x/web-interface/view?bvid={bv_id}'
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Referer': 'https://www.bilibili.com/'
-    }
+    # 从 URL 中提取 BV 号
+    bv_match = re.search(r'BV([a-zA-Z0-9]+)', video_url)
+    if not bv_match:
+        return jsonify({'code': 400, 'msg': '未找到 BV 号'})
+    bv_id = bv_match.group(0)
+    
     try:
+        # 1. 获取视频基本信息
+        api_url = f'https://api.bilibili.com/x/web-interface/view?bvid={bv_id}'
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         resp = requests.get(api_url, headers=headers, timeout=10)
         data = resp.json()
-        if data.get('code') == 0:
-            video_data = data['data']
-            title = video_data.get('title', '未知标题')
-            cid = video_data.get('cid')
-            # 获取视频下载地址（需要cid）
-            play_url = f'https://api.bilibili.com/x/player/playurl?bvid={bv_id}&cid={cid}&qn=80'
-            play_resp = requests.get(play_url, headers=headers, timeout=10)
-            play_data = play_resp.json()
-            if play_data.get('code') == 0:
-                dash = play_data['data'].get('dash', {})
-                video_url = dash['video'][0]['baseUrl'] if dash.get('video') else None
-                audio_url = dash['audio'][0]['baseUrl'] if dash.get('audio') else None
-                return jsonify({
-                    'code': 200,
-                    'data': {
-                        'title': title,
-                        'video_found': bool(video_url),
-                        'audio_found': bool(audio_url),
-                        'video_url': video_url,
-                        'audio_url': audio_url,
-                        'source': 'bilibili_api'
-                    }
-                })
-        return jsonify({'code': 404, 'msg': '获取视频信息失败'})
+        
+        if data.get('code') != 0:
+            return jsonify({'code': 404, 'msg': f'API 返回错误: {data.get("message")}'})
+        
+        video_data = data['data']
+        title = video_data.get('title', '未知标题')
+        cid = video_data.get('cid')
+        aid = video_data.get('aid')
+        
+        # 2. 获取视频播放地址
+        play_url = f'https://api.bilibili.com/x/player/playurl?bvid={bv_id}&cid={cid}&qn=80'
+        play_resp = requests.get(play_url, headers=headers, timeout=10)
+        play_data = play_resp.json()
+        
+        video_url_real = None
+        audio_url_real = None
+        if play_data.get('code') == 0:
+            dash = play_data['data'].get('dash', {})
+            if dash.get('video'):
+                video_url_real = dash['video'][0].get('baseUrl')
+            if dash.get('audio'):
+                audio_url_real = dash['audio'][0].get('baseUrl')
+        
+        return jsonify({
+            'code': 200,
+            'data': {
+                'title': title,
+                'bv_id': bv_id,
+                'cid': cid,
+                'aid': aid,
+                'video_found': bool(video_url_real),
+                'audio_found': bool(audio_url_real),
+                'video_url': video_url_real,
+                'audio_url': audio_url_real,
+                'source': 'bilibili_api'
+            }
+        })
     except Exception as e:
         return jsonify({'code': 500, 'msg': str(e)})
 
@@ -1251,76 +1266,103 @@ def video_test():
 
 @app.route('/api/video/download', methods=['POST'])
 def download_video():
-    """下载并合成视频（优化版）"""
+    """使用 B站官方 API 下载视频（无需 Cookie）"""
     data = request.get_json()
     video_url = data.get('url', '')
     if not video_url:
         return jsonify({'code': 400, 'msg': '视频链接不能为空'})
     
-    video_path = None
-    audio_path = None
-    output_path = None
+    # 提取 BV 号
+    bv_match = re.search(r'BV([a-zA-Z0-9]+)', video_url)
+    if not bv_match:
+        return jsonify({'code': 400, 'msg': '未找到 BV 号'})
+    bv_id = bv_match.group(0)
     
     try:
-        # 获取视频详情页
-        resp = requests.get(video_url, cookies=BILI_COOKIES, headers=BILI_HEADERS, timeout=10)
-        html = resp.text
+        # 1. 获取视频基本信息
+        api_url = f'https://api.bilibili.com/x/web-interface/view?bvid={bv_id}'
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        resp = requests.get(api_url, headers=headers, timeout=10)
+        data = resp.json()
         
-        # 提取标题
-        title_match = re.search(r'<title>(.*?)_哔哩哔哩_bilibili</title>', html)
-        if not title_match:
-            return jsonify({'code': 404, 'msg': '未找到视频标题'})
-        title = title_match.group(1).replace(' ', '').replace('|', '').replace("'", '').replace('/', '_')
+        if data.get('code') != 0:
+            return jsonify({'code': 404, 'msg': f'API 返回错误: {data.get("message")}'})
         
-        # 提取视频和音频地址
-        video_match = re.search(r'"video".*?"baseUrl":"(.*?)"', html)
-        audio_match = re.search(r'"audio".*?"baseUrl":"(.*?)"', html)
+        video_data = data['data']
+        title = video_data.get('title', '未知标题').replace(' ', '').replace('|', '').replace("'", '').replace('/', '_')
+        cid = video_data.get('cid')
         
-        if not video_match or not audio_match:
-            return jsonify({'code': 404, 'msg': '未找到视频或音频源'})
+        # 2. 获取播放地址
+        play_url = f'https://api.bilibili.com/x/player/playurl?bvid={bv_id}&cid={cid}&qn=80'
+        play_resp = requests.get(play_url, headers=headers, timeout=10)
+        play_data = play_resp.json()
         
-        video_url_real = video_match.group(1)
-        audio_url_real = audio_match.group(1)
+        if play_data.get('code') != 0:
+            return jsonify({'code': 404, 'msg': '获取播放地址失败'})
         
-        # 临时文件路径
+        dash = play_data['data'].get('dash', {})
+        video_url_real = dash['video'][0]['baseUrl'] if dash.get('video') else None
+        audio_url_real = dash['audio'][0]['baseUrl'] if dash.get('audio') else None
+        
+        if not video_url_real:
+            return jsonify({'code': 404, 'msg': '未找到视频源'})
+        
+        # 3. 检查 FFmpeg 是否可用
+        ffmpeg_available = False
+        try:
+            subprocess.run(['ffmpeg', '-version'], capture_output=True, timeout=5, check=False)
+            ffmpeg_available = True
+        except:
+            pass
+        
         temp_id = str(uuid.uuid4())[:8]
         video_path = f'/tmp/{temp_id}_{title}.mp4'
         audio_path = f'/tmp/{temp_id}_{title}.mp3'
         output_path = f'/tmp/{temp_id}_{title}_合成.mp4'
         
-        # 下载视频和音频（增加超时和流式下载）
+        # 4. 下载视频
         print(f"开始下载视频: {title}")
-        video_content = requests.get(video_url_real, headers=BILI_HEADERS, timeout=60).content
-        audio_content = requests.get(audio_url_real, headers=BILI_HEADERS, timeout=60).content
-        
+        v_resp = requests.get(video_url_real, headers=headers, timeout=60, stream=True)
         with open(video_path, 'wb') as f:
-            f.write(video_content)
-        with open(audio_path, 'wb') as f:
-            f.write(audio_content)
+            for chunk in v_resp.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
         
-        print(f"开始合成: {title}")
-        # 使用 subprocess 运行 ffmpeg
-        cmd = f'ffmpeg -i "{video_path}" -i "{audio_path}" -c:v copy -c:a copy "{output_path}" -y -loglevel quiet'
-        result = subprocess.run(cmd, shell=True, timeout=180, capture_output=True)
+        # 5. 如果有音频且 FFmpeg 可用，下载音频并合成
+        if audio_url_real and ffmpeg_available:
+            try:
+                print("开始下载音频...")
+                a_resp = requests.get(audio_url_real, headers=headers, timeout=60, stream=True)
+                with open(audio_path, 'wb') as f:
+                    for chunk in a_resp.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+                
+                print("开始合成视频...")
+                cmd = f'ffmpeg -i "{video_path}" -i "{audio_path}" -c:v copy -c:a copy "{output_path}" -y -loglevel error'
+                result = subprocess.run(cmd, shell=True, timeout=300, capture_output=True)
+                
+                if result.returncode == 0 and os.path.exists(output_path):
+                    # 返回合成文件
+                    return send_file(
+                        output_path,
+                        as_attachment=True,
+                        download_name=f'{title}.mp4',
+                        mimetype='video/mp4'
+                    )
+            except Exception as e:
+                print(f"合成失败: {e}")
         
-        if result.returncode != 0:
-            print(f"FFmpeg 错误: {result.stderr}")
-            return jsonify({'code': 500, 'msg': '合成失败，请检查 ffmpeg 是否安装'})
-        
-        # 返回文件
+        # 6. 如果没有音频或合成失败，直接返回视频文件
         return send_file(
-            output_path,
+            video_path,
             as_attachment=True,
             download_name=f'{title}.mp4',
             mimetype='video/mp4'
         )
         
-    except subprocess.TimeoutExpired:
-        return jsonify({'code': 500, 'msg': '合成超时，视频可能过大'})
-    except requests.Timeout:
-        return jsonify({'code': 500, 'msg': '下载超时，请稍后重试'})
     except Exception as e:
-        print(f"下载视频错误: {str(e)}")
+        print(f"下载错误: {e}")
         return jsonify({'code': 500, 'msg': str(e)})
     finally:
         # 清理临时文件
@@ -1328,9 +1370,9 @@ def download_video():
             if path and os.path.exists(path):
                 try:
                     os.remove(path)
-                    print(f"已删除临时文件: {path}")
                 except:
                     pass
+
 
 
 
