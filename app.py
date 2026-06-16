@@ -1053,6 +1053,7 @@ from docx import Document
 from docx.shared import Pt
 from io import BytesIO
 
+        
 @app.route("/api/translate/export", methods=["POST"])
 def export_translation():
     data = request.get_json()
@@ -1196,6 +1197,41 @@ def download_video_simple():
         
         return Response(generate(), mimetype='video/mp4', headers={
             'Content-Disposition': f'attachment; filename={title}.mp4'
+        })
+    except Exception as e:
+        return jsonify({'code': 500, 'msg': str(e)})
+
+
+@app.route('/api/video/test', methods=['POST'])
+def video_test():
+    """测试接口，只解析视频信息不下载"""
+    import re
+    data = request.get_json()
+    video_url = data.get('url', '')
+    if not video_url:
+        return jsonify({'code': 400, 'msg': '链接为空'})
+    
+    try:
+        resp = requests.get(video_url, cookies=BILI_COOKIES, headers=BILI_HEADERS, timeout=10)
+        html = resp.text
+        
+        # 提取标题
+        title_match = re.search(r'<title>(.*?)_哔哩哔哩_bilibili</title>', html)
+        title = title_match.group(1) if title_match else '未知标题'
+        
+        # 提取视频地址
+        video_match = re.search(r'"video".*?"baseUrl":"(.*?)"', html)
+        audio_match = re.search(r'"audio".*?"baseUrl":"(.*?)"', html)
+        
+        return jsonify({
+            'code': 200,
+            'data': {
+                'title': title,
+                'video_found': bool(video_match),
+                'audio_found': bool(audio_match),
+                'video_url': video_match.group(1) if video_match else None,
+                'audio_url': audio_match.group(1) if audio_match else None
+            }
         })
     except Exception as e:
         return jsonify({'code': 500, 'msg': str(e)})
