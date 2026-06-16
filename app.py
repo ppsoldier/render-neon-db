@@ -1049,7 +1049,39 @@ def translate_docx_api():
 
 
 
+from docx import Document
+from docx.shared import Pt
+from io import BytesIO
 
+@app.route("/api/translate/export", methods=["POST"])
+def export_translation():
+    data = request.get_json()
+    text = data.get('text', '')
+    if not text:
+        return jsonify({"code": 400, "msg": "文本不能为空"})
+    try:
+        doc = Document()
+        title = doc.add_heading('翻译结果', level=1)
+        title.alignment = 1  # 居中
+        # 将文本按换行符分割，逐段添加
+        paragraphs = text.split('\n')
+        for para in paragraphs:
+            if para.strip():
+                p = doc.add_paragraph(para)
+                p.runs[0].font.size = Pt(11)
+            else:
+                doc.add_paragraph()  # 空行
+        output = BytesIO()
+        doc.save(output)
+        output.seek(0)
+        return send_file(
+            output,
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',  # 实际应使用 word 的 mimetype
+            as_attachment=True,
+            download_name=f'翻译结果_{datetime.now().strftime("%Y%m%d_%H%M%S")}.docx'
+        )
+    except Exception as e:
+        return jsonify({"code": 500, "msg": str(e)})
 
 
 
