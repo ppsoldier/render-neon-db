@@ -1155,13 +1155,27 @@ def search_videos():
         return jsonify({'code': 500, 'msg': str(e)})
 
 
+import subprocess
+import os
+import uuid
+import requests
+import re
+from flask import request, jsonify, send_file
+
+# 在 app.py 顶部添加 subprocess 导入
+import subprocess
+
 @app.route('/api/video/download', methods=['POST'])
 def download_video():
-    """下载并合成视频"""
+    """下载并合成视频（优化版）"""
     data = request.get_json()
     video_url = data.get('url', '')
     if not video_url:
         return jsonify({'code': 400, 'msg': '视频链接不能为空'})
+    
+    video_path = None
+    audio_path = None
+    output_path = None
     
     try:
         # 获取视频详情页
@@ -1172,7 +1186,7 @@ def download_video():
         title_match = re.search(r'<title>(.*?)_哔哩哔哩_bilibili</title>', html)
         if not title_match:
             return jsonify({'code': 404, 'msg': '未找到视频标题'})
-        title = title_match.group(1).replace(' ', '').replace('|', '').replace("'", '')
+        title = title_match.group(1).replace(' ', '').replace('|', '').replace("'", '').replace('/', '_')
         
         # 提取视频和音频地址
         video_match = re.search(r'"video".*?"baseUrl":"(.*?)"', html)
@@ -1184,25 +1198,30 @@ def download_video():
         video_url_real = video_match.group(1)
         audio_url_real = audio_match.group(1)
         
-        # 下载视频和音频
-        video_content = requests.get(video_url_real, headers=BILI_HEADERS, timeout=30).content
-        audio_content = requests.get(audio_url_real, headers=BILI_HEADERS, timeout=30).content
-        
-        # 保存临时文件
+        # 临时文件路径
         temp_id = str(uuid.uuid4())[:8]
         video_path = f'/tmp/{temp_id}_{title}.mp4'
         audio_path = f'/tmp/{temp_id}_{title}.mp3'
         output_path = f'/tmp/{temp_id}_{title}_合成.mp4'
+        
+        # 下载视频和音频（增加超时和流式下载）
+        print(f"开始下载视频: {title}")
+        video_content = requests.get(video_url_real, headers=BILI_HEADERS, timeout=60).content
+        audio_content = requests.get(audio_url_real, headers=BILI_HEADERS, timeout=60).content
         
         with open(video_path, 'wb') as f:
             f.write(video_content)
         with open(audio_path, 'wb') as f:
             f.write(audio_content)
         
-        # FFmpeg合成（使用系统命令，需要服务器安装ffmpeg）
-        import subprocess
+        print(f"开始合成: {title}")
+        # 使用 subprocess 运行 ffmpeg
         cmd = f'ffmpeg -i "{video_path}" -i "{audio_path}" -c:v copy -c:a copy "{output_path}" -y -loglevel quiet'
-        subprocess.run(cmd, shell=True, timeout=120)
+        result = subprocess.run(cmd, shell=True, timeout=180, capture_output=True)
+        
+        if result.returncode != 0:
+            print(f"FFmpeg 错误: {result.stderr}")
+            return jsonify({'code': 500, 'msg': '合成失败，请检查 ffmpeg 是否安装'})
         
         # 返回文件
         return send_file(
@@ -1211,18 +1230,23 @@ def download_video():
             download_name=f'{title}.mp4',
             mimetype='video/mp4'
         )
+        
     except subprocess.TimeoutExpired:
-        return jsonify({'code': 500, 'msg': '合成超时'})
+        return jsonify({'code': 500, 'msg': '合成超时，视频可能过大'})
+    except requests.Timeout:
+        return jsonify({'code': 500, 'msg': '下载超时，请稍后重试'})
     except Exception as e:
+        print(f"下载视频错误: {str(e)}")
         return jsonify({'code': 500, 'msg': str(e)})
     finally:
         # 清理临时文件
         for path in [video_path, audio_path, output_path]:
-            try:
-                if os.path.exists(path):
+            if path and os.path.exists(path):
+                try:
                     os.remove(path)
-            except:
-                pass
+                    print(f"已删除临时文件: {path}")
+                except:
+                    pass
 
 
 
