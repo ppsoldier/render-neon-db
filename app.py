@@ -1379,7 +1379,9 @@ def download_video():
                     pass
 
 
-
+@app.route('/')
+def index():
+    return "服务运行正常"
 
 
 # ==================== 教师管理模块 ====================
