@@ -869,9 +869,10 @@ import random
 import re
 import json
 import time
+import requests
 from io import BytesIO
-from docx import Document
 
+# 有道翻译相关函数
 def md5_hex(text):
     return hashlib.md5(text.encode('utf-8')).hexdigest()
 
@@ -919,38 +920,9 @@ def extract_by_line_parsing(response_text):
                     translation_parts.append(match.group(1))
     return "".join(translation_parts)
 
-def translate_text(text):
+def _single_translate(text, secret_key="QGCmKoX7N7wACtICx3PSaWzoPJza2DSC"):
     if not text:
         return ""
-    # 分段处理长文本（每段5000字符）
-    max_len = 5000
-    if len(text) > max_len:
-        paragraphs = text.split('\n\n')
-        chunks = []
-        current = ""
-        for para in paragraphs:
-            if len(current) + len(para) + 2 <= max_len:
-                if current:
-                    current += "\n\n" + para
-                else:
-                    current = para
-            else:
-                if current:
-                    chunks.append(current)
-                current = para
-        if current:
-            chunks.append(current)
-        results = []
-        for chunk in chunks:
-            trans = _single_translate(chunk)
-            if trans:
-                results.append(trans)
-            time.sleep(1)
-        return "\n\n".join(results)
-    else:
-        return _single_translate(text)
-
-def _single_translate(text):
     yduuid = get_yduuid()
     headers = {
         'Referer': 'https://fanyi.youdao.com/',
@@ -986,7 +958,7 @@ def _single_translate(text):
         "vendor": "web",
         "yduuid": yduuid
     }
-    sign, point_param = generate_sign(params_for_sign, "QGCmKoX7N7wACtICx3PSaWzoPJza2DSC")
+    sign, point_param = generate_sign(params_for_sign, secret_key)
     post_data = {**params_for_sign, "sign": sign, "pointParam": point_param}
     cookies = {
         'OUTFOX_SEARCH_USER_ID': '-1116170267@113.111.81.100',
@@ -1012,11 +984,48 @@ def _single_translate(text):
         translation = extract_by_line_parsing(response.text)
     return translation
 
-def read_word_file(file_bytes):
-    doc = Document(BytesIO(file_bytes))
-    paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
-    return "\n\n".join(paragraphs)
+def translate_text(text):
+    """翻译长文本（自动分段）"""
+    if not text:
+        return ""
+    max_len = 5000
+    if len(text) > max_len:
+        paragraphs = text.split('\n\n')
+        chunks = []
+        current = ""
+        for para in paragraphs:
+            if len(current) + len(para) + 2 <= max_len:
+                if current:
+                    current += "\n\n" + para
+                else:
+                    current = para
+            else:
+                if current:
+                    chunks.append(current)
+                current = para
+        if current:
+            chunks.append(current)
+        results = []
+        for chunk in chunks:
+            trans = _single_translate(chunk)
+            if trans:
+                results.append(trans)
+            time.sleep(1)  # 避免请求过快
+        return "\n\n".join(results)
+    else:
+        return _single_translate(text)
 
+def read_word_file(file_bytes):
+    """从字节流读取 docx 内容"""
+    try:
+        from docx import Document
+        doc = Document(BytesIO(file_bytes))
+        paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+        return "\n\n".join(paragraphs)
+    except ImportError:
+        return None
+
+# ========== 翻译路由 ==========
 @app.route("/api/translate/text", methods=["POST"])
 def translate_text_api():
     """文本翻译接口"""
@@ -1033,7 +1042,7 @@ def translate_text_api():
 
 @app.route("/api/translate/docx", methods=["POST"])
 def translate_docx_api():
-    """Word文档翻译接口"""
+    """Word 文档翻译接口"""
     if 'file' not in request.files:
         return jsonify({"code": 400, "msg": "未上传文件"})
     file = request.files['file']
@@ -1041,6 +1050,8 @@ def translate_docx_api():
         return jsonify({"code": 400, "msg": "仅支持 .docx 格式"})
     try:
         content = read_word_file(file.read())
+        if content is None:
+            return jsonify({"code": 500, "msg": "python-docx 未安装，无法处理文档"})
         if not content:
             return jsonify({"code": 400, "msg": "文档内容为空"})
         result = translate_text(content)
@@ -1051,7 +1062,7 @@ def translate_docx_api():
 
 @app.route("/api/translate/export", methods=["POST"])
 def export_translation():
-    """导出翻译结果到Word"""
+    """导出翻译结果到 Word"""
     data = request.get_json()
     text = data.get('text', '')
     if not text:
@@ -1059,12 +1070,11 @@ def export_translation():
     try:
         from docx import Document
         from docx.shared import Pt
-        from io import BytesIO
         from datetime import datetime
         
         doc = Document()
         title = doc.add_heading('翻译结果', level=1)
-        title.alignment = 1
+        title.alignment = 1  # 居中
         paragraphs = text.split('\n')
         for para in paragraphs:
             if para.strip():
@@ -1081,14 +1091,15 @@ def export_translation():
             as_attachment=True,
             download_name=f'翻译结果_{datetime.now().strftime("%Y%m%d_%H%M%S")}.docx'
         )
+    except ImportError:
+        return jsonify({"code": 500, "msg": "python-docx 未安装，无法导出"})
     except Exception as e:
+        print(f"导出错误: {str(e)}")
         return jsonify({"code": 500, "msg": str(e)})
-        
-
 
 @app.route("/test")
 def test():
-    return "test ok"
+    return "服务运行正常"
 
 
 
