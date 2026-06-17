@@ -746,249 +746,6 @@ def test_remind():
 
 
 
-
-
-
-
-
-# ==================== 文档翻译模块 ====================
-
-
-# 有道翻译相关函数
-def md5_hex(text):
-    return hashlib.md5(text.encode('utf-8')).hexdigest()
-
-def generate_sign(params, secret_key):
-    i = params.copy()
-    keys_to_delete = [k for k, v in i.items() if v == ""]
-    for k in keys_to_delete:
-        del i[k]
-    o = sorted([k for k in i.keys() if i[k] is not None])
-    o.append("key")
-    i["key"] = secret_key
-    a = "&".join([f"{k}={i[k]}" for k in o])
-    sign = md5_hex(a)
-    point_param = ",".join(o[:-1])
-    return sign, point_param
-
-def get_yduuid():
-    random_num = str(random.randint(100, 9999))
-    return md5_hex(random_num)
-
-def extract_translation_from_sse(response_text):
-    pattern = r'data:{"model":"yd_agent","content":"(.*?)"}'
-    matches = re.findall(pattern, response_text)
-    if matches:
-        return "".join(matches)
-    pattern2 = r'"content":"([^"]*)"'
-    matches2 = re.findall(pattern2, response_text)
-    if matches2:
-        return "".join([m for m in matches2 if m])
-    return None
-
-def extract_by_line_parsing(response_text):
-    translation_parts = []
-    lines = response_text.strip().split('\n')
-    for line in lines:
-        if line.startswith('data:'):
-            data_str = line[5:]
-            try:
-                data = json.loads(data_str)
-                if 'content' in data:
-                    translation_parts.append(data['content'])
-            except:
-                match = re.search(r'"content":"(.*?)"', data_str)
-                if match:
-                    translation_parts.append(match.group(1))
-    return "".join(translation_parts)
-
-def _single_translate(text, secret_key="QGCmKoX7N7wACtICx3PSaWzoPJza2DSC"):
-    if not text:
-        return ""
-    yduuid = get_yduuid()
-    headers = {
-        'Referer': 'https://fanyi.youdao.com/',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-    }
-    token_url = f'https://luna-ai.youdao.com/translate_llm/secret?keyid=ai-translate-llm-pre&sign=dd26324657a782cf42f707647fa67d08&client=fanyideskweb&product=webfanyi&appVersion=12.0.0&vendor=web&pointParam=client,mysticTime,product&mysticTime=1776899320882&keyfrom=fanyi.web&mid=1&screen=1&model=1&network=wifi&abtest=0&yduuid={yduuid}'
-    res = requests.get(url=token_url, headers=headers)
-    token = res.json()['data']['token']
-    time_stamp = int(time.time() * 1000)
-
-    params_for_sign = {
-        "appVersion": "12.0.0",
-        "client": "webaitrans",
-        "free": "false",
-        "fromLang": "auto",
-        "functionEnglishName": "LLM_translate",
-        "imei": "1",
-        "input": text,
-        "keyfrom": "webfanyi.webaitrans",
-        "keyid": "ai-translate-llm",
-        "mid": "1",
-        "model": "1",
-        "mysticTime": str(time_stamp),
-        "network": "wifi",
-        "product": "webfanyi",
-        "roundNo": "1",
-        "screen": "1",
-        "showSuggest": "0",
-        "singleBox": "false",
-        "source": "webaitrans",
-        "token": token,
-        "useTerm": "0",
-        "vendor": "web",
-        "yduuid": yduuid
-    }
-    sign, point_param = generate_sign(params_for_sign, secret_key)
-    post_data = {**params_for_sign, "sign": sign, "pointParam": point_param}
-    cookies = {
-        'OUTFOX_SEARCH_USER_ID': '-1116170267@113.111.81.100',
-        'OUTFOX_SEARCH_USER_ID_NCOO': '31318005.898740534',
-    }
-    headers_post = {
-        'Accept': '*/*',
-        'Accept-Language': 'zh-CN,zh;q=0.9',
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Origin': 'https://fanyi.youdao.com',
-        'Referer': 'https://fanyi.youdao.com/',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-    }
-    response = requests.post(
-        'https://luna-ai.youdao.com/translate_llm/v3/chat',
-        cookies=cookies,
-        headers=headers_post,
-        data=post_data,
-        timeout=30
-    )
-    translation = extract_translation_from_sse(response.text)
-    if not translation:
-        translation = extract_by_line_parsing(response.text)
-    return translation
-
-def translate_text(text):
-    """翻译长文本（自动分段）"""
-    if not text:
-        return ""
-    max_len = 5000
-    if len(text) > max_len:
-        paragraphs = text.split('\n\n')
-        chunks = []
-        current = ""
-        for para in paragraphs:
-            if len(current) + len(para) + 2 <= max_len:
-                if current:
-                    current += "\n\n" + para
-                else:
-                    current = para
-            else:
-                if current:
-                    chunks.append(current)
-                current = para
-        if current:
-            chunks.append(current)
-        results = []
-        for chunk in chunks:
-            trans = _single_translate(chunk)
-            if trans:
-                results.append(trans)
-            time.sleep(1)  # 避免请求过快
-        return "\n\n".join(results)
-    else:
-        return _single_translate(text)
-
-def read_word_file(file_bytes):
-    """从字节流读取 docx 内容"""
-    try:
-        from docx import Document
-        doc = Document(BytesIO(file_bytes))
-        paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
-        return "\n\n".join(paragraphs)
-    except ImportError:
-        return None
-
-# ========== 翻译路由 ==========
-@app.route("/api/translate/text", methods=["POST"])
-def translate_text_api():
-    try:
-        data = request.get_json()
-        text = data.get('text', '')
-        if not text:
-            return jsonify({"code": 400, "msg": "文本不能为空"})
-        result = translate_text(text)
-        return jsonify({"code": 200, "data": result})
-    except Exception as e:
-        import traceback
-        error_msg = str(e) + "\n" + traceback.format_exc()
-        print(error_msg)  # 打印到日志
-        return jsonify({"code": 500, "msg": "翻译失败: " + str(e)}), 500
-
-
-
-@app.route("/api/translate/docx", methods=["POST"])
-def translate_docx_api():
-    """Word 文档翻译接口"""
-    if 'file' not in request.files:
-        return jsonify({"code": 400, "msg": "未上传文件"})
-    file = request.files['file']
-    if not file.filename.endswith('.docx'):
-        return jsonify({"code": 400, "msg": "仅支持 .docx 格式"})
-    try:
-        content = read_word_file(file.read())
-        if content is None:
-            return jsonify({"code": 500, "msg": "python-docx 未安装，无法处理文档"})
-        if not content:
-            return jsonify({"code": 400, "msg": "文档内容为空"})
-        result = translate_text(content)
-        return jsonify({"code": 200, "data": result})
-    except Exception as e:
-        print(f"文档翻译错误: {str(e)}")
-        return jsonify({"code": 500, "msg": str(e)})
-
-@app.route("/api/translate/export", methods=["POST"])
-def export_translation():
-    """导出翻译结果到 Word"""
-    data = request.get_json()
-    text = data.get('text', '')
-    if not text:
-        return jsonify({"code": 400, "msg": "文本不能为空"})
-    try:
-        from docx import Document
-        from docx.shared import Pt
-        from datetime import datetime
-        
-        doc = Document()
-        title = doc.add_heading('翻译结果', level=1)
-        title.alignment = 1  # 居中
-        paragraphs = text.split('\n')
-        for para in paragraphs:
-            if para.strip():
-                p = doc.add_paragraph(para)
-                p.runs[0].font.size = Pt(11)
-            else:
-                doc.add_paragraph()
-        output = BytesIO()
-        doc.save(output)
-        output.seek(0)
-        return send_file(
-            output,
-            mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-            as_attachment=True,
-            download_name=f'翻译结果_{datetime.now().strftime("%Y%m%d_%H%M%S")}.docx'
-        )
-    except ImportError:
-        return jsonify({"code": 500, "msg": "python-docx 未安装，无法导出"})
-    except Exception as e:
-        print(f"导出错误: {str(e)}")
-        return jsonify({"code": 500, "msg": str(e)})
-
-@app.route("/test")
-def test():
-    return "服务运行正常"
-
-
-
-
 import re
 import requests
 import os
@@ -1280,6 +1037,245 @@ def download_video():
 @app.route('/')
 def index():
     return "服务运行正常"
+
+
+
+
+
+# ==================== 文档翻译模块 ====================
+# 有道翻译相关函数
+def md5_hex(text):
+    return hashlib.md5(text.encode('utf-8')).hexdigest()
+
+def generate_sign(params, secret_key):
+    i = params.copy()
+    keys_to_delete = [k for k, v in i.items() if v == ""]
+    for k in keys_to_delete:
+        del i[k]
+    o = sorted([k for k in i.keys() if i[k] is not None])
+    o.append("key")
+    i["key"] = secret_key
+    a = "&".join([f"{k}={i[k]}" for k in o])
+    sign = md5_hex(a)
+    point_param = ",".join(o[:-1])
+    return sign, point_param
+
+def get_yduuid():
+    random_num = str(random.randint(100, 9999))
+    return md5_hex(random_num)
+
+def extract_translation_from_sse(response_text):
+    pattern = r'data:{"model":"yd_agent","content":"(.*?)"}'
+    matches = re.findall(pattern, response_text)
+    if matches:
+        return "".join(matches)
+    pattern2 = r'"content":"([^"]*)"'
+    matches2 = re.findall(pattern2, response_text)
+    if matches2:
+        return "".join([m for m in matches2 if m])
+    return None
+
+def extract_by_line_parsing(response_text):
+    translation_parts = []
+    lines = response_text.strip().split('\n')
+    for line in lines:
+        if line.startswith('data:'):
+            data_str = line[5:]
+            try:
+                data = json.loads(data_str)
+                if 'content' in data:
+                    translation_parts.append(data['content'])
+            except:
+                match = re.search(r'"content":"(.*?)"', data_str)
+                if match:
+                    translation_parts.append(match.group(1))
+    return "".join(translation_parts)
+
+def _single_translate(text, secret_key="QGCmKoX7N7wACtICx3PSaWzoPJza2DSC"):
+    if not text:
+        return ""
+    yduuid = get_yduuid()
+    headers = {
+        'Referer': 'https://fanyi.youdao.com/',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    }
+    token_url = f'https://luna-ai.youdao.com/translate_llm/secret?keyid=ai-translate-llm-pre&sign=dd26324657a782cf42f707647fa67d08&client=fanyideskweb&product=webfanyi&appVersion=12.0.0&vendor=web&pointParam=client,mysticTime,product&mysticTime=1776899320882&keyfrom=fanyi.web&mid=1&screen=1&model=1&network=wifi&abtest=0&yduuid={yduuid}'
+    res = requests.get(url=token_url, headers=headers)
+    token = res.json()['data']['token']
+    time_stamp = int(time.time() * 1000)
+
+    params_for_sign = {
+        "appVersion": "12.0.0",
+        "client": "webaitrans",
+        "free": "false",
+        "fromLang": "auto",
+        "functionEnglishName": "LLM_translate",
+        "imei": "1",
+        "input": text,
+        "keyfrom": "webfanyi.webaitrans",
+        "keyid": "ai-translate-llm",
+        "mid": "1",
+        "model": "1",
+        "mysticTime": str(time_stamp),
+        "network": "wifi",
+        "product": "webfanyi",
+        "roundNo": "1",
+        "screen": "1",
+        "showSuggest": "0",
+        "singleBox": "false",
+        "source": "webaitrans",
+        "token": token,
+        "useTerm": "0",
+        "vendor": "web",
+        "yduuid": yduuid
+    }
+    sign, point_param = generate_sign(params_for_sign, secret_key)
+    post_data = {**params_for_sign, "sign": sign, "pointParam": point_param}
+    cookies = {
+        'OUTFOX_SEARCH_USER_ID': '-1116170267@113.111.81.100',
+        'OUTFOX_SEARCH_USER_ID_NCOO': '31318005.898740534',
+    }
+    headers_post = {
+        'Accept': '*/*',
+        'Accept-Language': 'zh-CN,zh;q=0.9',
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Origin': 'https://fanyi.youdao.com',
+        'Referer': 'https://fanyi.youdao.com/',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    }
+    response = requests.post(
+        'https://luna-ai.youdao.com/translate_llm/v3/chat',
+        cookies=cookies,
+        headers=headers_post,
+        data=post_data,
+        timeout=30
+    )
+    translation = extract_translation_from_sse(response.text)
+    if not translation:
+        translation = extract_by_line_parsing(response.text)
+    return translation
+
+def translate_text(text):
+    """翻译长文本（自动分段）"""
+    if not text:
+        return ""
+    max_len = 5000
+    if len(text) > max_len:
+        paragraphs = text.split('\n\n')
+        chunks = []
+        current = ""
+        for para in paragraphs:
+            if len(current) + len(para) + 2 <= max_len:
+                if current:
+                    current += "\n\n" + para
+                else:
+                    current = para
+            else:
+                if current:
+                    chunks.append(current)
+                current = para
+        if current:
+            chunks.append(current)
+        results = []
+        for chunk in chunks:
+            trans = _single_translate(chunk)
+            if trans:
+                results.append(trans)
+            time.sleep(1)  # 避免请求过快
+        return "\n\n".join(results)
+    else:
+        return _single_translate(text)
+
+def read_word_file(file_bytes):
+    """从字节流读取 docx 内容"""
+    try:
+        from docx import Document
+        doc = Document(BytesIO(file_bytes))
+        paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+        return "\n\n".join(paragraphs)
+    except ImportError:
+        return None
+
+# ========== 翻译路由 ==========
+@app.route("/api/translate/text", methods=["POST"])
+def translate_text_api():
+    try:
+        data = request.get_json()
+        text = data.get('text', '')
+        if not text:
+            return jsonify({"code": 400, "msg": "文本不能为空"})
+        result = translate_text(text)
+        return jsonify({"code": 200, "data": result})
+    except Exception as e:
+        import traceback
+        error_msg = str(e) + "\n" + traceback.format_exc()
+        print(error_msg)  # 打印到日志
+        return jsonify({"code": 500, "msg": "翻译失败: " + str(e)}), 500
+
+
+
+@app.route("/api/translate/docx", methods=["POST"])
+def translate_docx_api():
+    """Word 文档翻译接口"""
+    if 'file' not in request.files:
+        return jsonify({"code": 400, "msg": "未上传文件"})
+    file = request.files['file']
+    if not file.filename.endswith('.docx'):
+        return jsonify({"code": 400, "msg": "仅支持 .docx 格式"})
+    try:
+        content = read_word_file(file.read())
+        if content is None:
+            return jsonify({"code": 500, "msg": "python-docx 未安装，无法处理文档"})
+        if not content:
+            return jsonify({"code": 400, "msg": "文档内容为空"})
+        result = translate_text(content)
+        return jsonify({"code": 200, "data": result})
+    except Exception as e:
+        print(f"文档翻译错误: {str(e)}")
+        return jsonify({"code": 500, "msg": str(e)})
+
+@app.route("/api/translate/export", methods=["POST"])
+def export_translation():
+    """导出翻译结果到 Word"""
+    data = request.get_json()
+    text = data.get('text', '')
+    if not text:
+        return jsonify({"code": 400, "msg": "文本不能为空"})
+    try:
+        from docx import Document
+        from docx.shared import Pt
+        from datetime import datetime
+        
+        doc = Document()
+        title = doc.add_heading('翻译结果', level=1)
+        title.alignment = 1  # 居中
+        paragraphs = text.split('\n')
+        for para in paragraphs:
+            if para.strip():
+                p = doc.add_paragraph(para)
+                p.runs[0].font.size = Pt(11)
+            else:
+                doc.add_paragraph()
+        output = BytesIO()
+        doc.save(output)
+        output.seek(0)
+        return send_file(
+            output,
+            mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            as_attachment=True,
+            download_name=f'翻译结果_{datetime.now().strftime("%Y%m%d_%H%M%S")}.docx'
+        )
+    except ImportError:
+        return jsonify({"code": 500, "msg": "python-docx 未安装，无法导出"})
+    except Exception as e:
+        print(f"导出错误: {str(e)}")
+        return jsonify({"code": 500, "msg": str(e)})
+
+@app.route("/test")
+def test():
+    return "服务运行正常"
+
+
 
 
 
