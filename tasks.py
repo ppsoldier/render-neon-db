@@ -1,3 +1,4 @@
+cat > tasks.py << 'EOF'
 # tasks.py
 from celery_app import app
 from celery import Task
@@ -8,43 +9,53 @@ import uuid
 import subprocess
 import time
 import json
-from datetime import datetime
-from requests.exceptions import ChunkedEncodingError, ConnectionError, Timeout
 import redis
 import base64
-
-
+from datetime import datetime
+from requests.exceptions import ChunkedEncodingError, ConnectionError, Timeout
 
 # ========== 任务状态存储 ==========
 _task_status_store = {}
 _task_result_store = {}
 
 def set_task_status(task_id, status):
-    """设置任务状态"""
     _task_status_store[task_id] = status
 
 def get_task_status(task_id):
-    """获取任务状态"""
     return _task_status_store.get(task_id, {'status': 'not_found'})
 
 def set_task_result(task_id, result):
-    """设置任务结果"""
     _task_result_store[task_id] = result
 
 def get_task_result(task_id):
-    """获取任务结果"""
     return _task_result_store.get(task_id)
+
+def store_video_to_redis(task_id, file_path):
+    """将视频文件存储到 Redis"""
+    try:
+        redis_url = os.environ.get('REDIS_URL')
+        if not redis_url:
+            print("REDIS_URL 未设置，跳过存储")
+            return False
+        r = redis.from_url(redis_url)
+        with open(file_path, 'rb') as f:
+            file_data = base64.b64encode(f.read()).decode('utf-8')
+        r.setex(f'video:{task_id}', 3600, file_data)
+        print(f"视频已存储到 Redis: {task_id}, 大小: {len(file_data)} bytes")
+        return True
+    except Exception as e:
+        print(f"存储到 Redis 失败: {e}")
+        return False
 
 
 # ========== B站请求配置 ==========
 BILI_HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
     'Referer': 'https://www.bilibili.com/',
     'Accept': 'application/json, text/plain, */*',
     'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
 }
 
-# B站Cookie（从浏览器获取，过期需更新）
 BILI_COOKIES = {
     'buvid3': 'E1AC41CE-8298-B4E8-2B11-711D83FCEB4D07978infoc',
     'b_nut': '1774395407',
@@ -66,14 +77,11 @@ BILI_COOKIES = {
 }
 
 
-# ========== 辅助函数 ==========
 def parse_video_page(url):
-    """使用 B 站 API 获取视频信息"""
+    """解析 B 站视频页面"""
     bv_match = re.search(r'BV([a-zA-Z0-9]+)', url)
     if not bv_match:
-        print(f"未找到 BV 号: {url}")
         return None
-
     bvid = bv_match.group(0)
     print(f"解析 BV 号: {bvid}")
 
@@ -81,89 +89,53 @@ def parse_video_page(url):
         api_url = f'https://api.bilibili.com/x/web-interface/view?bvid={bvid}'
         resp = requests.get(api_url, headers=BILI_HEADERS, cookies=BILI_COOKIES, timeout=10)
         data = resp.json()
-        print(f"B站API返回: code={data.get('code')}")
-
         if data.get('code') != 0:
-            print(f"B站API错误: {data.get('message')}")
             return None
-
         video_data = data['data']
         title = video_data.get('title', '未知标题')
         cid = video_data.get('cid')
-        print(f"视频标题: {title}, CID: {cid}")
-
-        # 获取播放地址
         play_url = f'https://api.bilibili.com/x/player/playurl?bvid={bvid}&cid={cid}&qn=80&fnval=16&fourk=1'
         play_resp = requests.get(play_url, headers=BILI_HEADERS, cookies=BILI_COOKIES, timeout=10)
         play_data = play_resp.json()
-
         if play_data.get('code') != 0:
-            print(f"获取播放地址失败: {play_data.get('message')}")
             return None
-
         dash = play_data['data'].get('dash', {})
         video_url = dash['video'][0].get('baseUrl') if dash.get('video') else None
         audio_url = dash['audio'][0].get('baseUrl') if dash.get('audio') else None
-
         if not video_url:
-            print("未找到视频地址")
             return None
-
         title = title.replace(' ', '').replace('|', '').replace("'", '').replace('/', '_')
-
-        return {
-            'title': title,
-            'video_url': video_url,
-            'audio_url': audio_url
-        }
-
+        return {'title': title, 'video_url': video_url, 'audio_url': audio_url}
     except Exception as e:
         print(f"解析视频错误: {e}")
         return None
 
 
-# ========== Celery 任务（带自动重试）==========
-@app.task(
-    bind=True,
-    autoretry_for=(ChunkedEncodingError, ConnectionError, Timeout, Exception),
-    retry_backoff=2,
-    retry_kwargs={'max_retries': 3},
-    retry_jitter=True
-)
+# ========== Celery 任务 ==========
+@app.task(bind=True, autoretry_for=(ChunkedEncodingError, ConnectionError, Timeout, Exception), retry_backoff=2, retry_kwargs={'max_retries': 3}, retry_jitter=True)
 def download_video_task(self, url):
-    """异步下载视频任务（带自动重试）"""
+    """异步下载视频任务"""
     task_id = self.request.id
     retry_count = self.request.retries
-    print(f"开始处理任务: {task_id} (尝试 {retry_count + 1}/4), URL: {url}")
+    print(f"开始处理任务: {task_id} (尝试 {retry_count + 1}/4)")
 
     try:
-        # 1. 解析视频信息
         info = parse_video_page(url)
         if not info:
             set_task_status(task_id, {'status': 'failed', 'error': '解析视频失败'})
             return {'status': 'failed', 'error': '解析视频失败'}
 
-        print(f"解析成功: {info['title']}")
-
-        # 2. 下载视频（带重试）
+        # 下载视频
         video_content = None
         for attempt in range(3):
             try:
-                print(f"开始下载视频 (尝试 {attempt+1}/3)...")
                 video_resp = requests.get(info['video_url'], headers=BILI_HEADERS, cookies=BILI_COOKIES, timeout=120, stream=True)
                 video_content = b''
-                downloaded = 0
-                total_size = int(video_resp.headers.get('content-length', 0))
                 for chunk in video_resp.iter_content(chunk_size=8192):
                     if chunk:
                         video_content += chunk
-                        downloaded += len(chunk)
-                        if total_size > 0:
-                            progress = min(50, int(downloaded / total_size * 50))
-                            self.update_state(state='PROGRESS', meta={'progress': 20 + progress, 'status': 'downloading_video'})
-                print(f"视频下载完成: {len(video_content)} bytes")
                 break
-            except (ChunkedEncodingError, ConnectionError, Timeout) as e:
+            except Exception as e:
                 print(f"视频下载失败 (尝试 {attempt+1}/3): {e}")
                 if attempt == 2:
                     raise
@@ -172,25 +144,17 @@ def download_video_task(self, url):
         if video_content is None:
             raise Exception("视频下载失败")
 
-        # 3. 下载音频
-        print("开始下载音频...")
+        # 下载音频
         audio_content = None
         for attempt in range(3):
             try:
                 audio_resp = requests.get(info['audio_url'], headers=BILI_HEADERS, cookies=BILI_COOKIES, timeout=120, stream=True)
                 audio_content = b''
-                downloaded = 0
-                total_size = int(audio_resp.headers.get('content-length', 0))
                 for chunk in audio_resp.iter_content(chunk_size=8192):
                     if chunk:
                         audio_content += chunk
-                        downloaded += len(chunk)
-                        if total_size > 0:
-                            progress = min(70, 50 + int(downloaded / total_size * 20))
-                            self.update_state(state='PROGRESS', meta={'progress': progress, 'status': 'downloading_audio'})
-                print(f"音频下载完成: {len(audio_content)} bytes")
                 break
-            except (ChunkedEncodingError, ConnectionError, Timeout) as e:
+            except Exception as e:
                 print(f"音频下载失败 (尝试 {attempt+1}/3): {e}")
                 if attempt == 2:
                     raise
@@ -199,7 +163,7 @@ def download_video_task(self, url):
         if audio_content is None:
             raise Exception("音频下载失败")
 
-        # 4. 保存临时文件
+        # 保存临时文件
         temp_id = str(uuid.uuid4())[:8]
         video_path = f'/tmp/{temp_id}_{info["title"]}.mp4'
         audio_path = f'/tmp/{temp_id}_{info["title"]}.mp3'
@@ -210,9 +174,7 @@ def download_video_task(self, url):
         with open(audio_path, 'wb') as f:
             f.write(audio_content)
 
-        self.update_state(state='PROGRESS', meta={'progress': 80, 'status': 'merging'})
-
-        # 5. 检查 ffmpeg 是否可用
+        # 合成视频
         ffmpeg_available = False
         try:
             subprocess.run(['ffmpeg', '-version'], capture_output=True, timeout=5, check=False)
@@ -221,16 +183,12 @@ def download_video_task(self, url):
             pass
 
         if ffmpeg_available:
-            print("开始合成视频...")
             cmd = f'ffmpeg -i "{video_path}" -i "{audio_path}" -c:v copy -c:a copy "{output_path}" -y -loglevel error'
-            try:
-                subprocess.run(cmd, shell=True, timeout=600, check=True)
-                # 清理临时文件
-                for path in [video_path, audio_path]:
-                    if os.path.exists(path):
-                        os.remove(path)
-                        print(f"已删除临时文件: {path}")
-                        # 合成完成
+            subprocess.run(cmd, shell=True, timeout=600, check=True)
+            for path in [video_path, audio_path]:
+                if os.path.exists(path):
+                    os.remove(path)
+
         if os.path.exists(output_path):
             set_task_status(task_id, {'status': 'completed', 'progress': 100})
             print(f"合成完成: {output_path}")
@@ -239,12 +197,6 @@ def download_video_task(self, url):
             return {'status': 'completed', 'file_path': output_path, 'title': info['title'], 'type': 'full'}
         else:
             return {'status': 'failed', 'error': '合成失败'}
-            except subprocess.TimeoutExpired:
-                print("合成超时，返回纯视频文件")
-                return {'status': 'completed', 'file_path': video_path, 'title': info['title'], 'type': 'video_only'}
-        else:
-            print("ffmpeg 不可用，返回纯视频文件")
-            return {'status': 'completed', 'file_path': video_path, 'title': info['title'], 'type': 'video_only'}
 
     except (ChunkedEncodingError, ConnectionError, Timeout) as e:
         print(f"下载中断 (尝试 {retry_count + 1}/4): {e}")
@@ -256,36 +208,4 @@ def download_video_task(self, url):
         traceback.print_exc()
         set_task_status(task_id, {'status': 'failed', 'error': str(e)})
         return {'status': 'failed', 'error': str(e)}
-
-
-@app.task
-def search_videos_task(keyword, page=1, page_size=20):
-    """搜索视频任务"""
-    try:
-        search_url = 'https://api.bilibili.com/x/web-interface/search/type'
-        params = {
-            'search_type': 'video',
-            'keyword': keyword,
-            'page': page,
-            'pagesize': page_size,
-        }
-        resp = requests.get(search_url, headers=BILI_HEADERS, cookies=BILI_COOKIES, timeout=10)
-        data = resp.json()
-        if data.get('code') != 0:
-            return {'status': 'failed', 'error': data.get('message')}
-        results = data.get('data', {}).get('result', [])
-        video_list = []
-        for item in results:
-            video_list.append({
-                'bvid': item.get('bvid'),
-                'title': item.get('title', '').replace('<em class="keyword">', '').replace('</em>', ''),
-                'author': item.get('author', ''),
-                'pic': item.get('pic', ''),
-                'duration': item.get('duration', 0),
-                'play': item.get('play', 0),
-                'danmaku': item.get('danmaku', 0),
-                'url': f"https://www.bilibili.com/video/{item.get('bvid')}"
-            })
-        return {'status': 'completed', 'data': video_list, 'total': len(video_list)}
-    except Exception as e:
-        return {'status': 'failed', 'error': str(e)}
+EOF
