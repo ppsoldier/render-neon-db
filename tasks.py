@@ -90,7 +90,7 @@ def parse_video_page(url):
         print(f"视频标题: {title}, CID: {cid}")
 
         # 2. 获取播放地址
-        play_url = f'https://api.bilibili.com/x/player/playurl?bvid={bvid}&cid={cid}&qn=80'
+        play_url = f'https://api.bilibili.com/x/player/playurl?bvid={bvid}&cid={cid}&qn=80&fnval=16&fourk=1'
         play_resp = requests.get(play_url, headers=BILI_HEADERS, cookies=BILI_COOKIES, timeout=10)
         play_data = play_resp.json()
 
