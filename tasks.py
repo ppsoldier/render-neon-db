@@ -104,23 +104,73 @@ def download_video_task(self, url):
         task_status[task_id] = {'status': 'failed', 'error': str(e)}
         return {'status': 'failed', 'error': str(e)}
 
+
+
 def parse_video_page(url):
-    """解析视频页面（同 app.py）"""
-    resp = requests.get(url, cookies=BILI_COOKIES, headers=BILI_HEADERS, timeout=10)
-    html = resp.text
-    title_match = re.search(r'<title>(.*?)_哔哩哔哩_bilibili</title>', html)
-    if not title_match:
+    """使用 B 站 API 获取视频信息（更稳定）"""
+    import re
+    import requests
+    
+    # 从 URL 中提取 BV 号
+    bv_match = re.search(r'BV([a-zA-Z0-9]+)', url)
+    if not bv_match:
         return None
-    title = title_match.group(1).replace(' ', '').replace('|', '').replace("'", '').replace('/', '_')
-    video_match = re.search(r'"video".*?"baseUrl":"(.*?)"', html)
-    audio_match = re.search(r'"audio".*?"baseUrl":"(.*?)"', html)
-    if not video_match or not audio_match:
-        return None
-    return {
-        'title': title,
-        'video_url': video_match.group(1),
-        'audio_url': audio_match.group(1)
+    
+    bvid = bv_match.group(0)
+    
+    # 1. 获取视频基本信息
+    api_url = f'https://api.bilibili.com/x/web-interface/view?bvid={bvid}'
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Referer': 'https://www.bilibili.com/'
     }
+    
+    try:
+        resp = requests.get(api_url, headers=headers, timeout=10)
+        data = resp.json()
+        
+        if data.get('code') != 0:
+            print(f"B站API错误: {data.get('message')}")
+            return None
+        
+        video_data = data['data']
+        title = video_data.get('title', '未知标题')
+        cid = video_data.get('cid')
+        
+        # 2. 获取视频播放地址
+        play_url = f'https://api.bilibili.com/x/player/playurl?bvid={bvid}&cid={cid}&qn=80'
+        play_resp = requests.get(play_url, headers=headers, timeout=10)
+        play_data = play_resp.json()
+        
+        if play_data.get('code') != 0:
+            print(f"获取播放地址失败: {play_data.get('message')}")
+            return None
+        
+        dash = play_data['data'].get('dash', {})
+        video_url = None
+        audio_url = None
+        
+        if dash.get('video'):
+            video_url = dash['video'][0].get('baseUrl')
+        if dash.get('audio'):
+            audio_url = dash['audio'][0].get('baseUrl')
+        
+        if not video_url:
+            return None
+        
+        # 清理标题
+        title = title.replace(' ', '').replace('|', '').replace("'", '').replace('/', '_')
+        
+        return {
+            'title': title,
+            'video_url': video_url,
+            'audio_url': audio_url
+        }
+        
+    except Exception as e:
+        print(f"解析视频错误: {e}")
+        return None
+                
 
 def download_with_progress(url, task_id, media_type):
     """带进度的下载"""
