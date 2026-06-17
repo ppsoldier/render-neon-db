@@ -1,4 +1,3 @@
-cat > tasks.py << 'EOF'
 # tasks.py
 from celery_app import app
 from celery import Task
@@ -208,4 +207,3 @@ def download_video_task(self, url):
         traceback.print_exc()
         set_task_status(task_id, {'status': 'failed', 'error': str(e)})
         return {'status': 'failed', 'error': str(e)}
-EOF
