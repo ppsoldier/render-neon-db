@@ -832,7 +832,9 @@ def download_video_simple():
     video_url = data.get('url', '')
     if not video_url:
         return jsonify({'code': 400, 'msg': '视频链接不能为空'})
-    
+    video_path = None
+    audio_path = None
+    output_path = None
     try:
         resp = requests.get(video_url, cookies=BILI_COOKIES, headers=BILI_HEADERS, timeout=10)
         html = resp.text
