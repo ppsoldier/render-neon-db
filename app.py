@@ -18,6 +18,12 @@ import json
 import time
 import requests
 from io import BytesIO
+import re
+
+from concurrent.futures import ThreadPoolExecutor
+import uuid
+import subprocess
+import uuid
 
 
 
@@ -746,15 +752,10 @@ def test_remind():
 
 
 
-import re
-import requests
-import os
-import time
-from flask import Flask, request, jsonify, send_file
-from concurrent.futures import ThreadPoolExecutor
-import uuid
 
-app = Flask(__name__)
+
+
+# app = Flask(__name__)
 
 # B站爬虫配置
 BILI_COOKIES = {
@@ -816,12 +817,7 @@ def search_videos():
         return jsonify({'code': 500, 'msg': str(e)})
 
 
-import subprocess
-import os
-import uuid
-import requests
-import re
-from flask import request, jsonify, send_file
+
 
 
 
