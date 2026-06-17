@@ -1045,6 +1045,7 @@ def video_task_result(task_id):
     
     try:
         result = celery_app.AsyncResult(task_id)
+        
         if result.state != 'SUCCESS':
             return jsonify({'code': 404, 'msg': '任务未完成'})
         
@@ -1056,8 +1057,26 @@ def video_task_result(task_id):
             file_path = result_data
             title = 'video'
         
+        # 尝试多种可能的文件路径
+        possible_paths = [
+            file_path,
+            f'/tmp/*{task_id[:8]}*_合成.mp4',
+            f'/tmp/*{task_id[:8]}*.mp4'
+        ]
+        
         if not file_path or not os.path.exists(file_path):
-            return jsonify({'code': 404, 'msg': '文件不存在'})
+            import glob
+            for pattern in possible_paths[1:]:
+                files = glob.glob(pattern)
+                if files:
+                    file_path = files[0]
+                    break
+            if not file_path or not os.path.exists(file_path):
+                return jsonify({'code': 404, 'msg': f'文件不存在: {file_path}'})
+        
+        # 检查文件大小
+        file_size = os.path.getsize(file_path)
+        print(f"返回文件: {file_path}, 大小: {file_size} bytes")
         
         return send_file(
             file_path,
@@ -1067,6 +1086,8 @@ def video_task_result(task_id):
         )
     except Exception as e:
         print(f"获取任务结果错误: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'code': 500, 'msg': str(e)})
 
 
