@@ -9,6 +9,27 @@ import time
 import json
 from datetime import datetime
 
+# ========== 任务状态存储 ==========
+_task_status_store = {}
+_task_result_store = {}
+
+def set_task_status(task_id, status):
+    """设置任务状态"""
+    _task_status_store[task_id] = status
+
+def get_task_status(task_id):
+    """获取任务状态"""
+    return _task_status_store.get(task_id, {'status': 'not_found'})
+
+def set_task_result(task_id, result):
+    """设置任务结果"""
+    _task_result_store[task_id] = result
+
+def get_task_result(task_id):
+    """获取任务结果"""
+    return _task_result_store.get(task_id)
+
+
 # ========== B站请求配置 ==========
 BILI_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -138,6 +159,7 @@ def download_video_task(self, url):
         # 1. 解析视频信息
         info = parse_video_page(url)
         if not info:
+            set_task_status(task_id, {'status': 'failed', 'error': '解析视频失败'})
             return {'status': 'failed', 'error': '解析视频失败'}
 
         print(f"解析成功: {info['title']}")
@@ -192,7 +214,7 @@ def download_video_task(self, url):
             subprocess.run(cmd, shell=True, timeout=600, check=True)
         except subprocess.TimeoutExpired:
             print("合成超时，返回纯视频文件")
-            self.update_state(state='PROGRESS', meta={'progress': 90, 'status': 'completed'})
+            set_task_status(task_id, {'status': 'completed', 'progress': 100})
             return {'status': 'completed', 'file_path': video_path, 'title': info['title'], 'type': 'video_only'}
 
         # 6. 清理临时文件
@@ -202,16 +224,18 @@ def download_video_task(self, url):
                 print(f"已删除临时文件: {path}")
 
         if os.path.exists(output_path):
-            self.update_state(state='PROGRESS', meta={'progress': 100, 'status': 'completed'})
+            set_task_status(task_id, {'status': 'completed', 'progress': 100})
             print(f"合成完成: {output_path}")
             return {'status': 'completed', 'file_path': output_path, 'title': info['title'], 'type': 'full'}
         else:
+            set_task_status(task_id, {'status': 'failed', 'error': '合成失败'})
             return {'status': 'failed', 'error': '合成失败'}
 
     except Exception as e:
         print(f"任务失败: {e}")
         import traceback
         traceback.print_exc()
+        set_task_status(task_id, {'status': 'failed', 'error': str(e)})
         return {'status': 'failed', 'error': str(e)}
 
 
