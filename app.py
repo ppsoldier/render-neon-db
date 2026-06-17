@@ -983,17 +983,58 @@ def video_download_async():
         }
     })
 
+from celery_app import app as celery_app
+
 @app.route('/api/video/status/<task_id>', methods=['GET'])
 def video_task_status(task_id):
-    """查询任务状态"""
-    status = get_task_status(task_id)
-    if not status:
-        return jsonify({'code': 404, 'msg': '任务不存在'})
-    
-    return jsonify({
-        'code': 200,
-        'data': status
-    })
+    """查询任务状态（使用 Celery AsyncResult）"""
+    try:
+        result = celery_app.AsyncResult(task_id)
+        
+        if result.state == 'PENDING':
+            return jsonify({
+                'code': 200,
+                'data': {'status': 'pending', 'progress': 0}
+            })
+        elif result.state == 'PROGRESS':
+            info = result.info or {}
+            return jsonify({
+                'code': 200,
+                'data': {
+                    'status': 'processing',
+                    'progress': info.get('progress', 50),
+                    'step': info.get('status', '处理中')
+                }
+            })
+        elif result.state == 'SUCCESS':
+            return jsonify({
+                'code': 200,
+                'data': {
+                    'status': 'completed',
+                    'progress': 100
+                }
+            })
+        elif result.state == 'FAILURE':
+            return jsonify({
+                'code': 200,
+                'data': {
+                    'status': 'failed',
+                    'error': str(result.info)
+                }
+            })
+        else:
+            return jsonify({
+                'code': 200,
+                'data': {'status': result.state, 'progress': 0}
+            })
+    except Exception as e:
+        print(f"查询任务状态错误: {e}")
+        return jsonify({'code': 500, 'msg': str(e)})
+
+
+
+
+
 
 @app.route('/api/video/result/<task_id>', methods=['GET'])
 def video_task_result(task_id):
