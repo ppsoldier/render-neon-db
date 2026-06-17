@@ -918,7 +918,39 @@ def video_download():
         return jsonify({'code': 500, 'msg': str(e)})
 
 
-
+@app.route('/api/video/play', methods=['GET'])
+def video_play():
+    """视频流代理接口，用于播放（绕过防盗链）"""
+    video_url = request.args.get('url')
+    if not video_url:
+        return jsonify({'code': 400, 'msg': '缺少视频地址'})
+    
+    try:
+        # 添加B站必要的请求头
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Referer': 'https://www.bilibili.com/'
+        }
+        # 流式获取视频数据
+        resp = requests.get(video_url, headers=headers, stream=True, timeout=30)
+        
+        def generate():
+            for chunk in resp.iter_content(chunk_size=8192):
+                if chunk:
+                    yield chunk
+        
+        # 返回视频流，不添加附件头（让浏览器直接播放）
+        return Response(
+            generate(),
+            mimetype='video/mp4',
+            headers={
+                'Content-Disposition': 'inline',  # 关键：内联显示
+                'Cache-Control': 'no-cache'
+            }
+        )
+    except Exception as e:
+        print(f"视频代理错误: {e}")
+        return jsonify({'code': 500, 'msg': str(e)})
 
 
 
