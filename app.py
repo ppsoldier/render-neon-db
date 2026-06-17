@@ -928,7 +928,7 @@ def video_download():
         # 调用ffmpeg合成
         import subprocess
         cmd = f'ffmpeg -i "{video_path}" -i "{audio_path}" -c:v copy -c:a copy "{output_path}" -y -loglevel error'
-        subprocess.run(cmd, shell=True, timeout=180, check=False)
+        subprocess.run(cmd, shell=True, timeout=600, check=False)
         if not os.path.exists(output_path):
             # 合成失败，返回视频文件（无音频）
             return send_file(video_path, as_attachment=True, download_name=f'{info["title"]}.mp4')
