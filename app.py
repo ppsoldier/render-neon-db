@@ -786,46 +786,71 @@ def get_video_info(bvid):
     return None
 
 def get_video_playurl(bvid, cid, quality=80):
-    """获取视频播放地址"""
-    api_url = f'https://api.bilibili.com/x/player/playurl?bvid={bvid}&cid={cid}&qn={quality}'
+    """获取视频播放地址，增加重试和错误处理"""
+    api_url = f'https://api.bilibili.com/x/player/playurl?bvid={bvid}&cid={cid}&qn={quality}&fnval=16&fourk=1'
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': f'https://www.bilibili.com/video/{bvid}'
+    }
     try:
-        resp = requests.get(api_url, headers=BILI_HEADERS, timeout=10)
+        resp = requests.get(api_url, headers=headers, timeout=15)
+        # 如果返回 412（Precondition Failed），可能缺少 Cookie，此时可尝试用 https://api.bilibili.com/x/player/playurl 的备用参数
+        if resp.status_code == 412:
+            # 添加部分 Cookie（可从浏览器获取，但为了简单，可尝试修改请求头）
+            headers['Cookie'] = 'buvid3=...;'  # 如果必要，可以添加
+            resp = requests.get(api_url, headers=headers, timeout=15)
         data = resp.json()
         if data.get('code') == 0:
             return data['data']
-    except:
-        pass
+    except Exception as e:
+        print(f"获取播放地址错误: {e}")
     return None
+
+
 
 @app.route('/api/video/search', methods=['POST'])
 def video_search():
-    """搜索B站视频"""
     data = request.get_json()
     keyword = data.get('keyword', '').strip()
     if not keyword:
         return jsonify({'code': 400, 'msg': '请输入搜索关键词'})
     
+    # 使用更稳定的搜索接口（通过 B 站网页版搜索的 JSONP 接口）
+    search_url = 'https://s.search.bilibili.com/main/suggest'
+    params = {
+        'func': 'suggest',
+        'suggest_type': 'accurate',
+        'sub_type': 'video',
+        'term': keyword,
+        'main_ver': 'v1',
+        'bangumi_acc_num': 0,
+        'special_acc_num': 0,
+        'live_acc_num': 0,
+        'season_acc_num': 0,
+        'tag_acc_num': 0,
+        'picture_acc_num': 0,
+        'rid': 0,
+        'page': 1,
+        'page_size': 20,
+        'highlight': 1,
+        'from_source': 'webtop_search',
+    }
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': 'https://search.bilibili.com/',
+    }
     try:
-        # 使用B站搜索API（无需Cookie）
-        search_url = 'https://api.bilibili.com/x/web-interface/search/type'
-        params = {
-            'search_type': 'video',
-            'keyword': keyword,
-            'page': 1,
-            'pagesize': 20
-        }
-        resp = requests.get(search_url, params=params, headers=BILI_HEADERS, timeout=10)
+        resp = requests.get(search_url, params=params, headers=headers, timeout=10)
         data = resp.json()
-        
         if data.get('code') != 0:
-            return jsonify({'code': 500, 'msg': '搜索失败'})
+            return jsonify({'code': 500, 'msg': '搜索失败，请稍后重试'})
         
-        result = data.get('data', {}).get('result', [])
+        result = data.get('data', {}).get('list', [])
         video_list = []
         for item in result:
             video_list.append({
                 'bvid': item.get('bvid'),
-                'title': item.get('title', '').replace('<em class="keyword">', '').replace('</em>', ''),
+                'title': item.get('title', ''),
                 'author': item.get('author', ''),
                 'pic': item.get('pic', ''),
                 'duration': item.get('duration', 0),
@@ -836,7 +861,9 @@ def video_search():
         return jsonify({'code': 200, 'data': video_list, 'total': len(video_list)})
     except Exception as e:
         print(f"搜索错误: {e}")
-        return jsonify({'code': 500, 'msg': str(e)})
+        return jsonify({'code': 500, 'msg': '搜索失败，请检查网络或稍后重试'})
+
+
 
 @app.route('/api/video/info', methods=['POST'])
 def video_info():
@@ -854,13 +881,11 @@ def video_info():
     # 获取播放地址
     play_data = get_video_playurl(bvid, info.get('cid'))
     video_url = None
-    audio_url = None
-    if play_data and 'dash' in play_data:
-        dash = play_data['dash']
-        if dash.get('video'):
-            video_url = dash['video'][0].get('baseUrl')
-        if dash.get('audio'):
-            audio_url = dash['audio'][0].get('baseUrl')
+    if play_data and 'dash' in play_data and play_data['dash'].get('video'):
+        video_url = play_data['dash']['video'][0].get('baseUrl')
+    
+    if not video_url:
+        return jsonify({'code': 404, 'msg': '获取视频播放地址失败，可能受防盗链限制'})
     
     return jsonify({
         'code': 200,
