@@ -755,226 +755,203 @@ def test_remind():
 
 
 
-# ========== B站视频下载模块 ==========
+# ========== B站视频下载模块（完全模仿脚本逻辑）==========
 import re
 import requests
-import uuid
 import os
+import uuid
 import time
+from flask import request, jsonify, Response
 
-# B站API基础配置
-BILI_HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Referer': 'https://www.bilibili.com/'
+# 脚本中使用的 Cookies 和 Headers（完整复制）
+BILI_COOKIES = {
+    'buvid3': 'E1AC41CE-8298-B4E8-2B11-711D83FCEB4D07978infoc',
+    'b_nut': '1774395407',
+    'bsource': 'search_bing',
+    '_uuid': '696B6B59-DCBB-93710-106A9-2F84CAC10BCA957649infoc',
+    'home_feed_column': '5',
+    'browser_resolution': '1912-956',
+    'buvid4': '4DB22FA4-9C1B-3FF9-09D1-FC56BA6029AA09187-026032507-s5Db6HTmRJMFxI7gzVHFJA%3D%3D',
+    'buvid_fp': '82d07d9422c9ad7c67f3c53cc409b7e8',
+    'bmg_af_switch': '1',
+    'bmg_src_def_domain': 'i2.hdslb.com',
+    'bili_ticket': 'eyJhbGciOiJIUzI1NiIsImtpZCI6InMwMyIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NzQ2NTQ2MjQsImlhdCI6MTc3NDM5NTM2NCwicGx0IjotMX0.KbRAOmZjhvBQ7MrPSaVnGd_5qhwK_WyiYs25aY5WJ5I',
+    'bili_ticket_expires': '1774654564',
+    'sid': '83jnmdei',
+    'CURRENT_QUALITY': '0',
+    'rpdid': "|(umR~lRuRlJ0J'u~~RJmlRRu",
+    'CURRENT_FNVAL': '4048',
+    'b_lsid': 'C9BCD791_19D225F6A76',
 }
 
-def extract_bv_id(url):
-    """从B站链接中提取BV号"""
-    match = re.search(r'BV([a-zA-Z0-9]+)', url)
-    return match.group(0) if match else None
+BILI_HEADERS = {
+    'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+    'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
+    'cache-control': 'no-cache',
+    'pragma': 'no-cache',
+    'priority': 'u=0, i',
+    'referer': 'https://search.bilibili.com/all?keyword=%E8%88%9E%E8%B9%88+%E8%87%AD%E5%BC%9F%E5%BC%9F&from_source=webtop_search&spm_id_from=333.1007&search_source=5',
+    'sec-ch-ua': '"Not(A:Brand";v="8", "Chromium";v="144", "Microsoft Edge";v="144"',
+    'sec-ch-ua-mobile': '?0',
+    'sec-ch-ua-platform': '"Windows"',
+    'sec-fetch-dest': 'document',
+    'sec-fetch-mode': 'navigate',
+    'sec-fetch-site': 'same-site',
+    'sec-fetch-user': '?1',
+    'upgrade-insecure-requests': '1',
+    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36 Edg/144.0.0.0',
+}
 
-def get_video_info(bvid):
-    """获取视频基本信息（标题、封面、cid等）"""
-    api_url = f'https://api.bilibili.com/x/web-interface/view?bvid={bvid}'
-    try:
-        resp = requests.get(api_url, headers=BILI_HEADERS, timeout=10)
-        data = resp.json()
-        if data.get('code') == 0:
-            return data['data']
-    except:
-        pass
-    return None
-
-def get_video_playurl(bvid, cid, quality=80):
-    """获取视频播放地址，增加重试和错误处理"""
-    api_url = f'https://api.bilibili.com/x/player/playurl?bvid={bvid}&cid={cid}&qn={quality}&fnval=16&fourk=1'
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Referer': f'https://www.bilibili.com/video/{bvid}'
+def search_videos(keyword):
+    """模拟脚本的搜索逻辑，返回视频链接列表"""
+    params = {
+        'keyword': keyword,
+        'from_source': 'webtop_search',
+        'spm_id_from': '333.1007',
+        'search_source': '5',
     }
-    try:
-        resp = requests.get(api_url, headers=headers, timeout=15)
-        # 如果返回 412（Precondition Failed），可能缺少 Cookie，此时可尝试用 https://api.bilibili.com/x/player/playurl 的备用参数
-        if resp.status_code == 412:
-            # 添加部分 Cookie（可从浏览器获取，但为了简单，可尝试修改请求头）
-            headers['Cookie'] = 'buvid3=...;'  # 如果必要，可以添加
-            resp = requests.get(api_url, headers=headers, timeout=15)
-        data = resp.json()
-        if data.get('code') == 0:
-            return data['data']
-    except Exception as e:
-        print(f"获取播放地址错误: {e}")
-    return None
+    base_url = 'https://search.bilibili.com/all/'
+    resp = requests.get(base_url, params=params, cookies=BILI_COOKIES, headers=BILI_HEADERS, timeout=10)
+    urls = re.findall('<a href="(.*?)"', resp.text)
+    url_list = []
+    for url in urls:
+        if "video" in url:
+            full_url = 'https:' + url if url.startswith('//') else url
+            url_list.append(full_url)
+    return list(set(url_list))  # 去重
 
+def parse_video_page(url):
+    """解析单个视频页面，提取标题、视频baseUrl、音频baseUrl"""
+    resp = requests.get(url, cookies=BILI_COOKIES, headers=BILI_HEADERS, timeout=10)
+    html = resp.text
+    title_match = re.search(r'<title>(.*?)_哔哩哔哩_bilibili</title>', html)
+    if not title_match:
+        return None
+    title = title_match.group(1).replace(' ', '').replace('|', '').replace("'", '').replace('/', '_')
+    video_match = re.search(r'"video".*?"baseUrl":"(.*?)"', html)
+    audio_match = re.search(r'"audio".*?"baseUrl":"(.*?)"', html)
+    if not video_match or not audio_match:
+        return None
+    video_url = video_match.group(1)
+    audio_url = audio_match.group(1)
+    return {'title': title, 'video_url': video_url, 'audio_url': audio_url}
 
+# API 路由
 
 @app.route('/api/video/search', methods=['POST'])
 def video_search():
+    """搜索接口，返回视频列表（含标题、封面等）"""
     data = request.get_json()
     keyword = data.get('keyword', '').strip()
     if not keyword:
         return jsonify({'code': 400, 'msg': '请输入搜索关键词'})
-    
-    # 使用更稳定的搜索接口（通过 B 站网页版搜索的 JSONP 接口）
-    search_url = 'https://s.search.bilibili.com/main/suggest'
-    params = {
-        'func': 'suggest',
-        'suggest_type': 'accurate',
-        'sub_type': 'video',
-        'term': keyword,
-        'main_ver': 'v1',
-        'bangumi_acc_num': 0,
-        'special_acc_num': 0,
-        'live_acc_num': 0,
-        'season_acc_num': 0,
-        'tag_acc_num': 0,
-        'picture_acc_num': 0,
-        'rid': 0,
-        'page': 1,
-        'page_size': 20,
-        'highlight': 1,
-        'from_source': 'webtop_search',
-    }
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Referer': 'https://search.bilibili.com/',
-    }
     try:
-        resp = requests.get(search_url, params=params, headers=headers, timeout=10)
-        data = resp.json()
-        if data.get('code') != 0:
-            return jsonify({'code': 500, 'msg': '搜索失败，请稍后重试'})
-        
-        result = data.get('data', {}).get('list', [])
+        urls = search_videos(keyword)
+        if not urls:
+            return jsonify({'code': 404, 'msg': '未找到相关视频'})
+        # 获取每个视频的基本信息（标题、封面等，仅从搜索结果页获取）
+        # 但搜索结果页只有链接，没有详细信息，我们只返回链接列表，前端点击后再获取详情
         video_list = []
-        for item in result:
+        for url in urls[:20]:  # 限制20个
+            # 从url中提取bv号
+            bv_match = re.search(r'/video/(BV[a-zA-Z0-9]+)', url)
+            bvid = bv_match.group(1) if bv_match else ''
             video_list.append({
-                'bvid': item.get('bvid'),
-                'title': item.get('title', ''),
-                'author': item.get('author', ''),
-                'pic': item.get('pic', ''),
-                'duration': item.get('duration', 0),
-                'play': item.get('play', 0),
-                'danmaku': item.get('danmaku', 0),
-                'url': f"https://www.bilibili.com/video/{item.get('bvid')}"
+                'bvid': bvid,
+                'url': url,
+                'title': f'视频 {bvid}',  # 占位，点击后获取详情
+                'pic': '',
+                'author': '',
+                'duration': 0,
+                'play': 0,
+                'danmaku': 0
             })
         return jsonify({'code': 200, 'data': video_list, 'total': len(video_list)})
     except Exception as e:
         print(f"搜索错误: {e}")
-        return jsonify({'code': 500, 'msg': '搜索失败，请检查网络或稍后重试'})
-
-
+        return jsonify({'code': 500, 'msg': str(e)})
 
 @app.route('/api/video/info', methods=['POST'])
 def video_info():
-    """获取单个视频详细信息（用于播放页）"""
+    """获取视频详情（标题、封面、播放地址）"""
     data = request.get_json()
     url = data.get('url', '')
-    bvid = extract_bv_id(url)
-    if not bvid:
-        return jsonify({'code': 400, 'msg': '无效的B站链接'})
-    
-    info = get_video_info(bvid)
-    if not info:
-        return jsonify({'code': 404, 'msg': '视频信息获取失败'})
-    
-    # 获取播放地址
-    play_data = get_video_playurl(bvid, info.get('cid'))
-    video_url = None
-    if play_data and 'dash' in play_data and play_data['dash'].get('video'):
-        video_url = play_data['dash']['video'][0].get('baseUrl')
-    
-    if not video_url:
-        return jsonify({'code': 404, 'msg': '获取视频播放地址失败，可能受防盗链限制'})
-    
-    return jsonify({
-        'code': 200,
-        'data': {
-            'bvid': bvid,
-            'title': info.get('title', ''),
-            'pic': info.get('pic', ''),
-            'author': info.get('owner', {}).get('name', ''),
-            'duration': info.get('duration', 0),
-            'desc': info.get('desc', ''),
-            'video_url': video_url,
-            'audio_url': audio_url,
-            'play': info.get('stat', {}).get('view', 0),
-            'danmaku': info.get('stat', {}).get('danmaku', 0)
-        }
-    })
+    if not url:
+        return jsonify({'code': 400, 'msg': '缺少视频链接'})
+    try:
+        info = parse_video_page(url)
+        if not info:
+            return jsonify({'code': 404, 'msg': '解析视频失败，可能受限制'})
+        # 额外获取封面等（可从页面提取，简化起见）
+        resp = requests.get(url, cookies=BILI_COOKIES, headers=BILI_HEADERS, timeout=10)
+        pic_match = re.search(r'"pic":"(.*?)"', resp.text)
+        pic = pic_match.group(1) if pic_match else ''
+        # 返回
+        return jsonify({
+            'code': 200,
+            'data': {
+                'title': info['title'],
+                'pic': pic,
+                'video_url': info['video_url'],
+                'audio_url': info['audio_url'],
+                'bvid': re.search(r'BV[a-zA-Z0-9]+', url).group(0) if re.search(r'BV[a-zA-Z0-9]+', url) else '',
+                'url': url
+            }
+        })
+    except Exception as e:
+        print(f"视频详情错误: {e}")
+        return jsonify({'code': 500, 'msg': str(e)})
 
 @app.route('/api/video/download', methods=['POST'])
 def video_download():
-    """下载视频（仅视频流，不含音频合成，避免ffmpeg依赖）"""
+    """下载视频（合成音频，需ffmpeg）"""
     data = request.get_json()
     url = data.get('url', '')
-    bvid = extract_bv_id(url)
-    if not bvid:
-        return jsonify({'code': 400, 'msg': '无效的B站链接'})
-    
-    info = get_video_info(bvid)
-    if not info:
-        return jsonify({'code': 404, 'msg': '视频信息获取失败'})
-    
-    play_data = get_video_playurl(bvid, info.get('cid'))
-    if not play_data or 'dash' not in play_data:
-        return jsonify({'code': 404, 'msg': '获取播放地址失败'})
-    
-    video_url = play_data['dash']['video'][0].get('baseUrl')
-    if not video_url:
-        return jsonify({'code': 404, 'msg': '未找到视频源'})
-    
-    title = info.get('title', 'bilibili_video').replace(' ', '').replace('|', '').replace('/', '_')
-    
+    if not url:
+        return jsonify({'code': 400, 'msg': '缺少视频链接'})
     try:
-        # 流式下载并直接返回
-        def generate():
-            resp = requests.get(video_url, headers=BILI_HEADERS, stream=True, timeout=60)
-            for chunk in resp.iter_content(chunk_size=8192):
-                if chunk:
-                    yield chunk
-        
-        return Response(
-            generate(),
-            mimetype='video/mp4',
-            headers={'Content-Disposition': f'attachment; filename={title}.mp4'}
-        )
+        info = parse_video_page(url)
+        if not info:
+            return jsonify({'code': 404, 'msg': '解析视频失败'})
+        # 下载视频和音频
+        video_content = requests.get(info['video_url'], headers=BILI_HEADERS, timeout=60).content
+        audio_content = requests.get(info['audio_url'], headers=BILI_HEADERS, timeout=60).content
+        # 保存临时文件
+        temp_id = str(uuid.uuid4())[:8]
+        video_path = f'/tmp/{temp_id}_{info["title"]}.mp4'
+        audio_path = f'/tmp/{temp_id}_{info["title"]}.mp3'
+        output_path = f'/tmp/{temp_id}_{info["title"]}_合成.mp4'
+        with open(video_path, 'wb') as f:
+            f.write(video_content)
+        with open(audio_path, 'wb') as f:
+            f.write(audio_content)
+        # 调用ffmpeg合成
+        import subprocess
+        cmd = f'ffmpeg -i "{video_path}" -i "{audio_path}" -c:v copy -c:a copy "{output_path}" -y -loglevel error'
+        subprocess.run(cmd, shell=True, timeout=180, check=False)
+        if not os.path.exists(output_path):
+            # 合成失败，返回视频文件（无音频）
+            return send_file(video_path, as_attachment=True, download_name=f'{info["title"]}.mp4')
+        return send_file(output_path, as_attachment=True, download_name=f'{info["title"]}.mp4')
     except Exception as e:
+        print(f"下载错误: {e}")
         return jsonify({'code': 500, 'msg': str(e)})
 
-
+# 视频播放代理（同前）
 @app.route('/api/video/play', methods=['GET'])
 def video_play():
-    """视频流代理接口，用于播放（绕过防盗链）"""
     video_url = request.args.get('url')
     if not video_url:
-        return jsonify({'code': 400, 'msg': '缺少视频地址'})
-    
+        return jsonify({'code': 400, 'msg': '缺少视频地址'}), 400
     try:
-        # 添加B站必要的请求头
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Referer': 'https://www.bilibili.com/'
-        }
-        # 流式获取视频数据
+        headers = {'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.bilibili.com/'}
         resp = requests.get(video_url, headers=headers, stream=True, timeout=30)
-        
         def generate():
             for chunk in resp.iter_content(chunk_size=8192):
                 if chunk:
                     yield chunk
-        
-        # 返回视频流，不添加附件头（让浏览器直接播放）
-        return Response(
-            generate(),
-            mimetype='video/mp4',
-            headers={
-                'Content-Disposition': 'inline',  # 关键：内联显示
-                'Cache-Control': 'no-cache'
-            }
-        )
+        return Response(generate(), mimetype='video/mp4', headers={'Content-Disposition': 'inline'})
     except Exception as e:
-        print(f"视频代理错误: {e}")
         return jsonify({'code': 500, 'msg': str(e)})
 
 
