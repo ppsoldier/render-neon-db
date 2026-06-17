@@ -148,8 +148,13 @@ def get_bilibili_search(keyword, page=1, page_size=20):
         return []
 
 
+from celery import Task
+from requests.exceptions import ChunkedEncodingError, ConnectionError
+
+
+    
 # ========== Celery 任务 ==========
-@app.task(bind=True)
+@app.task(bind=True, autoretry_for=(ChunkedEncodingError, ConnectionError, Exception), retry_backoff=True, retry_kwargs={'max_retries': 3})
 def download_video_task(self, url):
     """异步下载视频任务"""
     task_id = self.request.id
