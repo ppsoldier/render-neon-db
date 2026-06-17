@@ -5,4 +5,4 @@ nixPkgs = ["ffmpeg"]
 cmds = ["pip install -r requirements.txt"]
 
 [phases.deploy]
-cmds = ["gunicorn app:app --bind 0.0.0.0:5000 --timeout 600 --workers 1"]
+cmds = ["celery -A celery_app worker --loglevel=info --concurrency=1"]
