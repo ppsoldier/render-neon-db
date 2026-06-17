@@ -910,17 +910,20 @@ def read_word_file(file_bytes):
 # ========== 翻译路由 ==========
 @app.route("/api/translate/text", methods=["POST"])
 def translate_text_api():
-    """文本翻译接口"""
-    data = request.get_json()
-    text = data.get('text', '')
-    if not text:
-        return jsonify({"code": 400, "msg": "文本不能为空"})
     try:
+        data = request.get_json()
+        text = data.get('text', '')
+        if not text:
+            return jsonify({"code": 400, "msg": "文本不能为空"})
         result = translate_text(text)
         return jsonify({"code": 200, "data": result})
     except Exception as e:
-        print(f"翻译错误: {str(e)}")
-        return jsonify({"code": 500, "msg": str(e)})
+        import traceback
+        error_msg = str(e) + "\n" + traceback.format_exc()
+        print(error_msg)  # 打印到日志
+        return jsonify({"code": 500, "msg": "翻译失败: " + str(e)}), 500
+
+
 
 @app.route("/api/translate/docx", methods=["POST"])
 def translate_docx_api():
