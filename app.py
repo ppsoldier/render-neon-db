@@ -6,12 +6,19 @@ from datetime import datetime, timedelta, timezone
 import io
 import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
-import json
 import traceback
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from datetime import datetime, timedelta
 from werkzeug.security import generate_password_hash, check_password_hash
+import hashlib
+import random
+import re
+import json
+import time
+import requests
+from io import BytesIO
+
 
 
 scheduler = None
@@ -864,13 +871,7 @@ def student_delete():
 
 
 # ==================== 文档翻译模块 ====================
-import hashlib
-import random
-import re
-import json
-import time
-import requests
-from io import BytesIO
+
 
 # 有道翻译相关函数
 def md5_hex(text):
