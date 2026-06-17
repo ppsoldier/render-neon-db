@@ -226,12 +226,15 @@ def download_video_task(self, url):
                     if os.path.exists(path):
                         os.remove(path)
                         print(f"已删除临时文件: {path}")
-                if os.path.exists(output_path):
-                    set_task_status(task_id, {'status': 'completed', 'progress': 100})
-                    print(f"合成完成: {output_path}")
-                    return {'status': 'completed', 'file_path': output_path, 'title': info['title'], 'type': 'full'}
-                else:
-                    return {'status': 'failed', 'error': '合成失败'}
+                        # 合成完成
+        if os.path.exists(output_path):
+            set_task_status(task_id, {'status': 'completed', 'progress': 100})
+            print(f"合成完成: {output_path}")
+            # 存储到 Redis
+            store_video_to_redis(task_id, output_path)
+            return {'status': 'completed', 'file_path': output_path, 'title': info['title'], 'type': 'full'}
+        else:
+            return {'status': 'failed', 'error': '合成失败'}
             except subprocess.TimeoutExpired:
                 print("合成超时，返回纯视频文件")
                 return {'status': 'completed', 'file_path': video_path, 'title': info['title'], 'type': 'video_only'}
