@@ -1,14 +1,13 @@
-# celery_app.py
 from celery import Celery
 import os
 
-# Redis 配置（Railway 提供 Redis 服务）
+# ✅ 从环境变量读取 Redis 地址
 REDIS_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
 app = Celery(
     'video_tasks',
     broker=REDIS_URL,
     backend=REDIS_URL,
-    include=['tasks']  # 包含任务模块
+    include=['tasks']
 )
 
 app.conf.update(
