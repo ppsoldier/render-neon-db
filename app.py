@@ -960,6 +960,74 @@ def video_play():
 
 
 
+
+
+# app.py 中添加
+from tasks import download_video_task, get_task_status, get_task_result
+
+@app.route('/api/video/download/async', methods=['POST'])
+def video_download_async():
+    """异步下载接口，返回任务ID"""
+    data = request.get_json()
+    url = data.get('url', '')
+    if not url:
+        return jsonify({'code': 400, 'msg': '缺少视频链接'})
+    
+    # 启动异步任务
+    task = download_video_task.delay(url)
+    return jsonify({
+        'code': 200,
+        'data': {
+            'task_id': task.id,
+            'status': 'started'
+        }
+    })
+
+@app.route('/api/video/status/<task_id>', methods=['GET'])
+def video_task_status(task_id):
+    """查询任务状态"""
+    status = get_task_status(task_id)
+    if not status:
+        return jsonify({'code': 404, 'msg': '任务不存在'})
+    
+    return jsonify({
+        'code': 200,
+        'data': status
+    })
+
+@app.route('/api/video/result/<task_id>', methods=['GET'])
+def video_task_result(task_id):
+    """获取任务结果（下载文件）"""
+    status = get_task_status(task_id)
+    if not status or status.get('status') != 'completed':
+        return jsonify({'code': 404, 'msg': '任务未完成'})
+    
+    result = get_task_result(task_id)
+    if not result:
+        return jsonify({'code': 404, 'msg': '结果不存在'})
+    
+    file_path = result.get('file_path')
+    title = result.get('title', 'video')
+    if os.path.exists(file_path):
+        return send_file(
+            file_path,
+            as_attachment=True,
+            download_name=f'{title}.mp4',
+            mimetype='video/mp4'
+        )
+    else:
+        return jsonify({'code': 404, 'msg': '文件不存在'})
+
+
+
+
+
+
+
+
+
+
+
 # ==================== 文档翻译模块 ====================
 # 有道翻译相关函数
 def md5_hex(text):
