@@ -10,6 +10,10 @@ import time
 import json
 from datetime import datetime
 from requests.exceptions import ChunkedEncodingError, ConnectionError, Timeout
+import redis
+import base64
+
+
 
 # ========== 任务状态存储 ==========
 _task_status_store = {}
