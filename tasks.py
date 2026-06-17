@@ -8,12 +8,42 @@ import subprocess
 import time
 
 BILI_COOKIES = {
-    # ... 你的 Cookie 配置（同 app.py）
-}
+            'buvid3': 'E1AC41CE-8298-B4E8-2B11-711D83FCEB4D07978infoc',
+            'b_nut': '1774395407',
+            'bsource': 'search_bing',
+            '_uuid': '696B6B59-DCBB-93710-106A9-2F84CAC10BCA957649infoc',
+            'home_feed_column': '5',
+            'browser_resolution': '1912-956',
+            'buvid4': '4DB22FA4-9C1B-3FF9-09D1-FC56BA6029AA09187-026032507-s5Db6HTmRJMFxI7gzVHFJA%3D%3D',
+            'buvid_fp': '82d07d9422c9ad7c67f3c53cc409b7e8',
+            'bmg_af_switch': '1',
+            'bmg_src_def_domain': 'i2.hdslb.com',
+            'bili_ticket': 'eyJhbGciOiJIUzI1NiIsImtpZCI6InMwMyIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NzQ2NTQ2MjQsImlhdCI6MTc3NDM5NTM2NCwicGx0IjotMX0.KbRAOmZjhvBQ7MrPSaVnGd_5qhwK_WyiYs25aY5WJ5I',
+            'bili_ticket_expires': '1774654564',
+            'sid': '83jnmdei',
+            'CURRENT_QUALITY': '0',
+            'rpdid': "|(umR~lRuRlJ0J'u~~RJmlRRu",
+            'CURRENT_FNVAL': '4048',
+            'b_lsid': 'C9BCD791_19D225F6A76',
+        }
 
 BILI_HEADERS = {
-    # ... 你的 Headers 配置（同 app.py）
-}
+            'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+            'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
+            'cache-control': 'no-cache',
+            'pragma': 'no-cache',
+            'priority': 'u=0, i',
+            'referer': 'https://search.bilibili.com/all?keyword=%E8%88%9E%E8%B9%88+%E8%87%AD%E5%BC%9F%E5%BC%9F&from_source=webtop_search&spm_id_from=333.1007&search_source=5',
+            'sec-ch-ua': '"Not(A:Brand";v="8", "Chromium";v="144", "Microsoft Edge";v="144"',
+            'sec-ch-ua-mobile': '?0',
+            'sec-ch-ua-platform': '"Windows"',
+            'sec-fetch-dest': 'document',
+            'sec-fetch-mode': 'navigate',
+            'sec-fetch-site': 'same-site',
+            'sec-fetch-user': '?1',
+            'upgrade-insecure-requests': '1',
+            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36 Edg/144.0.0.0'
+            }
 
 # 任务状态存储（可改用 Redis 持久化）
 task_status = {}
