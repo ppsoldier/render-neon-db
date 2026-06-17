@@ -1038,26 +1038,36 @@ def video_task_status(task_id):
 
 @app.route('/api/video/result/<task_id>', methods=['GET'])
 def video_task_result(task_id):
-    """获取任务结果（下载文件）"""
-    status = get_task_status(task_id)
-    if not status or status.get('status') != 'completed':
-        return jsonify({'code': 404, 'msg': '任务未完成'})
+    """获取任务结果（下载合成后的视频）"""
+    import os
+    from flask import send_file
+    from celery_app import app as celery_app
     
-    result = get_task_result(task_id)
-    if not result:
-        return jsonify({'code': 404, 'msg': '结果不存在'})
-    
-    file_path = result.get('file_path')
-    title = result.get('title', 'video')
-    if os.path.exists(file_path):
+    try:
+        result = celery_app.AsyncResult(task_id)
+        if result.state != 'SUCCESS':
+            return jsonify({'code': 404, 'msg': '任务未完成'})
+        
+        result_data = result.result
+        if isinstance(result_data, dict):
+            file_path = result_data.get('file_path')
+            title = result_data.get('title', 'video')
+        else:
+            file_path = result_data
+            title = 'video'
+        
+        if not file_path or not os.path.exists(file_path):
+            return jsonify({'code': 404, 'msg': '文件不存在'})
+        
         return send_file(
             file_path,
             as_attachment=True,
             download_name=f'{title}.mp4',
             mimetype='video/mp4'
         )
-    else:
-        return jsonify({'code': 404, 'msg': '文件不存在'})
+    except Exception as e:
+        print(f"获取任务结果错误: {e}")
+        return jsonify({'code': 500, 'msg': str(e)})
 
 
 
