@@ -1040,6 +1040,7 @@ def video_task_status(task_id):
 def video_task_result(task_id):
     """获取任务结果（下载合成后的视频）"""
     import os
+    import glob
     from flask import send_file
     from celery_app import app as celery_app
     
@@ -1057,26 +1058,31 @@ def video_task_result(task_id):
             file_path = result_data
             title = 'video'
         
-        # 尝试多种可能的文件路径
-        possible_paths = [
-            file_path,
-            f'/tmp/*{task_id[:8]}*_合成.mp4',
-            f'/tmp/*{task_id[:8]}*.mp4'
-        ]
-        
+        # 如果文件不存在，尝试多种查找方式
         if not file_path or not os.path.exists(file_path):
-            import glob
-            for pattern in possible_paths[1:]:
-                files = glob.glob(pattern)
-                if files:
-                    file_path = files[0]
-                    break
-            if not file_path or not os.path.exists(file_path):
-                return jsonify({'code': 404, 'msg': f'文件不存在: {file_path}'})
+            print(f"文件不存在: {file_path}，尝试查找...")
+            # 方式1：根据 task_id 查找
+            search_pattern = f'/tmp/*{task_id[:8]}*_合成.mp4'
+            files = glob.glob(search_pattern)
+            if files:
+                file_path = files[0]
+                print(f"找到文件: {file_path}")
+            else:
+                # 方式2：查找所有合成文件
+                all_files = glob.glob('/tmp/*_合成.mp4')
+                if all_files:
+                    # 按修改时间排序，取最新的
+                    all_files.sort(key=os.path.getmtime, reverse=True)
+                    file_path = all_files[0]
+                    print(f"使用最新文件: {file_path}")
+                else:
+                    return jsonify({'code': 404, 'msg': '视频文件不存在，请重新下载'})
         
-        # 检查文件大小
+        if not os.path.exists(file_path):
+            return jsonify({'code': 404, 'msg': f'文件不存在: {file_path}'})
+        
         file_size = os.path.getsize(file_path)
-        print(f"返回文件: {file_path}, 大小: {file_size} bytes")
+        print(f"[结果接口] 返回文件: {file_path}, 大小: {file_size} bytes")
         
         return send_file(
             file_path,
@@ -1085,7 +1091,7 @@ def video_task_result(task_id):
             mimetype='video/mp4'
         )
     except Exception as e:
-        print(f"获取任务结果错误: {e}")
+        print(f"[结果接口] 错误: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({'code': 500, 'msg': str(e)})
