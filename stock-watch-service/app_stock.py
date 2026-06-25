@@ -348,15 +348,18 @@ async def health_check():
 
 
 
-@app.post("/api/stock/run-pick")
-async def run_stock_pick():
-    import uuid
-    task_id = str(uuid.uuid4())
-    return {
-        "code": 200,
-        "message": "选股任务已提交（测试版本）",
-        "data": {"task_id": task_id}
-    }
+# @app.post("/api/stock/run-pick")
+# async def run_stock_pick():
+#     import uuid
+#     task_id = str(uuid.uuid4())
+#     return {
+#         "code": 200,
+#         "message": "选股任务已提交（测试版本）",
+#         "data": {"task_id": task_id}
+#     }
+
+
+
 
 
 
