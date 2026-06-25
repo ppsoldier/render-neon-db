@@ -1,7 +1,9 @@
-"""数据采集模块"""
+# data_collector/__init__.py
+"""
+数据采集模块
+提供从九方智投获取股票、板块数据的功能
+"""
 
-from .eastmoney import EastMoneyCollector
-from .tonghuashun import TongHuaShunCollector
-from .jiufang import JiuFangCollector
+from .jiufang import JiuFangCollector, call_llm_analysis
 
-__all__ = ["EastMoneyCollector", "TongHuaShunCollector", "JiuFangCollector"]
+__all__ = ['JiuFangCollector', 'call_llm_analysis']
