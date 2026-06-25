@@ -1524,6 +1524,20 @@ app.router.lifespan_context = lifespan
 
 
 
+# ========== 选股执行接口 ==========
+@app.post("/api/stock/run-pick")
+async def run_stock_pick():
+    import uuid
+    task_id = str(uuid.uuid4())
+    return {
+        "code": 200,
+        "message": "选股任务已提交",
+        "data": {"task_id": task_id}
+    }
+
+
+
+
 # # ==================== 选股执行模块（添加到 app_stock.py）====================
 # import subprocess
 # import threading
