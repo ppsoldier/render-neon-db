@@ -337,6 +337,32 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+
+@app.get("/debug/routes")
+async def debug_routes():
+    return {
+        "routes": [
+            {"path": route.path, "methods": list(route.methods) if route.methods else []}
+            for route in app.routes
+        ]
+    }
+
+@app.post("/api/stock/run-pick")
+async def run_stock_pick():
+    import uuid
+    task_id = str(uuid.uuid4())
+    return {
+        "code": 200,
+        "message": "选股任务已提交（测试）",
+        "data": {"task_id": task_id}
+    }
+
+
+
+
+
+
 # ========== 健康检查 ==========
 @app.get("/")
 async def root():
@@ -348,21 +374,13 @@ async def health_check():
 
 
 
-@app.post("/api/stock/run-pick")
-async def run_stock_pick():
-    import uuid
-    task_id = str(uuid.uuid4())
-    return {
-        "code": 200,
-        "message": "选股任务已提交（测试版本）",
-        "data": {"task_id": task_id}
-    }
 
 
 
 
 
 
+#批量获取股票/指数实时行情，统一使用新浪个股格式接口
 import re
 import requests
 import logging
