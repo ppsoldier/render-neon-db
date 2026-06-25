@@ -348,15 +348,15 @@ async def health_check():
 
 
 
-# @app.post("/api/stock/run-pick")
-# async def run_stock_pick():
-#     import uuid
-#     task_id = str(uuid.uuid4())
-#     return {
-#         "code": 200,
-#         "message": "选股任务已提交（测试版本）",
-#         "data": {"task_id": task_id}
-#     }
+@app.post("/api/stock/run-pick")
+async def run_stock_pick():
+    import uuid
+    task_id = str(uuid.uuid4())
+    return {
+        "code": 200,
+        "message": "选股任务已提交（测试版本）",
+        "data": {"task_id": task_id}
+    }
 
 
 
@@ -922,73 +922,73 @@ def _run_pick_subprocess(task_id: str):
 
 # ========== 选股执行模块 ==========
 # ========== API 接口 ==========
-@app.post("/api/stock/run-pick")
-async def run_stock_pick():
-    """
-    触发执行选股（异步后台运行）
-    返回 task_id，可通过 /api/stock/pick-status 查询进度
-    """
-    try:
-        # 检查是否已有正在运行的任务
-        with pick_lock:
-            for task_id, task in pick_tasks.items():
-                if task.get('status') == 'running':
-                    return {
-                        "code": 400,
-                        "message": "已有选股任务正在运行，请稍后",
-                        "data": {"task_id": task_id, "status": "running"}
-                    }
+# @app.post("/api/stock/run-pick")
+# async def run_stock_pick():
+#     """
+#     触发执行选股（异步后台运行）
+#     返回 task_id，可通过 /api/stock/pick-status 查询进度
+#     """
+#     try:
+#         # 检查是否已有正在运行的任务
+#         with pick_lock:
+#             for task_id, task in pick_tasks.items():
+#                 if task.get('status') == 'running':
+#                     return {
+#                         "code": 400,
+#                         "message": "已有选股任务正在运行，请稍后",
+#                         "data": {"task_id": task_id, "status": "running"}
+#                     }
 
-        # 检查脚本是否存在
-        try:
-            script_path = _get_pick_script_path()
-            logger.info(f"选股脚本路径: {script_path}")
-        except FileNotFoundError as e:
-            return {
-                "code": 500,
-                "message": f"选股脚本不存在: {str(e)}"
-            }
+#         # 检查脚本是否存在
+#         try:
+#             script_path = _get_pick_script_path()
+#             logger.info(f"选股脚本路径: {script_path}")
+#         except FileNotFoundError as e:
+#             return {
+#                 "code": 500,
+#                 "message": f"选股脚本不存在: {str(e)}"
+#             }
 
-        # 生成任务ID
-        task_id = str(uuid.uuid4())
+#         # 生成任务ID
+#         task_id = str(uuid.uuid4())
 
-        # 创建任务记录
-        with pick_lock:
-            pick_tasks[task_id] = {
-                'task_id': task_id,
-                'status': 'pending',
-                'message': '任务已提交，等待执行...',
-                'progress': 0,
-                'started_at': None,
-                'completed_at': None,
-                'error': None,
-                'output': None,
-            }
+#         # 创建任务记录
+#         with pick_lock:
+#             pick_tasks[task_id] = {
+#                 'task_id': task_id,
+#                 'status': 'pending',
+#                 'message': '任务已提交，等待执行...',
+#                 'progress': 0,
+#                 'started_at': None,
+#                 'completed_at': None,
+#                 'error': None,
+#                 'output': None,
+#             }
 
-        # 启动后台线程执行选股
-        thread = threading.Thread(target=_run_pick_task, args=(task_id,))
-        thread.daemon = True
-        thread.start()
+#         # 启动后台线程执行选股
+#         thread = threading.Thread(target=_run_pick_task, args=(task_id,))
+#         thread.daemon = True
+#         thread.start()
 
-        logger.info(f"选股任务已提交: {task_id}")
+#         logger.info(f"选股任务已提交: {task_id}")
 
-        return {
-            "code": 200,
-            "message": "选股任务已提交",
-            "data": {
-                "task_id": task_id,
-                "status": "pending"
-            }
-        }
+#         return {
+#             "code": 200,
+#             "message": "选股任务已提交",
+#             "data": {
+#                 "task_id": task_id,
+#                 "status": "pending"
+#             }
+#         }
 
-    except Exception as e:
-        logger.error(f"提交选股任务失败: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return {
-            "code": 500,
-            "message": f"提交失败: {str(e)}"
-        }
+#     except Exception as e:
+#         logger.error(f"提交选股任务失败: {str(e)}")
+#         import traceback
+#         traceback.print_exc()
+#         return {
+#             "code": 500,
+#             "message": f"提交失败: {str(e)}"
+#         }
 
 
 @app.get("/api/stock/pick-status")
