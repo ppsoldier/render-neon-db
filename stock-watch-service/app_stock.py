@@ -357,6 +357,340 @@ async def health_check():
 
 
 
+
+
+
+# ==================== 选股执行模块（添加到 app_stock.py）====================
+import subprocess
+import threading
+import uuid
+from pathlib import Path
+from datetime import datetime
+import sys
+import os
+import json
+
+# 选股任务状态存储
+pick_tasks = {}
+pick_lock = threading.Lock()
+
+
+def _get_pick_script_path() -> str:
+    """查找 daily_pick_stocks.py 脚本路径"""
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    possible_paths = [
+        os.path.join(current_dir, "daily_pick_stocks.py"),
+        os.path.join(current_dir, "stock_money", "daily_pick_stocks.py"),
+        os.path.join(os.path.dirname(current_dir), "stock_money", "daily_pick_stocks.py"),
+    ]
+    
+    for path in possible_paths:
+        if os.path.exists(path):
+            return path
+    
+    raise FileNotFoundError("找不到 daily_pick_stocks.py 脚本")
+
+
+def _run_pick_task(task_id: str):
+    """在后台线程中执行选股脚本"""
+    try:
+        with pick_lock:
+            pick_tasks[task_id]['status'] = 'running'
+            pick_tasks[task_id]['started_at'] = datetime.now().isoformat()
+            pick_tasks[task_id]['message'] = '正在加载数据...'
+            pick_tasks[task_id]['progress'] = 10
+
+        script_path = _get_pick_script_path()
+        script_dir = os.path.dirname(script_path)
+        
+        with pick_lock:
+            pick_tasks[task_id]['message'] = '执行选股中...'
+            pick_tasks[task_id]['progress'] = 30
+
+        # 使用 subprocess 执行选股脚本
+        process = subprocess.Popen(
+            [sys.executable, script_path],
+            cwd=script_dir,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding='utf-8'
+        )
+
+        stdout_lines = []
+        stderr_lines = []
+
+        # 读取输出
+        def read_stdout():
+            for line in iter(process.stdout.readline, ''):
+                if line:
+                    stdout_lines.append(line)
+                    # 解析进度信息
+                    if '进度' in line or '%' in line:
+                        with pick_lock:
+                            pick_tasks[task_id]['message'] = line.strip()
+                            import re
+                            match = re.search(r'(\d+)%', line)
+                            if match:
+                                pick_tasks[task_id]['progress'] = min(90, int(match.group(1)))
+                    # 检测完成标志
+                    if '选股完成' in line or 'selected_stocks' in line:
+                        with pick_lock:
+                            pick_tasks[task_id]['progress'] = 90
+                    logger.info(f"[选股] {line.strip()}")
+
+        def read_stderr():
+            for line in iter(process.stderr.readline, ''):
+                if line:
+                    stderr_lines.append(line)
+                    logger.warning(f"[选股错误] {line.strip()}")
+
+        stdout_thread = threading.Thread(target=read_stdout)
+        stderr_thread = threading.Thread(target=read_stderr)
+        stdout_thread.start()
+        stderr_thread.start()
+
+        process.wait()
+        stdout_thread.join()
+        stderr_thread.join()
+
+        if process.returncode == 0:
+            with pick_lock:
+                pick_tasks[task_id]['status'] = 'completed'
+                pick_tasks[task_id]['message'] = '选股完成'
+                pick_tasks[task_id]['completed_at'] = datetime.now().isoformat()
+                pick_tasks[task_id]['progress'] = 100
+                pick_tasks[task_id]['output'] = ''.join(stdout_lines[-3000:]) if stdout_lines else ''
+            logger.info(f"选股任务 {task_id} 完成")
+        else:
+            error_msg = ''.join(stderr_lines[-10:]) if stderr_lines else '未知错误'
+            with pick_lock:
+                pick_tasks[task_id]['status'] = 'failed'
+                pick_tasks[task_id]['message'] = f'选股失败: {error_msg[:200]}'
+                pick_tasks[task_id]['error'] = error_msg
+                pick_tasks[task_id]['progress'] = 0
+            logger.error(f"选股任务 {task_id} 失败: {error_msg}")
+
+    except Exception as e:
+        logger.error(f"选股任务 {task_id} 异常: {str(e)}")
+        import traceback
+        with pick_lock:
+            pick_tasks[task_id]['status'] = 'failed'
+            pick_tasks[task_id]['message'] = f'选股异常: {str(e)}'
+            pick_tasks[task_id]['error'] = traceback.format_exc()
+            pick_tasks[task_id]['progress'] = 0
+
+
+# ==================== API 接口 ====================
+
+@app.post("/api/stock/run-pick")
+async def run_stock_pick():
+    """
+    触发执行选股（异步后台运行）
+    返回 task_id，可通过 /api/stock/pick-status 查询进度
+    """
+    try:
+        # 检查是否已有正在运行的任务
+        with pick_lock:
+            for task_id, task in pick_tasks.items():
+                if task.get('status') == 'running':
+                    return {
+                        "code": 400,
+                        "message": "已有选股任务正在运行，请稍后",
+                        "data": {"task_id": task_id, "status": "running"}
+                    }
+
+        # 检查脚本是否存在
+        try:
+            script_path = _get_pick_script_path()
+            logger.info(f"选股脚本路径: {script_path}")
+        except FileNotFoundError as e:
+            return {
+                "code": 500,
+                "message": f"选股脚本不存在: {str(e)}"
+            }
+
+        # 生成任务ID
+        task_id = str(uuid.uuid4())
+
+        # 创建任务记录
+        with pick_lock:
+            pick_tasks[task_id] = {
+                'task_id': task_id,
+                'status': 'pending',
+                'message': '任务已提交，等待执行...',
+                'progress': 0,
+                'started_at': None,
+                'completed_at': None,
+                'error': None,
+                'output': None,
+            }
+
+        # 启动后台线程执行选股
+        thread = threading.Thread(target=_run_pick_task, args=(task_id,))
+        thread.daemon = True
+        thread.start()
+
+        logger.info(f"选股任务已提交: {task_id}")
+
+        return {
+            "code": 200,
+            "message": "选股任务已提交",
+            "data": {
+                "task_id": task_id,
+                "status": "pending"
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"提交选股任务失败: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return {
+            "code": 500,
+            "message": f"提交失败: {str(e)}"
+        }
+
+
+@app.get("/api/stock/pick-status")
+async def get_pick_status(task_id: str = Query(..., description="任务ID")):
+    """查询选股任务状态"""
+    try:
+        with pick_lock:
+            if task_id not in pick_tasks:
+                return {
+                    "code": 404,
+                    "message": "任务不存在"
+                }
+            
+            task = pick_tasks[task_id].copy()
+        
+        # 如果任务完成，尝试获取最新选股结果
+        if task.get('status') == 'completed':
+            try:
+                from db_manager import get_latest_picks
+                latest_picks = get_latest_picks()
+                if latest_picks:
+                    task['latest_picks'] = latest_picks
+            except Exception as e:
+                logger.warning(f"获取最新选股结果失败: {e}")
+        
+        return {
+            "code": 200,
+            "data": task
+        }
+        
+    } catch Exception as e:
+        logger.error(f"查询任务状态失败: {str(e)}")
+        return {
+            "code": 500,
+            "message": str(e)
+        }
+
+
+@app.get("/api/stock/pick-tasks")
+async def get_pick_tasks(limit: int = Query(10, ge=1, le=50)):
+    """获取最近的选股任务列表"""
+    try:
+        with pick_lock:
+            tasks = []
+            for task_id, task in pick_tasks.items():
+                task_copy = task.copy()
+                task_copy['task_id'] = task_id
+                tasks.append(task_copy)
+            
+            tasks.sort(key=lambda x: x.get('started_at') or x.get('completed_at') or '', reverse=True)
+            tasks = tasks[:limit]
+        
+        return {
+            "code": 200,
+            "data": tasks,
+            "total": len(tasks)
+        }
+        
+    except Exception as e:
+        logger.error(f"获取任务列表失败: {str(e)}")
+        return {
+            "code": 500,
+            "message": str(e)
+        }
+
+
+@app.get("/api/stock/latest-picks")
+async def get_latest_picks_api():
+    """获取最新的选股结果（直接从数据库读取）"""
+    try:
+        from db_manager import get_latest_picks
+        picks = get_latest_picks()
+        
+        if picks:
+            return {
+                "code": 200,
+                "data": picks,
+                "has_data": True
+            }
+        else:
+            return {
+                "code": 200,
+                "data": [],
+                "has_data": False,
+                "message": "暂无选股数据"
+            }
+    except ImportError as e:
+        logger.warning(f"db_manager 导入失败: {e}")
+        # 尝试从文件读取
+        try:
+            import pandas as pd
+            from config import OUTPUT_DIR
+            
+            latest_file = None
+            for f in os.listdir(OUTPUT_DIR):
+                if f.startswith('selected_stocks_') and f.endswith('.csv'):
+                    latest_file = f
+                    break
+            
+            if latest_file:
+                df = pd.read_csv(os.path.join(OUTPUT_DIR, latest_file))
+                picks = df.to_dict('records')
+                return {
+                    "code": 200,
+                    "data": picks,
+                    "has_data": True
+                }
+        except Exception as e:
+            logger.warning(f"从文件读取选股结果失败: {e}")
+        
+        return {
+            "code": 200,
+            "data": [],
+            "has_data": False,
+            "message": "暂无选股数据"
+    except Exception as e:
+        logger.error(f"获取最新选股结果失败: {e}")
+        return {
+            "code": 500,
+            "message": str(e),
+            "data": []
+        }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 #批量获取股票/指数实时行情，统一使用新浪个股格式接口
 import re
 import requests
@@ -573,54 +907,7 @@ async def get_limit_stats():
         return {"limit_up_count": 0, "limit_down_count": 0, "sentiment": 50}
 
 
-# @app.get("/api/market/limit-stats")
-# async def get_limit_stats():
-#     """获取涨跌停统计"""
-#     try:
-#         # 获取涨幅榜和跌幅榜数据（各取前100只，足够统计）
-#         up_ranks = await fetch_stock_rank('0', max_pages=3)   # 共100只
-#         down_ranks = await fetch_stock_rank('1', max_pages=3)
-        
-#         limit_up = 0
-#         limit_down = 0
-#         for stock in up_ranks:
-#             # 涨停判断：主板9.5%，创业板/科创板19.5%，北交所29.5%
-#             code = stock.get('stock_code', '')
-#             change = stock.get('change_percent', 0)
-#             if code.startswith(('30', '68')):
-#                 if change >= 19.5:
-#                     limit_up += 1
-#             elif code.startswith('8'):
-#                 if change >= 29.5:
-#                     limit_up += 1
-#             else:
-#                 if change >= 9.5:
-#                     limit_up += 1
-#         for stock in down_ranks:
-#             code = stock.get('stock_code', '')
-#             change = stock.get('change_percent', 0)
-#             if code.startswith(('30', '68')):
-#                 if change <= -19.5:
-#                     limit_down += 1
-#             elif code.startswith('8'):
-#                 if change <= -29.5:
-#                     limit_down += 1
-#             else:
-#                 if change <= -9.5:
-#                     limit_down += 1
-        
-#         # 计算市场情绪（0-100）
-#         sentiment = 50 + (limit_up - limit_down) * 2
-#         sentiment = max(0, min(100, sentiment))
-        
-#         return {
-#             "limit_up_count": limit_up,
-#             "limit_down_count": limit_down,
-#             "sentiment": sentiment
-#         }
-#     except Exception as e:
-#         logger.error(f"获取涨跌停统计错误: {e}")
-#         return {"limit_up_count": 0, "limit_down_count": 0, "sentiment": 50}
+
         
 
 
@@ -739,374 +1026,7 @@ load_stock_mapping()
 
 
 
-# ========== 选股执行模块 ==========
-# 选股任务状态存储
-pick_tasks = {}
-pick_lock = threading.Lock()
 
-
-def _get_pick_script_path() -> str:
-    """查找 daily_pick_stocks.py 脚本路径"""
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    
-    # 可能的位置
-    possible_paths = [
-        os.path.join(current_dir, "stock_money", "daily_pick_stocks.py"),
-        os.path.join(current_dir, "daily_pick_stocks.py"),
-        os.path.join(os.path.dirname(current_dir), "stock_money", "daily_pick_stocks.py"),
-        os.path.join(os.path.dirname(current_dir), "daily_pick_stocks.py"),
-    ]
-    
-    for path in possible_paths:
-        if os.path.exists(path):
-            return path
-    
-    raise FileNotFoundError("找不到 daily_pick_stocks.py 脚本")
-
-
-def _run_pick_task(task_id: str):
-    """在后台线程中执行选股脚本（直接导入调用）"""
-    try:
-        with pick_lock:
-            pick_tasks[task_id]['status'] = 'running'
-            pick_tasks[task_id]['started_at'] = datetime.now().isoformat()
-            pick_tasks[task_id]['message'] = '正在加载数据...'
-            pick_tasks[task_id]['progress'] = 10
-
-        # 方法一：直接导入调用（推荐，共享代码）
-        try:
-            # 添加路径
-            script_dir = os.path.dirname(_get_pick_script_path())
-            if script_dir not in sys.path:
-                sys.path.insert(0, script_dir)
-            
-            # 动态导入 daily_pick_stocks
-            import importlib
-            import daily_pick_stocks as pick_module
-            importlib.reload(pick_module)  # 重新加载，确保最新代码
-            
-            with pick_lock:
-                pick_tasks[task_id]['message'] = '开始执行选股...'
-                pick_tasks[task_id]['progress'] = 20
-            
-            # 执行选股（run 函数会输出日志到控制台，我们重定向到变量）
-            import io
-            from contextlib import redirect_stdout, redirect_stderr
-            
-            stdout_capture = io.StringIO()
-            stderr_capture = io.StringIO()
-            
-            with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
-                pick_module.run()
-            
-            stdout_output = stdout_capture.getvalue()
-            stderr_output = stderr_capture.getvalue()
-            
-            with pick_lock:
-                pick_tasks[task_id]['status'] = 'completed'
-                pick_tasks[task_id]['message'] = '选股完成'
-                pick_tasks[task_id]['completed_at'] = datetime.now().isoformat()
-                pick_tasks[task_id]['progress'] = 100
-                pick_tasks[task_id]['output'] = stdout_output[-3000:] if stdout_output else ''
-                if stderr_output:
-                    pick_tasks[task_id]['error'] = stderr_output[-500:]
-            
-            logger.info(f"选股任务 {task_id} 完成")
-            
-        except ImportError as e:
-            logger.error(f"导入 daily_pick_stocks 失败: {e}")
-            # 如果导入失败，回退到子进程方式
-            with pick_lock:
-                pick_tasks[task_id]['status'] = 'fallback'
-                pick_tasks[task_id]['message'] = '导入失败，使用子进程方式...'
-                pick_tasks[task_id]['progress'] = 30
-            
-            self._run_pick_subprocess(task_id)
-            
-    except Exception as e:
-        logger.error(f"选股任务 {task_id} 异常: {str(e)}")
-        import traceback
-        error_detail = traceback.format_exc()
-        with pick_lock:
-            pick_tasks[task_id]['status'] = 'failed'
-            pick_tasks[task_id]['message'] = f'选股异常: {str(e)}'
-            pick_tasks[task_id]['error'] = error_detail
-            pick_tasks[task_id]['progress'] = 0
-
-
-def _run_pick_subprocess(task_id: str):
-    """使用子进程执行选股脚本（备用方案）"""
-    try:
-        script_path = _get_pick_script_path()
-        script_dir = os.path.dirname(script_path)
-        
-        with pick_lock:
-            pick_tasks[task_id]['message'] = '执行中（子进程）...'
-            pick_tasks[task_id]['progress'] = 40
-        
-        # 使用 subprocess.Popen 实时捕获输出
-        process = subprocess.Popen(
-            [sys.executable, script_path],
-            cwd=script_dir,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding='utf-8'
-        )
-        
-        stdout_lines = []
-        stderr_lines = []
-        
-        # 使用线程读取输出
-        def read_stdout():
-            for line in iter(process.stdout.readline, ''):
-                if line:
-                    stdout_lines.append(line)
-                    # 解析进度信息
-                    if '进度' in line or '%' in line:
-                        with pick_lock:
-                            pick_tasks[task_id]['message'] = line.strip()
-                            # 尝试提取进度百分比
-                            import re
-                            match = re.search(r'(\d+)%', line)
-                            if match:
-                                pick_tasks[task_id]['progress'] = min(90, int(match.group(1)))
-                    logger.info(f"[选股] {line.strip()}")
-        
-        def read_stderr():
-            for line in iter(process.stderr.readline, ''):
-                if line:
-                    stderr_lines.append(line)
-                    logger.warning(f"[选股错误] {line.strip()}")
-        
-        stdout_thread = threading.Thread(target=read_stdout)
-        stderr_thread = threading.Thread(target=read_stderr)
-        stdout_thread.start()
-        stderr_thread.start()
-        
-        # 等待进程结束
-        process.wait()
-        stdout_thread.join()
-        stderr_thread.join()
-        
-        if process.returncode == 0:
-            with pick_lock:
-                pick_tasks[task_id]['status'] = 'completed'
-                pick_tasks[task_id]['message'] = '选股完成'
-                pick_tasks[task_id]['completed_at'] = datetime.now().isoformat()
-                pick_tasks[task_id]['progress'] = 100
-                pick_tasks[task_id]['output'] = ''.join(stdout_lines[-3000:]) if stdout_lines else ''
-            logger.info(f"选股任务 {task_id} 完成（子进程）")
-        else:
-            error_msg = ''.join(stderr_lines[-10:]) if stderr_lines else '未知错误'
-            with pick_lock:
-                pick_tasks[task_id]['status'] = 'failed'
-                pick_tasks[task_id]['message'] = f'选股失败: {error_msg[:200]}'
-                pick_tasks[task_id]['error'] = error_msg
-                pick_tasks[task_id]['progress'] = 0
-            logger.error(f"选股任务 {task_id} 失败: {error_msg}")
-            
-    except Exception as e:
-        logger.error(f"子进程选股异常: {str(e)}")
-        with pick_lock:
-            pick_tasks[task_id]['status'] = 'failed'
-            pick_tasks[task_id]['message'] = f'执行异常: {str(e)}'
-            pick_tasks[task_id]['error'] = str(e)
-            pick_tasks[task_id]['progress'] = 0
-
-
-
-# ========== 选股执行模块 ==========
-# ========== API 接口 ==========
-@app.post("/api/stock/run-pick")
-async def run_stock_pick():
-    """
-    触发执行选股（异步后台运行）
-    返回 task_id，可通过 /api/stock/pick-status 查询进度
-    """
-    try:
-        # 检查是否已有正在运行的任务
-        with pick_lock:
-            for task_id, task in pick_tasks.items():
-                if task.get('status') == 'running':
-                    return {
-                        "code": 400,
-                        "message": "已有选股任务正在运行，请稍后",
-                        "data": {"task_id": task_id, "status": "running"}
-                    }
-
-        # 检查脚本是否存在
-        try:
-            script_path = _get_pick_script_path()
-            logger.info(f"选股脚本路径: {script_path}")
-        except FileNotFoundError as e:
-            return {
-                "code": 500,
-                "message": f"选股脚本不存在: {str(e)}"
-            }
-
-        # 生成任务ID
-        task_id = str(uuid.uuid4())
-
-        # 创建任务记录
-        with pick_lock:
-            pick_tasks[task_id] = {
-                'task_id': task_id,
-                'status': 'pending',
-                'message': '任务已提交，等待执行...',
-                'progress': 0,
-                'started_at': None,
-                'completed_at': None,
-                'error': None,
-                'output': None,
-            }
-
-        # 启动后台线程执行选股
-        thread = threading.Thread(target=_run_pick_task, args=(task_id,))
-        thread.daemon = True
-        thread.start()
-
-        logger.info(f"选股任务已提交: {task_id}")
-
-        return {
-            "code": 200,
-            "message": "选股任务已提交",
-            "data": {
-                "task_id": task_id,
-                "status": "pending"
-            }
-        }
-
-    except Exception as e:
-        logger.error(f"提交选股任务失败: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return {
-            "code": 500,
-            "message": f"提交失败: {str(e)}"
-        }
-
-
-@app.get("/api/stock/pick-status")
-async def get_pick_status(task_id: str = Query(..., description="任务ID")):
-    """查询选股任务状态"""
-    try:
-        with pick_lock:
-            if task_id not in pick_tasks:
-                return {
-                    "code": 404,
-                    "message": "任务不存在"
-                }
-            
-            task = pick_tasks[task_id].copy()
-        
-        # 如果任务完成，尝试获取最新选股结果
-        if task.get('status') == 'completed':
-            try:
-                from db_manager import get_latest_picks
-                latest_picks = get_latest_picks()
-                if latest_picks:
-                    task['latest_picks'] = latest_picks
-            except Exception as e:
-                logger.warning(f"获取最新选股结果失败: {e}")
-        
-        return {
-            "code": 200,
-            "data": task
-        }
-        
-    } catch Exception as e:
-        logger.error(f"查询任务状态失败: {str(e)}")
-        return {
-            "code": 500,
-            "message": str(e)
-        }
-
-
-@app.get("/api/stock/pick-tasks")
-async def get_pick_tasks(limit: int = Query(10, ge=1, le=50)):
-    """获取最近的选股任务列表"""
-    try:
-        with pick_lock:
-            tasks = []
-            for task_id, task in pick_tasks.items():
-                task_copy = task.copy()
-                task_copy['task_id'] = task_id
-                tasks.append(task_copy)
-            
-            tasks.sort(key=lambda x: x.get('started_at') or x.get('completed_at') or '', reverse=True)
-            tasks = tasks[:limit]
-        
-        return {
-            "code": 200,
-            "data": tasks,
-            "total": len(tasks)
-        }
-        
-    except Exception as e:
-        logger.error(f"获取任务列表失败: {str(e)}")
-        return {
-            "code": 500,
-            "message": str(e)
-        }
-
-
-@app.get("/api/stock/latest-picks")
-async def get_latest_picks_api():
-    """获取最新的选股结果（直接从数据库读取）"""
-    try:
-        from db_manager import get_latest_picks
-        picks = get_latest_picks()
-        
-        if picks:
-            return {
-                "code": 200,
-                "data": picks,
-                "has_data": True
-            }
-        else:
-            return {
-                "code": 200,
-                "data": [],
-                "has_data": False,
-                "message": "暂无选股数据"
-            }
-    except ImportError as e:
-        logger.warning(f"db_manager 导入失败: {e}")
-        # 尝试从文件读取
-        try:
-            import pandas as pd
-            from config import OUTPUT_DIR
-            
-            latest_file = None
-            for f in os.listdir(OUTPUT_DIR):
-                if f.startswith('selected_stocks_') and f.endswith('.csv'):
-                    latest_file = f
-                    break
-            
-            if latest_file:
-                df = pd.read_csv(os.path.join(OUTPUT_DIR, latest_file))
-                picks = df.to_dict('records')
-                return {
-                    "code": 200,
-                    "data": picks,
-                    "has_data": True
-                }
-        except Exception as e:
-            logger.warning(f"从文件读取选股结果失败: {e}")
-        
-        return {
-            "code": 200,
-            "data": [],
-            "has_data": False,
-            "message": "暂无选股数据"
-    except Exception as e:
-        logger.error(f"获取最新选股结果失败: {e}")
-        return {
-            "code": 500,
-            "message": str(e),
-            "data": []
-        }
 
 
 
