@@ -1509,6 +1509,20 @@ async def user_login(request: Request):
 
 
 
+# ========== 选股执行接口 ==========
+@app.post("/api/stock/run-pick")
+async def run_stock_pick():
+    import uuid
+    task_id = str(uuid.uuid4())
+    return {
+        "code": 200,
+        "message": "选股任务已提交",
+        "data": {"task_id": task_id}
+    }
+
+
+
+
 # ========== 启动事件 ==========
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -1521,19 +1535,6 @@ async def lifespan(app: FastAPI):
 
 app.router.lifespan_context = lifespan
 
-
-
-
-# ========== 选股执行接口 ==========
-@app.post("/api/stock/run-pick")
-async def run_stock_pick():
-    import uuid
-    task_id = str(uuid.uuid4())
-    return {
-        "code": 200,
-        "message": "选股任务已提交",
-        "data": {"task_id": task_id}
-    }
 
 
 
