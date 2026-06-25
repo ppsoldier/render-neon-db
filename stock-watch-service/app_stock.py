@@ -355,30 +355,6 @@ async def health_check():
 
 
 
-@app.get("/debug/routes")
-async def debug_routes():
-    return {
-        "routes": [
-            {"path": route.path, "methods": list(route.methods) if route.methods else []}
-            for route in app.routes
-        ]
-    }
-
-@app.post("/api/stock/run-pick")
-async def run_stock_pick():
-    import uuid
-    task_id = str(uuid.uuid4())
-    return {
-        "code": 200,
-        "message": "选股任务已提交（测试）",
-        "data": {"task_id": task_id}
-    }
-
-
-
-
-
-
 
 
 #批量获取股票/指数实时行情，统一使用新浪个股格式接口
@@ -939,75 +915,76 @@ def _run_pick_subprocess(task_id: str):
             pick_tasks[task_id]['progress'] = 0
 
 
+
 # ========== 选股执行模块 ==========
 # ========== API 接口 ==========
-# @app.post("/api/stock/run-pick")
-# async def run_stock_pick():
-#     """
-#     触发执行选股（异步后台运行）
-#     返回 task_id，可通过 /api/stock/pick-status 查询进度
-#     """
-#     try:
-#         # 检查是否已有正在运行的任务
-#         with pick_lock:
-#             for task_id, task in pick_tasks.items():
-#                 if task.get('status') == 'running':
-#                     return {
-#                         "code": 400,
-#                         "message": "已有选股任务正在运行，请稍后",
-#                         "data": {"task_id": task_id, "status": "running"}
-#                     }
+@app.post("/api/stock/run-pick")
+async def run_stock_pick():
+    """
+    触发执行选股（异步后台运行）
+    返回 task_id，可通过 /api/stock/pick-status 查询进度
+    """
+    try:
+        # 检查是否已有正在运行的任务
+        with pick_lock:
+            for task_id, task in pick_tasks.items():
+                if task.get('status') == 'running':
+                    return {
+                        "code": 400,
+                        "message": "已有选股任务正在运行，请稍后",
+                        "data": {"task_id": task_id, "status": "running"}
+                    }
 
-#         # 检查脚本是否存在
-#         try:
-#             script_path = _get_pick_script_path()
-#             logger.info(f"选股脚本路径: {script_path}")
-#         except FileNotFoundError as e:
-#             return {
-#                 "code": 500,
-#                 "message": f"选股脚本不存在: {str(e)}"
-#             }
+        # 检查脚本是否存在
+        try:
+            script_path = _get_pick_script_path()
+            logger.info(f"选股脚本路径: {script_path}")
+        except FileNotFoundError as e:
+            return {
+                "code": 500,
+                "message": f"选股脚本不存在: {str(e)}"
+            }
 
-#         # 生成任务ID
-#         task_id = str(uuid.uuid4())
+        # 生成任务ID
+        task_id = str(uuid.uuid4())
 
-#         # 创建任务记录
-#         with pick_lock:
-#             pick_tasks[task_id] = {
-#                 'task_id': task_id,
-#                 'status': 'pending',
-#                 'message': '任务已提交，等待执行...',
-#                 'progress': 0,
-#                 'started_at': None,
-#                 'completed_at': None,
-#                 'error': None,
-#                 'output': None,
-#             }
+        # 创建任务记录
+        with pick_lock:
+            pick_tasks[task_id] = {
+                'task_id': task_id,
+                'status': 'pending',
+                'message': '任务已提交，等待执行...',
+                'progress': 0,
+                'started_at': None,
+                'completed_at': None,
+                'error': None,
+                'output': None,
+            }
 
-#         # 启动后台线程执行选股
-#         thread = threading.Thread(target=_run_pick_task, args=(task_id,))
-#         thread.daemon = True
-#         thread.start()
+        # 启动后台线程执行选股
+        thread = threading.Thread(target=_run_pick_task, args=(task_id,))
+        thread.daemon = True
+        thread.start()
 
-#         logger.info(f"选股任务已提交: {task_id}")
+        logger.info(f"选股任务已提交: {task_id}")
 
-#         return {
-#             "code": 200,
-#             "message": "选股任务已提交",
-#             "data": {
-#                 "task_id": task_id,
-#                 "status": "pending"
-#             }
-#         }
+        return {
+            "code": 200,
+            "message": "选股任务已提交",
+            "data": {
+                "task_id": task_id,
+                "status": "pending"
+            }
+        }
 
-#     except Exception as e:
-#         logger.error(f"提交选股任务失败: {str(e)}")
-#         import traceback
-#         traceback.print_exc()
-#         return {
-#             "code": 500,
-#             "message": f"提交失败: {str(e)}"
-#         }
+    except Exception as e:
+        logger.error(f"提交选股任务失败: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return {
+            "code": 500,
+            "message": f"提交失败: {str(e)}"
+        }
 
 
 @app.get("/api/stock/pick-status")
@@ -1023,9 +1000,8 @@ async def get_pick_status(task_id: str = Query(..., description="任务ID")):
             
             task = pick_tasks[task_id].copy()
         
-        # 如果任务完成，且没有输出，尝试读取最新选股结果
+        # 如果任务完成，尝试获取最新选股结果
         if task.get('status') == 'completed':
-            # 尝试获取最新的选股结果
             try:
                 from db_manager import get_latest_picks
                 latest_picks = get_latest_picks()
@@ -1033,14 +1009,13 @@ async def get_pick_status(task_id: str = Query(..., description="任务ID")):
                     task['latest_picks'] = latest_picks
             except Exception as e:
                 logger.warning(f"获取最新选股结果失败: {e}")
-                task['latest_picks'] = None
         
         return {
             "code": 200,
             "data": task
         }
         
-    except Exception as e:
+    } catch Exception as e:
         logger.error(f"查询任务状态失败: {str(e)}")
         return {
             "code": 500,
@@ -1053,14 +1028,12 @@ async def get_pick_tasks(limit: int = Query(10, ge=1, le=50)):
     """获取最近的选股任务列表"""
     try:
         with pick_lock:
-            # 按时间倒序排列
             tasks = []
             for task_id, task in pick_tasks.items():
                 task_copy = task.copy()
                 task_copy['task_id'] = task_id
                 tasks.append(task_copy)
             
-            # 按创建时间排序（如果有 started_at）
             tasks.sort(key=lambda x: x.get('started_at') or x.get('completed_at') or '', reverse=True)
             tasks = tasks[:limit]
         
@@ -1098,8 +1071,9 @@ async def get_latest_picks_api():
                 "has_data": False,
                 "message": "暂无选股数据"
             }
-    except ImportError:
-        # 如果 db_manager 不可用，尝试从文件读取
+    except ImportError as e:
+        logger.warning(f"db_manager 导入失败: {e}")
+        # 尝试从文件读取
         try:
             import pandas as pd
             from config import OUTPUT_DIR
@@ -1126,14 +1100,13 @@ async def get_latest_picks_api():
             "data": [],
             "has_data": False,
             "message": "暂无选股数据"
-            }
-        except Exception as e:
-            logger.error(f"获取最新选股结果失败: {e}")
-            return {
-                "code": 500,
-                "message": str(e),
-                "data": []
-            }
+    except Exception as e:
+        logger.error(f"获取最新选股结果失败: {e}")
+        return {
+            "code": 500,
+            "message": str(e),
+            "data": []
+        }
 
 
 
