@@ -339,6 +339,22 @@ app.add_middleware(
 
 
 
+
+
+
+
+
+# ========== 健康检查 ==========
+@app.get("/")
+async def root():
+    return {"service": "股票看盘系统", "status": "running", "version": "2.0.0"}
+
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy", "service": "stock-watch"}
+
+
+
 @app.get("/debug/routes")
 async def debug_routes():
     return {
@@ -357,21 +373,6 @@ async def run_stock_pick():
         "message": "选股任务已提交（测试）",
         "data": {"task_id": task_id}
     }
-
-
-
-
-
-
-# ========== 健康检查 ==========
-@app.get("/")
-async def root():
-    return {"service": "股票看盘系统", "status": "running", "version": "2.0.0"}
-
-@app.get("/health")
-async def health_check():
-    return {"status": "healthy", "service": "stock-watch"}
-
 
 
 
