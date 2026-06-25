@@ -18,6 +18,10 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 import re
+import subprocess
+import threading
+import uuid
+
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
