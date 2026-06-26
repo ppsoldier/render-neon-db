@@ -2,6 +2,13 @@
 # 请根据实际情况修改以下配置
 import os
 
+
+# ========== 数据采集配置 ==========
+USE_CACHE = False                # 是否使用缓存（True=使用，False=强制实时）
+REQUEST_TIMEOUT = 30             # 请求超时时间（秒），默认30秒
+MAX_STOCK_PAGES = 500            # 最大翻页数，用于获取全部数据（实际API可能只有几十页）
+
+
 # 获取当前文件所在目录（stock_analysis_system）
 _CONFIG_DIR = os.path.dirname(os.path.abspath(__file__))
 # 动态路径
