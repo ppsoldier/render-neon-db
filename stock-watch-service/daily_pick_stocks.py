@@ -1006,6 +1006,12 @@ def run():
 
             # 保存全量个股数据
             if stocks_df is not None and not stocks_df.empty:
+                # 在保存前添加
+                if 'date' not in stocks_df.columns:
+                    stocks_df['date'] = datetime.now().strftime("%Y-%m-%d")
+                else:
+                    # 确保日期是字符串格式
+                    stocks_df['date'] = stocks_df['date'].astype(str)    
                 save_stocks_data(stocks_df, delete_existing=True)
                 logger.info(f"个股数据已保存到数据库: {len(stocks_df)} 条")
 
