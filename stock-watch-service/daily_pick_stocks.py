@@ -20,7 +20,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import (
     STOCK_FILTER, SCORE_WEIGHTS, TECHNICAL_PARAMS,
     OUTPUT_DIR, DATA_CACHE_DIR, LOG_LEVEL, PERFORMANCE,
-    NEWS_CONFIG, FACTOR_FILTER, LLM_CONFIG
+    NEWS_CONFIG, FACTOR_FILTER, LLM_CONFIG,
+    USE_CACHE, REQUEST_TIMEOUT, MAX_STOCK_PAGES  # 新增
 )
 from market_analyzer import MarketAnalyzer
 from data_collector.jiufang import JiuFangCollector, call_llm_analysis
