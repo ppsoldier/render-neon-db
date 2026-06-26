@@ -273,16 +273,17 @@ def save_selected_stocks(df: pd.DataFrame, delete_existing: bool = True):
         raise
 
 
+import numpy as np
+
 def save_market_data(market_result: dict, delete_existing: bool = True):
-    """保存市场数据到数据库"""
     if not market_result:
         logger.warning("market_result 为空，跳过保存")
         return
-    
+
     try:
         engine = get_engine()
         today = datetime.now().strftime("%Y-%m-%d")
-        
+
         with engine.connect() as conn:
             if delete_existing:
                 conn.execute(
@@ -290,8 +291,36 @@ def save_market_data(market_result: dict, delete_existing: bool = True):
                     {"date": today}
                 )
                 conn.commit()
-            
+
             details = market_result.get('details', {})
+            
+            # 定义一个辅助函数来转换 NumPy 类型
+            def convert_to_python(value):
+                if isinstance(value, np.generic):
+                    return value.item()  # 将 numpy 类型转换为 Python 原生类型
+                return value
+
+            # 构建参数时，对所有数值进行转换
+            params = {
+                "date": today,
+                "market_state": market_result.get('market_state'),
+                "market_score": market_result.get('state_score'),
+                "position_ratio": market_result.get('position_ratio'),
+                "advice": market_result.get('advice'),
+                "trend_strength": convert_to_python(details.get('trend_strength')),
+                "volatility": convert_to_python(details.get('volatility')),
+                "ma_deviation": convert_to_python(details.get('ma_deviation')),
+                "ma_arrangement": details.get('ma_arrangement'),
+                "index_position": convert_to_python(details.get('index_position')),
+                "recent_return": convert_to_python(details.get('recent_return')),
+                "vol_ratio": convert_to_python(details.get('vol_ratio')),
+                "limit_up_count": details.get('limit_up_count', 0),
+                "limit_down_count": details.get('limit_down_count', 0),
+                "up_count": details.get('up_count', 0),
+                "down_count": details.get('down_count', 0),
+                "advance_percent": convert_to_python(details.get('advance_percent', 0)),
+            }
+
             conn.execute(
                 text(f"""
                     INSERT INTO {SCHEMA_NAME}.market_data 
@@ -306,25 +335,7 @@ def save_market_data(market_result: dict, delete_existing: bool = True):
                         :limit_up_count, :limit_down_count, :up_count, :down_count, :advance_percent
                     )
                 """),
-                {
-                    "date": today,
-                    "market_state": market_result.get('market_state'),
-                    "market_score": market_result.get('state_score'),
-                    "position_ratio": market_result.get('position_ratio'),
-                    "advice": market_result.get('advice'),
-                    "trend_strength": details.get('trend_strength'),
-                    "volatility": details.get('volatility'),
-                    "ma_deviation": details.get('ma_deviation'),
-                    "ma_arrangement": details.get('ma_arrangement'),
-                    "index_position": details.get('index_position'),
-                    "recent_return": details.get('recent_return'),
-                    "vol_ratio": details.get('vol_ratio'),
-                    "limit_up_count": details.get('limit_up_count', 0),
-                    "limit_down_count": details.get('limit_down_count', 0),
-                    "up_count": details.get('up_count', 0),
-                    "down_count": details.get('down_count', 0),
-                    "advance_percent": details.get('advance_percent', 0),
-                }
+                params
             )
             conn.commit()
         logger.info("✅ 大盘数据已保存")
