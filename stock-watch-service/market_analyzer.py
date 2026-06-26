@@ -422,23 +422,23 @@ class MarketAnalyzer:
         self.state_score = score
 
         self.details = {
-            "trend_strength": round(trend, 3),
-            "volatility": round(volatility, 1),
-            "ma_deviation": round(ma_deviation, 2),
-            "ma_arrangement": ma_arrangement,
-            "index_position": round(index_position, 2),
-            "recent_return": round(recent_return, 2),
-            "vol_ratio": round(vol_ratio, 2),
-            "today_change": round(today_change, 2),
-            "score": score,
-            "position_ratio": position_ratio,
-            "advice": advice,
-            'limit_up_count': market_stats.get('limit_up_count', 0),
-            'limit_down_count': market_stats.get('limit_down_count', 0),
-            'up_count': market_stats.get('up_count', 0),
-            'down_count': market_stats.get('down_count', 0),
-            'advance_percent': market_stats.get('advance_percent', 0),
-        }
+                "trend_strength": float(round(trend, 3)),
+                "volatility": float(round(volatility, 1)),            
+                "ma_deviation": float(round(ma_deviation, 2)),
+                "ma_arrangement": ma_arrangement,
+                "index_position": float(round(index_position, 2)),
+                "recent_return": float(round(recent_return, 2)),
+                "vol_ratio": float(round(vol_ratio, 2)),
+                "today_change": float(round(today_change, 2)),
+                "score": int(score),  # 确保是 int
+                "position_ratio": float(position_ratio),
+                "advice": advice,
+                'limit_up_count': int(market_stats.get('limit_up_count', 0)),
+                'limit_down_count': int(market_stats.get('limit_down_count', 0)),
+                'up_count': int(market_stats.get('up_count', 0)),
+                'down_count': int(market_stats.get('down_count', 0)),
+                'advance_percent': float(market_stats.get('advance_percent', 0)),
+            }
         if pattern:
             self.details["candle_pattern"] = pattern
             self.details["pattern_boost"] = pattern_strength
