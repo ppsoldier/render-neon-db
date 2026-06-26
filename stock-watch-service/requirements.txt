@@ -11,3 +11,4 @@ psycopg2-binary==2.9.10
 loguru>=0.7.0
 redis>=4.6.0
 baostock
+akshare>=1.12.0
