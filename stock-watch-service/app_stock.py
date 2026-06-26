@@ -1126,7 +1126,7 @@ async def user_login(request: Request):
 
 # ========== 选股执行模块（Redis 版本） ==========
 # 初始化 Redis 连接
-REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+REDIS_URL = os.environ.get("REDIS_URL", "redis://default:FBRTgBVjJPiTrVTBCpaZqrSfVsaIaxrA@redis.railway.internal:6379")
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
 def _get_pick_script_path() -> str:
