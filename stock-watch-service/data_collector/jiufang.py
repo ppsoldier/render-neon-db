@@ -250,7 +250,7 @@ class JiuFangCollector:
     # ========== 个股行情（多线程） ==========
 
     def _fetch_stock_page(self, sort_type: str, page: int) -> List[Tuple]:
-        """获取单页个股数据（供多线程调用）"""
+        """获取单页个股数据（供多线程调用）"""        
         timestamp = str(int(time.time() * 1000))
         params = {
             "pageNum": str(page),
@@ -271,7 +271,8 @@ class JiuFangCollector:
             "user-agent": self.session.headers["User-Agent"],
         }
         try:
-            resp = self.session.get(API_BASE, params=params, headers=headers, timeout=15)
+            timeout = REQUEST_TIMEOUT  # 从config导入
+            resp = self.session.get(API_BASE, params=params, headers=headers, timeout=timeout)            
             data = resp.json()
             infos = data.get("data", {}).get("infos")
             if not infos:
@@ -331,87 +332,93 @@ class JiuFangCollector:
         logger.info(f"个股 {sort_type} 榜采集完成，共 {len(all_results)} 条")
         return all_results
 
-    def _fetch_stock_rank(self, sort_type: str, pages: int = 2) -> List[Tuple]:
-        """获取涨跌幅排行榜（兼容单线程调用，内部自动选择多线程）"""
-        if pages > 10:
-            return self._fetch_stock_rank_parallel(sort_type, pages)
-        else:
-            # 页数少时使用单线程
-            results = []
-            for page in range(1, pages + 1):
-                page_results = self._fetch_stock_page(sort_type, page)
-                results.extend(page_results)
-                time.sleep(self.interval)
-            return results
+    def _fetch_stock_rank(self, sort_type: str, pages: int = 2, stop_on_empty: bool = True) -> List[Tuple]:
+    """获取涨跌幅排行榜"""
+    results = []
+    for page in range(1, pages + 1):
+        page_results = self._fetch_stock_page(sort_type, page)
+        if not page_results and stop_on_empty:
+            logger.info(f"个股 {sort_type} 榜第 {page} 页返回空数据，停止翻页")
+            break
+        results.extend(page_results)
+        time.sleep(self.interval)
+    logger.info(f"个股 {sort_type} 榜采集完成，共 {len(results)} 条")
+    return results
 
-    def get_hot_stocks(self, stock_pages: int = None) -> pd.DataFrame:
-        """获取热门个股（涨幅榜+跌幅榜合并）"""
-        if stock_pages is None:
-            stock_pages = PERFORMANCE.get("stock_pages", 100)
-        logger.info("正在从九方智投获取热门个股行情...")
 
-        # 涨幅榜：多线程
-        up_list = self._fetch_stock_rank("0", pages=stock_pages)
-        # 跌幅榜：单线程即可
-        down_list = self._fetch_stock_rank("1", pages=2)
 
-        all_stocks = up_list + down_list
 
-        if not all_stocks:
-            logger.warning("九方智投未返回个股数据")
-            return pd.DataFrame()
+    def get_hot_stocks(self, force_refresh: bool = False, stock_pages: int = None):
+    """获取热门个股（涨幅榜+跌幅榜合并）
+    force_refresh: True 则强制重新采集，忽略缓存
+    stock_pages: 翻页数，如果为None则使用配置文件中的值
+    """
+    if stock_pages is None:
+        stock_pages = PERFORMANCE.get("stock_pages", 500)
+    logger.info("正在从九方智投获取热门个股行情...")
 
-        seen = set()
-        records = []
-        for symbol, name, openPrice, highPx, lowPx, price, closePx, preClosePx, \
-            change_pct, mainNetFlow, turnoverRatio, volRatio, businessBalance, \
-            amplitude, day5PxChangeRate, marketValue, circulationValue, peRate in all_stocks:
-            if symbol in seen:
-                continue
-            seen.add(symbol)
+    # 涨幅榜：多线程（如果页数较多，使用多线程）
+    up_list = self._fetch_stock_rank("0", pages=stock_pages, stop_on_empty=True)
+    # 跌幅榜：只取前2页即可
+    down_list = self._fetch_stock_rank("1", pages=2, stop_on_empty=True)    
 
-            _price = float(price)
-            _pre_close = float(preClosePx)
-            _change_pct = float(change_pct)
-            _biz_balance = float(businessBalance)
-            _main_flow = float(mainNetFlow)
-            _mkt_value = float(marketValue)
-            _circ_value = float(circulationValue)
+    all_stocks = up_list + down_list
 
-            change_amt = round(_pre_close * _change_pct / 100, 2)
-            estimated_volume = int(round(_biz_balance / _price)) if _price > 0 else 0
+    if not all_stocks:
+        logger.warning("九方智投未返回个股数据")
+        return pd.DataFrame()
 
-            records.append({
-                "code": symbol,
-                "name": name,
-                "price": _price,
-                "change_pct": _change_pct,
-                "change_amount": change_amt,
-                "volume": estimated_volume,
-                "amount": _biz_balance / 1e8,
-                "turnover_rate": float(turnoverRatio),
-                "pe_ratio": float(peRate),
-                "high": float(highPx),
-                "low": float(lowPx),
-                "open": float(openPrice),
-                "pre_close": _pre_close,
-                "market_cap": _mkt_value / 1e8,
-                "circulating_market_cap": _circ_value / 1e8,
-                "volume_ratio": float(volRatio),
-                "amplitude": float(amplitude),
-                "main_inflow": _main_flow / 1e8,
-                "main_inflow_pct": round(_main_flow / _biz_balance * 100, 2) if _biz_balance else 0,
-            })
+    seen = set()
+    records = []
+    for symbol, name, openPrice, highPx, lowPx, price, closePx, preClosePx, \
+        change_pct, mainNetFlow, turnoverRatio, volRatio, businessBalance, \
+        amplitude, day5PxChangeRate, marketValue, circulationValue, peRate in all_stocks:
+        if symbol in seen:
+            continue
+        seen.add(symbol)
 
-        df = pd.DataFrame(records)
-        if len(df) > 1:
-            df["heat_score"] = df["change_pct"].abs().rank(pct=True) * 100
-            df = df.sort_values("heat_score", ascending=False)
-        else:
-            df["heat_score"] = 50
+        _price = float(price)
+        _pre_close = float(preClosePx)
+        _change_pct = float(change_pct)
+        _biz_balance = float(businessBalance)
+        _main_flow = float(mainNetFlow)
+        _mkt_value = float(marketValue)
+        _circ_value = float(circulationValue)
 
-        logger.info(f"九方智投: 获取到 {len(df)} 只热门个股")
-        return df
+        change_amt = round(_pre_close * _change_pct / 100, 2)
+        estimated_volume = int(round(_biz_balance / _price)) if _price > 0 else 0
+
+        records.append({
+            "code": symbol,
+            "name": name,
+            "price": _price,
+            "change_pct": _change_pct,
+            "change_amount": change_amt,
+            "volume": estimated_volume,
+            "amount": _biz_balance / 1e8,
+            "turnover_rate": float(turnoverRatio),
+            "pe_ratio": float(peRate),
+            "high": float(highPx),
+            "low": float(lowPx),
+            "open": float(openPrice),
+            "pre_close": _pre_close,
+            "market_cap": _mkt_value / 1e8,
+            "circulating_market_cap": _circ_value / 1e8,
+            "volume_ratio": float(volRatio),
+            "amplitude": float(amplitude),
+            "main_inflow": _main_flow / 1e8,
+            "main_inflow_pct": round(_main_flow / _biz_balance * 100, 2) if _biz_balance else 0,
+        })
+
+    df = pd.DataFrame(records)
+    if len(df) > 1:
+        df["heat_score"] = df["change_pct"].abs().rank(pct=True) * 100
+        df = df.sort_values("heat_score", ascending=False)
+    else:
+        df["heat_score"] = 50
+
+    logger.info(f"九方智投: 获取到 {len(df)} 只热门个股")
+    return df
 
     # ========== 板块成分股 ==========
 
