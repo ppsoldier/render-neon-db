@@ -845,18 +845,17 @@ def run():
         return
 
     collector = JiuFangCollector()
-
-    # 获取九方数据（保持不变）
-    if collector.has_today_cache():
+    # 根据配置决定是否使用缓存
+    if USE_CACHE and collector.has_today_cache():
         logger.info("使用今日缓存数据")
         stocks_df, concepts_df, industries_df = collector.load_full_cache()
     else:
-        logger.info("缓存不存在，从API获取...")
-        stocks_df = collector.get_hot_stocks()
+        logger.info("强制实时采集（缓存已关闭或不存在）")
+        stocks_df = collector.get_hot_stocks(force_refresh=True)  # 新增参数
         concepts_df = collector.get_hot_concepts()
         industries_df = collector.get_hot_industry()
         if not stocks_df.empty:
-            collector.save_full_cache(stocks_df, concepts_df, industries_df)
+            collector.save_full_cache(stocks_df, concepts_df, industries_df)  # 仍然保存缓存，但下次不会使用（因为USE_CACHE=False）
         else:
             logger.error("获取个股数据失败")
             return
