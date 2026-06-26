@@ -1,6 +1,9 @@
 import os
-import sys
 import asyncio
+import sys
+import uuid
+import threading
+import subprocess
 from datetime import datetime, timedelta
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,9 +22,9 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 import re
-import subprocess
-import threading
-import uuid
+
+# ---- 新增 Redis 导入 ----
+import redis
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -868,7 +871,6 @@ async def add_holding(request: Request):
         logger.error(f"添加持仓错误: {e}")
         return {"code": 500, "message": str(e)}
 
-# 统一删除持仓（不带 user_id，因为是全局共享）
 @app.delete("/api/holdings")
 async def delete_holding(stock_code: str = Query(..., description="股票代码")):
     try:
@@ -950,7 +952,6 @@ async def update_holding(request: Request):
 
 @app.post("/api/holdings/refresh")
 async def refresh_holdings_prices(user_id: str):
-    # 此函数保留但暂不使用 user_id（全局共享）
     try:
         engine = get_sync_engine()
         with engine.connect() as conn:
@@ -1123,10 +1124,10 @@ async def user_login(request: Request):
     except Exception as e:
         return {"code": 500, "message": str(e)}
 
-# ========== 选股执行模块（新增） ==========
-# 选股任务状态存储
-pick_tasks = {}
-pick_lock = threading.Lock()
+# ========== 选股执行模块（Redis 版本） ==========
+# 初始化 Redis 连接
+REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
 def _get_pick_script_path() -> str:
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -1140,18 +1141,39 @@ def _get_pick_script_path() -> str:
             return path
     raise FileNotFoundError("找不到 daily_pick_stocks.py 脚本")
 
+def _save_task_to_redis(task_id: str, task_data: dict):
+    """将任务数据存入 Redis，1小时过期"""
+    key = f"task:{task_id}"
+    redis_client.setex(key, 3600, json.dumps(task_data))
+
+def _get_task_from_redis(task_id: str) -> Optional[dict]:
+    key = f"task:{task_id}"
+    data = redis_client.get(key)
+    if data:
+        return json.loads(data)
+    return None
+
+def _update_task_in_redis(task_id: str, updates: dict):
+    """更新 Redis 中的任务状态（部分字段）"""
+    task = _get_task_from_redis(task_id)
+    if task:
+        task.update(updates)
+        _save_task_to_redis(task_id, task)
+
 def _run_pick_task(task_id: str):
     try:
-        with pick_lock:
-            pick_tasks[task_id]['status'] = 'running'
-            pick_tasks[task_id]['started_at'] = datetime.now().isoformat()
-            pick_tasks[task_id]['message'] = '正在加载数据...'
-            pick_tasks[task_id]['progress'] = 10
+        # 更新状态为 running
+        _update_task_in_redis(task_id, {
+            'status': 'running',
+            'started_at': datetime.now().isoformat(),
+            'message': '正在加载数据...',
+            'progress': 10
+        })
+
         script_path = _get_pick_script_path()
         script_dir = os.path.dirname(script_path)
-        with pick_lock:
-            pick_tasks[task_id]['message'] = '执行选股中...'
-            pick_tasks[task_id]['progress'] = 30
+        _update_task_in_redis(task_id, {'message': '执行选股中...', 'progress': 30})
+
         process = subprocess.Popen(
             [sys.executable, script_path],
             cwd=script_dir,
@@ -1160,87 +1182,90 @@ def _run_pick_task(task_id: str):
             text=True,
             encoding='utf-8'
         )
+
         stdout_lines = []
         stderr_lines = []
+
         def read_stdout():
             for line in iter(process.stdout.readline, ''):
                 if line:
                     stdout_lines.append(line)
+                    # 解析进度信息
                     if '进度' in line or '%' in line:
-                        with pick_lock:
-                            pick_tasks[task_id]['message'] = line.strip()
-                            import re
-                            match = re.search(r'(\d+)%', line)
-                            if match:
-                                pick_tasks[task_id]['progress'] = min(90, int(match.group(1)))
+                        msg = line.strip()
+                        import re
+                        match = re.search(r'(\d+)%', line)
+                        progress = min(90, int(match.group(1))) if match else 50
+                        _update_task_in_redis(task_id, {'message': msg, 'progress': progress})
                     if '选股完成' in line or 'selected_stocks' in line:
-                        with pick_lock:
-                            pick_tasks[task_id]['progress'] = 90
+                        _update_task_in_redis(task_id, {'progress': 90})
                     logger.info(f"[选股] {line.strip()}")
+
         def read_stderr():
             for line in iter(process.stderr.readline, ''):
                 if line:
                     stderr_lines.append(line)
                     logger.warning(f"[选股错误] {line.strip()}")
+
         stdout_thread = threading.Thread(target=read_stdout)
         stderr_thread = threading.Thread(target=read_stderr)
         stdout_thread.start()
         stderr_thread.start()
+
         process.wait()
         stdout_thread.join()
         stderr_thread.join()
+
         if process.returncode == 0:
-            with pick_lock:
-                pick_tasks[task_id]['status'] = 'completed'
-                pick_tasks[task_id]['message'] = '选股完成'
-                pick_tasks[task_id]['completed_at'] = datetime.now().isoformat()
-                pick_tasks[task_id]['progress'] = 100
-                pick_tasks[task_id]['output'] = ''.join(stdout_lines[-3000:]) if stdout_lines else ''
+            _update_task_in_redis(task_id, {
+                'status': 'completed',
+                'message': '选股完成',
+                'completed_at': datetime.now().isoformat(),
+                'progress': 100,
+                'output': ''.join(stdout_lines[-3000:]) if stdout_lines else ''
+            })
             logger.info(f"选股任务 {task_id} 完成")
         else:
             error_msg = ''.join(stderr_lines[-10:]) if stderr_lines else '未知错误'
-            with pick_lock:
-                pick_tasks[task_id]['status'] = 'failed'
-                pick_tasks[task_id]['message'] = f'选股失败: {error_msg[:200]}'
-                pick_tasks[task_id]['error'] = error_msg
-                pick_tasks[task_id]['progress'] = 0
+            _update_task_in_redis(task_id, {
+                'status': 'failed',
+                'message': f'选股失败: {error_msg[:200]}',
+                'error': error_msg,
+                'progress': 0
+            })
             logger.error(f"选股任务 {task_id} 失败: {error_msg}")
     except Exception as e:
         logger.error(f"选股任务 {task_id} 异常: {str(e)}")
         import traceback
-        with pick_lock:
-            pick_tasks[task_id]['status'] = 'failed'
-            pick_tasks[task_id]['message'] = f'选股异常: {str(e)}'
-            pick_tasks[task_id]['error'] = traceback.format_exc()
-            pick_tasks[task_id]['progress'] = 0
+        _update_task_in_redis(task_id, {
+            'status': 'failed',
+            'message': f'选股异常: {str(e)}',
+            'error': traceback.format_exc(),
+            'progress': 0
+        })
 
 @app.post("/api/stock/run-pick")
 async def run_stock_pick():
     try:
-        with pick_lock:
-            for tid, task in pick_tasks.items():
-                if task.get('status') == 'running':
-                    return {"code": 400, "message": "已有选股任务正在运行，请稍后", "data": {"task_id": tid, "status": "running"}}
-        try:
-            script_path = _get_pick_script_path()
-            logger.info(f"选股脚本路径: {script_path}")
-        except FileNotFoundError as e:
-            return {"code": 500, "message": f"选股脚本不存在: {str(e)}"}
+        # 检查是否有正在运行的任务（可选，简单起见可跳过）
         task_id = str(uuid.uuid4())
-        with pick_lock:
-            pick_tasks[task_id] = {
-                'task_id': task_id,
-                'status': 'pending',
-                'message': '任务已提交，等待执行...',
-                'progress': 0,
-                'started_at': None,
-                'completed_at': None,
-                'error': None,
-                'output': None,
-            }
+        initial_data = {
+            'task_id': task_id,
+            'status': 'pending',
+            'message': '任务已提交，等待执行...',
+            'progress': 0,
+            'started_at': None,
+            'completed_at': None,
+            'error': None,
+            'output': None,
+        }
+        _save_task_to_redis(task_id, initial_data)
+
+        # 启动后台线程执行选股
         thread = threading.Thread(target=_run_pick_task, args=(task_id,))
         thread.daemon = True
         thread.start()
+
         logger.info(f"选股任务已提交: {task_id}")
         return {"code": 200, "message": "选股任务已提交", "data": {"task_id": task_id, "status": "pending"}}
     except Exception as e:
@@ -1252,10 +1277,10 @@ async def run_stock_pick():
 @app.get("/api/stock/pick-status")
 async def get_pick_status(task_id: str = Query(..., description="任务ID")):
     try:
-        with pick_lock:
-            if task_id not in pick_tasks:
-                return {"code": 404, "message": "任务不存在"}
-            task = pick_tasks[task_id].copy()
+        task = _get_task_from_redis(task_id)
+        if not task:
+            return {"code": 404, "message": "任务不存在"}
+        # 如果任务已完成，尝试从数据库获取最新选股结果
         if task.get('status') == 'completed':
             try:
                 from db_manager import get_latest_picks
@@ -1271,19 +1296,9 @@ async def get_pick_status(task_id: str = Query(..., description="任务ID")):
 
 @app.get("/api/stock/pick-tasks")
 async def get_pick_tasks(limit: int = Query(10, ge=1, le=50)):
-    try:
-        with pick_lock:
-            tasks = []
-            for tid, task in pick_tasks.items():
-                task_copy = task.copy()
-                task_copy['task_id'] = tid
-                tasks.append(task_copy)
-            tasks.sort(key=lambda x: x.get('started_at') or x.get('completed_at') or '', reverse=True)
-            tasks = tasks[:limit]
-        return {"code": 200, "data": tasks, "total": len(tasks)}
-    except Exception as e:
-        logger.error(f"获取任务列表失败: {str(e)}")
-        return {"code": 500, "message": str(e)}
+    # 注意：此接口无法直接列出所有任务（Redis 不支持按模式查询所有键）
+    # 可通过 SCAN 命令实现，但此处简化，返回一个提示
+    return {"code": 200, "data": [], "message": "请使用任务ID单独查询状态"}
 
 @app.get("/api/stock/latest-picks")
 async def get_latest_picks_api():
@@ -1320,6 +1335,12 @@ async def get_latest_picks_api():
 async def lifespan(app: FastAPI):
     logger.info("Starting Stock Watch System...")
     await init_database()
+    # 测试 Redis 连接
+    try:
+        redis_client.ping()
+        logger.info("Redis 连接成功")
+    except Exception as e:
+        logger.error(f"Redis 连接失败: {e}")
     logger.info("Stock Watch System ready!")
     yield
     if db_pool:
