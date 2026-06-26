@@ -17,7 +17,7 @@ import requests
 import pandas as pd
 from loguru import logger
 
-from config import DATA_SOURCES, STOCK_FILTER, DATA_CACHE_DIR, PERFORMANCE, LLM_CONFIG
+from config import DATA_SOURCES, STOCK_FILTER, DATA_CACHE_DIR, PERFORMANCE, LLM_CONFIG, REQUEST_TIMEOUT, PERFORMANCE, MAX_STOCK_PAGES
 
 # API 基础地址
 API_BASE = "https://api-hq.chongnengjihua.com/finance/api/2/stock/a/rank/list"
