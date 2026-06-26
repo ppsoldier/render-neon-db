@@ -388,7 +388,6 @@ def save_stocks_data(df: pd.DataFrame, delete_existing: bool = True):
 
 
 def save_concepts_data(df: pd.DataFrame, delete_existing: bool = True):
-    """保存概念板块数据到数据库"""
     if df.empty:
         logger.warning("概念数据为空，跳过保存")
         return
@@ -408,7 +407,8 @@ def save_concepts_data(df: pd.DataFrame, delete_existing: bool = True):
         df_copy = df.copy()
         df_copy['date'] = today
         
-        cols = ['date', 'concept_name', 'concept_code', 'change_pct', 'leading_stock', 'stock_count', 'up_count', 'Fundflow']
+        # 关键修改：将 "Fundflow" 改为 "fundflow"（全小写）
+        cols = ['date', 'concept_name', 'concept_code', 'change_pct', 'leading_stock', 'stock_count', 'up_count', 'fundflow']
         existing_cols = [c for c in cols if c in df_copy.columns]
         df_copy = df_copy[existing_cols]
         
