@@ -345,7 +345,6 @@ def save_market_data(market_result: dict, delete_existing: bool = True):
 
 
 def save_stocks_data(df: pd.DataFrame, delete_existing: bool = True):
-    """保存股票数据到数据库"""
     if df.empty:
         logger.warning("股票数据为空，跳过保存")
         return
@@ -363,7 +362,17 @@ def save_stocks_data(df: pd.DataFrame, delete_existing: bool = True):
                 conn.commit()
         
         df_copy = df.copy()
-        df_copy['date'] = today
+        # 关键修复：将日期转换为字符串格式
+        if 'date' in df_copy.columns:
+            # 如果是 pandas Timestamp，转换为字符串
+            if pd.api.types.is_datetime64_any_dtype(df_copy['date']):
+                df_copy['date'] = df_copy['date'].dt.strftime('%Y-%m-%d')
+            else:
+                # 如果是整数或其他类型，转换为字符串
+                df_copy['date'] = df_copy['date'].astype(str)
+        else:
+            # 如果没有 date 列，使用今天的日期
+            df_copy['date'] = today
         
         # 选择需要的列
         cols = ['date', 'code', 'name', 'price', 'change_pct', 'volume', 'amount', 
