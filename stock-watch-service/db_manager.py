@@ -576,6 +576,83 @@ def get_watchlist():
         return []
 
 
+# ========== 止盈止损配置管理 ==========
+
+def get_stop_loss_config():
+    """获取止盈止损配置"""
+    try:
+        engine = get_engine()
+        with engine.connect() as conn:
+            result = conn.execute(
+                text(f"""
+                    SELECT id, stop_loss_pct, take_profit_pct, max_daily_trades, 
+                           single_buy_amount, min_buy_score, updated_at
+                    FROM {SCHEMA_NAME}.stop_loss_config
+                    ORDER BY id DESC
+                    LIMIT 1
+                """)
+            )
+            row = result.fetchone()
+            if row:
+                return {
+                    'id': row[0],
+                    'stop_loss_pct': float(row[1]) if row[1] else -7.0,
+                    'take_profit_pct': float(row[2]) if row[2] else 15.0,
+                    'max_daily_trades': row[3] if row[3] else 20,
+                    'single_buy_amount': float(row[4]) if row[4] else 10000,
+                    'min_buy_score': float(row[5]) if row[5] else 50,
+                    'updated_at': str(row[6]) if row[6] else None
+                }
+            else:
+                # 如果没有配置，创建默认配置
+                conn.execute(
+                    text(f"""
+                        INSERT INTO {SCHEMA_NAME}.stop_loss_config 
+                        (stop_loss_pct, take_profit_pct, max_daily_trades, single_buy_amount, min_buy_score)
+                        VALUES (-7.00, 15.00, 20, 10000.00, 50.00)
+                    """)
+                )
+                conn.commit()
+                return get_stop_loss_config()
+    except Exception as e:
+        logger.error(f"获取止盈止损配置失败: {e}")
+        return None
+
+
+def save_stop_loss_config(config):
+    """保存止盈止损配置"""
+    try:
+        engine = get_engine()
+        with engine.connect() as conn:
+            # 更新现有配置（只保留最新一条）
+            conn.execute(
+                text(f"""
+                    UPDATE {SCHEMA_NAME}.stop_loss_config 
+                    SET stop_loss_pct = :stop_loss_pct,
+                        take_profit_pct = :take_profit_pct,
+                        max_daily_trades = :max_daily_trades,
+                        single_buy_amount = :single_buy_amount,
+                        min_buy_score = :min_buy_score,
+                        updated_at = NOW()
+                    WHERE id = 1
+                """),
+                {
+                    'stop_loss_pct': config.get('stop_loss_pct', -7.0),
+                    'take_profit_pct': config.get('take_profit_pct', 15.0),
+                    'max_daily_trades': config.get('max_daily_trades', 20),
+                    'single_buy_amount': config.get('single_buy_amount', 10000),
+                    'min_buy_score': config.get('min_buy_score', 50)
+                }
+            )
+            conn.commit()
+        logger.info("止盈止损配置已保存")
+        return True
+    except Exception as e:
+        logger.error(f"保存止盈止损配置失败: {e}")
+        return False
+
+
+
 def get_latest_selected_stocks(limit: int = 30, fallback_to_prev: bool = True):
     """
     获取最新的选股结果
