@@ -2028,26 +2028,57 @@ async def get_auto_trade_status():
     """获取自动交易状态"""
     try:
         account = get_sim_account()
-        status = account.get_status()
-        if status:
-            today = datetime.now().strftime("%Y-%m-%d")
-            
-            with account.engine.connect() as conn:
-                result = conn.execute(
-                    text(f"""
-                        SELECT COUNT(*) 
-                        FROM {SCHEMA_NAME}.trade_records 
-                        WHERE DATE(created_at) = :today
-                    """),
-                    {'today': today}
-                )
-                daily_count = result.fetchone()[0]
-            
-            status['daily_trade_count'] = daily_count
-            status['last_trade_date'] = today
-            
-            return {"code": 200, "data": status}
-        return {"code": 404, "message": "账户状态不存在"}
+        
+        # 更新实时价格（保持持仓价格最新）
+        account.update_prices()
+        
+        # 获取持仓列表（含实时价格）
+        positions = account._get_all_positions()
+        
+        # 从 account_state 表获取总盈亏数据
+        account_state = account._get_account_state()
+        
+        if account_state:
+            # 使用 account_state 中的总数据
+            total_pnl = account_state['total_pnl']
+            total_pnl_pct = account_state['total_pnl_pct']
+            total_value = account_state['total_value']
+            cash = account_state['cash']
+        else:
+            # 如果没有 account_state 数据，从持仓计算
+            total_pnl = sum([p['pnl'] for p in positions])
+            total_value = account.cash + sum([p['market_value'] for p in positions])
+            total_pnl_pct = (total_pnl / 100000) * 100 if 100000 > 0 else 0
+            cash = account.cash
+        
+        today = datetime.now().strftime("%Y-%m-%d")
+        
+        # 查询今日交易次数
+        with account.engine.connect() as conn:
+            result = conn.execute(
+                text(f"""
+                    SELECT COUNT(*) 
+                    FROM {SCHEMA_NAME}.trade_records 
+                    WHERE DATE(created_at) = :today
+                """),
+                {'today': today}
+            )
+            daily_count = result.fetchone()[0]
+        
+        return {
+            "code": 200,
+            "data": {
+                "cash": round(cash, 2),
+                "total_value": round(total_value, 2),
+                "total_pnl": round(total_pnl, 2),           # 总盈亏（包含已实现）
+                "total_pnl_pct": round(total_pnl_pct, 2),    # 总收益率
+                "position_count": len(positions),
+                "daily_trade_count": daily_count,
+                "last_trade_date": today,
+                "positions": positions,
+                "snapshot_date": account_state.get('snapshot_date', today) if account_state else today
+            }
+        }
     except Exception as e:
         logger.error(f"获取交易状态错误: {e}")
         return {"code": 500, "message": str(e)}
