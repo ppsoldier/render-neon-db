@@ -1557,8 +1557,8 @@ class SimulatedAccountDB:
                 {
                     'cash': cash,
                     'total_value': total_value,
-                    'total_pnl': total_pnl,
-                    'total_pnl_pct': total_pnl_pct
+                    'total_pnl': total_pnl,        # 传入正确的总盈亏
+                    'total_pnl_pct': total_pnl_pct # 传入正确的总收益率
                 }
             )
             conn.commit()
@@ -1716,14 +1716,19 @@ class SimulatedAccountDB:
             action = "买入"
         
         new_cash = cash - total_cost
-        
+
+        # buy 方法中的修复
         positions = self._get_all_positions()
         total_market_value = sum([p['market_value'] for p in positions])
-        total_pnl = sum([p['pnl'] for p in positions])
-        total_value = new_cash + total_market_value
-        total_pnl_pct = (total_pnl / account['initial_capital']) * 100 if account['initial_capital'] > 0 else 0
+        total_cost = sum([p['cost_price'] * p['quantity'] for p in positions])
         
-        self._update_account_state(new_cash, total_value, total_pnl, total_pnl_pct)
+        # 正确计算总盈亏
+        total_value = new_cash + total_market_value
+        initial_capital = account['initial_capital']
+        total_pnl = total_value - initial_capital
+        total_pnl_pct = (total_pnl / initial_capital) * 100 if initial_capital > 0 else 0
+        
+        self._update_account_state(new_cash, total_value, total_pnl, total_pnl_pct)       
         
         # 记录交易
         self._save_trade_record(code, name, action, price, quantity, trade_amount, commission, 0, 0, 0, reason)
@@ -1809,7 +1814,7 @@ class SimulatedAccountDB:
         return {p['code']: p for p in positions}
     
     def update_prices(self):
-        """更新所有持仓的实时价格"""
+        """更新所有持仓的实时价格和盈亏"""
         positions = self._get_all_positions()
         codes = [p['code'] for p in positions]
         
@@ -1821,27 +1826,38 @@ class SimulatedAccountDB:
         for code, pos in self._get_positions_dict().items():
             quote = quotes.get(code, {})
             current_price = quote.get('price', 0)
+            
             if current_price > 0:
                 cost_price = pos['cost_price']
                 quantity = pos['quantity']
                 market_value = current_price * quantity
-                pnl = market_value - (cost_price * quantity)
-                pnl_pct = (pnl / (cost_price * quantity)) * 100 if cost_price * quantity > 0 else 0
+                total_cost = cost_price * quantity
+                pnl = market_value - total_cost
+                pnl_pct = (pnl / total_cost) * 100 if total_cost > 0 else 0
                 
                 self._update_position(
                     code, pos['name'], quantity, cost_price,
                     current_price, market_value, pnl, pnl_pct
                 )
         
+        # 更新账户状态 - 使用正确的总盈亏计算方式
         account = self._get_account_state()
         if account:
             positions = self._get_all_positions()
             total_market_value = sum([p['market_value'] for p in positions])
-            total_pnl = sum([p['pnl'] for p in positions])
-            total_value = account['cash'] + total_market_value
-            total_pnl_pct = (total_pnl / account['initial_capital']) * 100 if account['initial_capital'] > 0 else 0
+            total_cost = sum([p['cost_price'] * p['quantity'] for p in positions])
             
-            self._update_account_state(account['cash'], total_value, total_pnl, total_pnl_pct)
+            # 正确的总盈亏 = 总资产 - 初始本金
+            # 总资产 = 现金 + 持仓市值
+            cash = account['cash']
+            total_value = cash + total_market_value
+            initial_capital = account['initial_capital']
+            
+            # 总盈亏（包含已实现盈亏）
+            total_pnl = total_value - initial_capital
+            total_pnl_pct = (total_pnl / initial_capital) * 100 if initial_capital > 0 else 0
+            
+            self._update_account_state(cash, total_value, total_pnl, total_pnl_pct)
     
     def check_stop_conditions(self):
         """检查所有持仓的止盈止损"""
