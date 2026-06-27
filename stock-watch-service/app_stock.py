@@ -2268,6 +2268,7 @@ async def get_trade_stats():
         engine = get_sync_engine()
         
         with engine.connect() as conn:
+            # 总统计
             result = conn.execute(
                 text(f"""
                     SELECT 
@@ -2278,12 +2279,13 @@ async def get_trade_stats():
                         SUM(commission) as total_commission,
                         SUM(stamp_tax) as total_stamp_tax,
                         SUM(pnl) as total_pnl,
-                        AVG(pnl_pct) as avg_pnl_pct
+                        COALESCE(AVG(pnl_pct), 0) as avg_pnl_pct
                     FROM {SCHEMA_NAME}.trade_records
                 """)
             )
             row = result.fetchone()
             
+            # 今日统计
             today = datetime.now().strftime("%Y-%m-%d")
             result_today = conn.execute(
                 text(f"""
@@ -2291,7 +2293,7 @@ async def get_trade_stats():
                         COUNT(*) as today_trades,
                         SUM(CASE WHEN action LIKE '%买入%' OR action = '买入' THEN 1 ELSE 0 END) as today_buy,
                         SUM(CASE WHEN action LIKE '%卖出%' OR action = '卖出' OR action LIKE '%清仓%' THEN 1 ELSE 0 END) as today_sell,
-                        SUM(pnl) as today_pnl
+                        COALESCE(SUM(pnl), 0) as today_pnl
                     FROM {SCHEMA_NAME}.trade_records
                     WHERE trade_date = :today
                 """),
@@ -2299,6 +2301,7 @@ async def get_trade_stats():
             )
             row_today = result_today.fetchone()
             
+            # 按股票统计
             result_stocks = conn.execute(
                 text(f"""
                     SELECT 
@@ -2306,7 +2309,7 @@ async def get_trade_stats():
                         COUNT(*) as trade_count,
                         SUM(CASE WHEN action LIKE '%买入%' OR action = '买入' THEN quantity ELSE 0 END) as buy_quantity,
                         SUM(CASE WHEN action LIKE '%卖出%' OR action = '卖出' OR action LIKE '%清仓%' THEN quantity ELSE 0 END) as sell_quantity,
-                        SUM(pnl) as total_pnl
+                        COALESCE(SUM(pnl), 0) as total_pnl
                     FROM {SCHEMA_NAME}.trade_records
                     GROUP BY code, name
                     ORDER BY total_pnl DESC
@@ -2335,7 +2338,7 @@ async def get_trade_stats():
                         "total_commission": float(row[4]) if row[4] else 0,
                         "total_stamp_tax": float(row[5]) if row[5] else 0,
                         "total_pnl": float(row[6]) if row[6] else 0,
-                        "avg_pnl_pct": float(row[7]) if row[7] else 0
+                        "avg_pnl_pct": float(row[7]) if row[7] else 0  # 确保返回 0 而不是 null
                     },
                     "today": {
                         "trades": row_today[0] or 0,
