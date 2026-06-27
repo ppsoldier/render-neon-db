@@ -1932,6 +1932,7 @@ async def execute_auto_trade(request: Request):
             }
         
         elif action == 'all':
+            # 1. 先检查止盈止损（自动执行）
             stop_results = account.check_stop_conditions()
             for r in stop_results:
                 trades.append({
@@ -1940,6 +1941,7 @@ async def execute_auto_trade(request: Request):
                     "success": r['success'],
                     "message": r['message']
                 })
+    
             
             account.update_prices()
             
