@@ -1464,13 +1464,17 @@ class SimulatedAccountDB:
                     """)
                 )
                 conn.commit()
+
+
     
     def _get_account_state(self):
-        """获取最新账户状态"""
+    """获取最新账户状态"""
+    try:
         with self.engine.connect() as conn:
+            # 获取最新的一条记录
             result = conn.execute(
                 text(f"""
-                    SELECT initial_capital, cash, total_value, total_pnl, total_pnl_pct
+                    SELECT initial_capital, cash, total_value, total_pnl, total_pnl_pct, snapshot_date
                     FROM {SCHEMA_NAME}.account_state
                     ORDER BY id DESC
                     LIMIT 1
@@ -1483,9 +1487,15 @@ class SimulatedAccountDB:
                     'cash': float(row[1]),
                     'total_value': float(row[2]),
                     'total_pnl': float(row[3]),
-                    'total_pnl_pct': float(row[4])
+                    'total_pnl_pct': float(row[4]),
+                    'snapshot_date': str(row[5]) if row[5] else None
                 }
             return None
+    except Exception as e:
+        logger.error(f"获取账户状态失败: {e}")
+        return None
+
+    
     
     def _update_account_state(self, cash, total_value, total_pnl, total_pnl_pct):
         """更新账户状态"""
@@ -2035,21 +2045,27 @@ async def get_auto_trade_status():
         # 获取持仓列表（含实时价格）
         positions = account._get_all_positions()
         
-        # 从 account_state 表获取总盈亏数据
+        # ========== 从 account_state 表获取总盈亏数据 ==========
         account_state = account._get_account_state()
         
         if account_state:
-            # 使用 account_state 中的总数据
+            # 使用 account_state 中的总数据（包含已实现盈亏）
             total_pnl = account_state['total_pnl']
             total_pnl_pct = account_state['total_pnl_pct']
             total_value = account_state['total_value']
             cash = account_state['cash']
+            initial_capital = account_state.get('initial_capital', 100000)
+            logger.info(f"从 account_state 读取: total_pnl={total_pnl}, total_pnl_pct={total_pnl_pct}")
         else:
             # 如果没有 account_state 数据，从持仓计算
+            total_market_value = sum([p['market_value'] for p in positions])
+            total_cost = sum([p['cost_price'] * p['quantity'] for p in positions])
             total_pnl = sum([p['pnl'] for p in positions])
-            total_value = account.cash + sum([p['market_value'] for p in positions])
+            total_value = account.cash + total_market_value
             total_pnl_pct = (total_pnl / 100000) * 100 if 100000 > 0 else 0
             cash = account.cash
+            initial_capital = 100000
+            logger.info("account_state 无数据，从持仓计算")
         
         today = datetime.now().strftime("%Y-%m-%d")
         
@@ -2065,22 +2081,34 @@ async def get_auto_trade_status():
             )
             daily_count = result.fetchone()[0]
         
+        # 构建返回数据（同时包含总盈亏和浮动盈亏供前端使用）
+        total_market_value = sum([p['market_value'] for p in positions])
+        float_pnl = sum([p['pnl'] for p in positions])
+        
         return {
             "code": 200,
             "data": {
+                # 账户总览（从 account_state 读取）
                 "cash": round(cash, 2),
                 "total_value": round(total_value, 2),
                 "total_pnl": round(total_pnl, 2),           # 总盈亏（包含已实现）
                 "total_pnl_pct": round(total_pnl_pct, 2),    # 总收益率
+                "initial_capital": round(initial_capital, 2),
+                "snapshot_date": account_state.get('snapshot_date', today) if account_state else today,
+                # 持仓信息
                 "position_count": len(positions),
+                "positions": positions,
                 "daily_trade_count": daily_count,
                 "last_trade_date": today,
-                "positions": positions,
-                "snapshot_date": account_state.get('snapshot_date', today) if account_state else today
+                # 浮动盈亏（当前持仓浮动盈亏，供参考）
+                "float_pnl": round(float_pnl, 2),
+                "float_pnl_pct": round((float_pnl / 100000) * 100, 2) if 100000 > 0 else 0
             }
         }
     except Exception as e:
         logger.error(f"获取交易状态错误: {e}")
+        import traceback
+        traceback.print_exc()
         return {"code": 500, "message": str(e)}
 
 
@@ -2256,6 +2284,116 @@ async def get_trade_stats():
             
     except Exception as e:
         logger.error(f"获取交易统计错误: {e}")
+        return {"code": 500, "message": str(e)}
+
+
+# ========== 加仓/减仓接口 ==========
+
+@app.post("/api/auto-trade/add-position")
+async def add_position(request: Request):
+    """加仓"""
+    try:
+        body = await request.json()
+        code = body.get('code')
+        quantity = body.get('quantity')
+        price = body.get('price')
+        reason = body.get('reason', '手动加仓')
+        
+        if not code or not quantity or not price:
+            return {"code": 400, "message": "缺少必要参数"}
+        
+        account = get_sim_account()
+        
+        # 获取持仓信息
+        pos = account._get_position(code)
+        if not pos:
+            return {"code": 404, "message": "持仓不存在"}
+        
+        success, msg = account.buy(code, pos['name'], float(price), int(quantity), reason)
+        
+        if success:
+            # 更新价格
+            account.update_prices()
+            status = account.get_status()
+            return {"code": 200, "message": msg, "account": status}
+        else:
+            return {"code": 400, "message": msg}
+            
+    except Exception as e:
+        logger.error(f"加仓错误: {e}")
+        return {"code": 500, "message": str(e)}
+
+
+@app.post("/api/auto-trade/reduce-position")
+async def reduce_position(request: Request):
+    """减仓"""
+    try:
+        body = await request.json()
+        code = body.get('code')
+        quantity = body.get('quantity')
+        price = body.get('price')
+        reason = body.get('reason', '手动减仓')
+        
+        if not code or not quantity or not price:
+            return {"code": 400, "message": "缺少必要参数"}
+        
+        account = get_sim_account()
+        
+        # 获取持仓信息
+        pos = account._get_position(code)
+        if not pos:
+            return {"code": 404, "message": "持仓不存在"}
+        
+        if int(quantity) >= pos['quantity']:
+            return {"code": 400, "message": f"减仓数量不能大于或等于持仓数量（当前持仓 {pos['quantity']} 股）"}
+        
+        success, msg = account.sell(code, float(price), int(quantity), reason)
+        
+        if success:
+            account.update_prices()
+            status = account.get_status()
+            return {"code": 200, "message": msg, "account": status}
+        else:
+            return {"code": 400, "message": msg}
+            
+    except Exception as e:
+        logger.error(f"减仓错误: {e}")
+        return {"code": 500, "message": str(e)}
+
+
+@app.post("/api/auto-trade/clear-position")
+async def clear_position(request: Request):
+    """清仓（卖出全部持仓）"""
+    try:
+        body = await request.json()
+        code = body.get('code')
+        price = body.get('price')
+        reason = body.get('reason', '手动清仓')
+        
+        if not code:
+            return {"code": 400, "message": "缺少股票代码"}
+        
+        account = get_sim_account()
+        
+        # 获取持仓信息
+        pos = account._get_position(code)
+        if not pos:
+            return {"code": 404, "message": "持仓不存在"}
+        
+        if not price:
+            price = pos['market_price']
+        
+        success, msg = account.sell(code, float(price), pos['quantity'], reason)
+        
+        if success:
+            account.update_prices()
+            status = account.get_status()
+            return {"code": 200, "message": msg, "account": status}
+        else:
+            return {"code": 400, "message": msg}
+            
+    except Exception as e:
+        logger.error(f"清仓错误: {e}")
         return {"code": 500, "message": str(e)}
 
 
