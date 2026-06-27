@@ -2287,6 +2287,65 @@ async def get_trade_stats():
         return {"code": 500, "message": str(e)}
 
 
+
+# ========== 止盈止损配置接口 ==========
+
+@app.get("/api/auto-trade/config")
+async def get_config():
+    """获取止盈止损配置"""
+    try:
+        from db_manager import get_stop_loss_config
+        config = get_stop_loss_config()
+        if config:
+            return {"code": 200, "data": config}
+        else:
+            return {"code": 404, "message": "配置不存在"}
+    except Exception as e:
+        logger.error(f"获取配置错误: {e}")
+        return {"code": 500, "message": str(e)}
+
+
+@app.post("/api/auto-trade/config")
+async def save_config(request: Request):
+    """保存止盈止损配置"""
+    try:
+        body = await request.json()
+        from db_manager import save_stop_loss_config
+        
+        config = {
+            'stop_loss_pct': float(body.get('stop_loss_pct', -7.0)),
+            'take_profit_pct': float(body.get('take_profit_pct', 15.0)),
+            'max_daily_trades': int(body.get('max_daily_trades', 20)),
+            'single_buy_amount': float(body.get('single_buy_amount', 10000)),
+            'min_buy_score': float(body.get('min_buy_score', 50))
+        }
+        
+        if save_stop_loss_config(config):
+            return {"code": 200, "message": "配置保存成功", "data": config}
+        else:
+            return {"code": 500, "message": "配置保存失败"}
+    except Exception as e:
+        logger.error(f"保存配置错误: {e}")
+        return {"code": 500, "message": str(e)}
+
+
+@app.get("/api/auto-trade/config/default")
+async def get_default_config():
+    """获取默认配置（用于重置）"""
+    return {
+        "code": 200,
+        "data": {
+            "stop_loss_pct": -7.0,
+            "take_profit_pct": 15.0,
+            "max_daily_trades": 20,
+            "single_buy_amount": 10000.00,
+            "min_buy_score": 50.00
+        }
+    }
+
+
+
+
 # ========== 加仓/减仓接口 ==========
 
 @app.post("/api/auto-trade/add-position")
