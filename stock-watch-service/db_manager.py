@@ -574,3 +574,86 @@ def get_watchlist():
     except Exception as e:
         logger.error(f"获取自选股失败: {e}")
         return []
+
+
+def get_latest_selected_stocks(limit: int = 30, fallback_to_prev: bool = True):
+    """
+    获取最新的选股结果
+    如果当天没有数据，自动获取最近一天的数据
+    
+    Args:
+        limit: 返回数量
+        fallback_to_prev: 如果当天没有数据，是否回退到前一天
+    
+    Returns:
+        pd.DataFrame: 选股结果
+    """
+    try:
+        engine = get_engine()
+        today = datetime.now().strftime("%Y-%m-%d")
+        
+        with engine.connect() as conn:
+            # 先查询当天是否有数据
+            result = conn.execute(
+                text(f"""
+                    SELECT COUNT(*) 
+                    FROM {SCHEMA_NAME}.selected_stocks 
+                    WHERE date = :date
+                """),
+                {"date": today}
+            )
+            count = result.fetchone()[0]
+            
+            # 如果当天有数据，直接返回
+            if count > 0:
+                df = pd.read_sql(
+                    text(f"""
+                        SELECT code, name, price, change_pct, total_score, advice, fin_rating, date
+                        FROM {SCHEMA_NAME}.selected_stocks
+                        WHERE date = :date
+                        ORDER BY total_score DESC
+                        LIMIT :limit
+                    """),
+                    conn,
+                    params={"date": today, "limit": limit}
+                )
+                logger.info(f"获取今日选股数据: {len(df)} 条")
+                return df
+            
+            # 如果当天没有数据且允许回退
+            if fallback_to_prev:
+                # 获取最近有数据的日期
+                result = conn.execute(
+                    text(f"""
+                        SELECT DISTINCT date 
+                        FROM {SCHEMA_NAME}.selected_stocks 
+                        ORDER BY date DESC 
+                        LIMIT 1
+                    """)
+                )
+                row = result.fetchone()
+                
+                if row:
+                    latest_date = row[0]
+                    df = pd.read_sql(
+                        text(f"""
+                            SELECT code, name, price, change_pct, total_score, advice, fin_rating, date
+                            FROM {SCHEMA_NAME}.selected_stocks
+                            WHERE date = :date
+                            ORDER BY total_score DESC
+                            LIMIT :limit
+                        """),
+                        conn,
+                        params={"date": latest_date, "limit": limit}
+                    )
+                    logger.info(f"当天无选股数据，获取最近日期 {latest_date} 的数据: {len(df)} 条")
+                    return df
+                else:
+                    logger.warning("数据库中无任何选股数据")
+                    return pd.DataFrame()
+            else:
+                return pd.DataFrame()
+                
+    except Exception as e:
+        logger.error(f"获取选股数据失败: {e}")
+        return pd.DataFrame()
