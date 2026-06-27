@@ -1444,7 +1444,55 @@ class SimulatedAccountDB:
         self.commission_rate = 0.0001
         self.min_commission = 5.0
         self.stamp_tax_rate = 0.001
+        self._config = None
+        self._load_config()
         self._init_account()
+
+
+    def _load_config(self):
+        """加载止盈止损配置"""
+        try:
+            from db_manager import get_stop_loss_config
+            self._config = get_stop_loss_config()
+            if self._config:
+                logger.info(f"加载配置: 止损={self._config['stop_loss_pct']}%, 止盈={self._config['take_profit_pct']}%")
+        except Exception as e:
+            logger.error(f"加载配置失败: {e}")
+            # 默认值
+            self._config = {
+                'stop_loss_pct': -7.0,
+                'take_profit_pct': 15.0,
+                'max_daily_trades': 20,
+                'single_buy_amount': 10000,
+                'min_buy_score': 50
+            }
+    
+    def check_stop_conditions(self):
+        """检查所有持仓的止盈止损（使用配置）"""
+        results = []
+        positions = self._get_all_positions()
+        
+        stop_loss_pct = self._config.get('stop_loss_pct', -7.0)
+        take_profit_pct = self._config.get('take_profit_pct', 15.0)
+        
+        for pos in positions:
+            current_price = pos['market_price']
+            cost_price = pos['cost_price']
+            pnl_pct = (current_price - cost_price) / cost_price * 100 if cost_price > 0 else 0
+            
+            if pnl_pct <= stop_loss_pct:
+                success, msg = self.sell(pos['code'], current_price, pos['quantity'], 
+                                         f"止损触发: {pnl_pct:.2f}% (阈值{stop_loss_pct}%)")
+                results.append({'code': pos['code'], 'action': 'stop_loss', 'success': success, 'message': msg})
+            elif pnl_pct >= take_profit_pct:
+                success, msg = self.sell(pos['code'], current_price, pos['quantity'], 
+                                         f"止盈触发: {pnl_pct:.2f}% (阈值{take_profit_pct}%)")
+                results.append({'code': pos['code'], 'action': 'take_profit', 'success': success, 'message': msg})
+        
+        return results
+    
+    
+    
     
     def _init_account(self):
         """初始化或加载账户状态"""
@@ -1628,6 +1676,7 @@ class SimulatedAccountDB:
             return None
     
     def buy(self, code, name, price, quantity, reason=""):
+        max_trades = self._config.get('max_daily_trades', 20)
         """买入/加仓"""
         if quantity <= 0:
             return False, "数量必须大于0"
