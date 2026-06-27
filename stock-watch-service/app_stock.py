@@ -1516,32 +1516,32 @@ class SimulatedAccountDB:
 
     
     def _get_account_state(self):
-    """获取最新账户状态"""
-    try:
-        with self.engine.connect() as conn:
-            # 获取最新的一条记录
-            result = conn.execute(
-                text(f"""
-                    SELECT initial_capital, cash, total_value, total_pnl, total_pnl_pct, snapshot_date
-                    FROM {SCHEMA_NAME}.account_state
-                    ORDER BY id DESC
-                    LIMIT 1
-                """)
-            )
-            row = result.fetchone()
-            if row:
-                return {
-                    'initial_capital': float(row[0]),
-                    'cash': float(row[1]),
-                    'total_value': float(row[2]),
-                    'total_pnl': float(row[3]),
-                    'total_pnl_pct': float(row[4]),
-                    'snapshot_date': str(row[5]) if row[5] else None
-                }
+        """获取最新账户状态"""
+        try:
+            with self.engine.connect() as conn:
+                # 获取最新的一条记录
+                result = conn.execute(
+                    text(f"""
+                        SELECT initial_capital, cash, total_value, total_pnl, total_pnl_pct, snapshot_date
+                        FROM {SCHEMA_NAME}.account_state
+                        ORDER BY id DESC
+                        LIMIT 1
+                    """)
+                )
+                row = result.fetchone()
+                if row:
+                    return {
+                        'initial_capital': float(row[0]),
+                        'cash': float(row[1]),
+                        'total_value': float(row[2]),
+                        'total_pnl': float(row[3]),
+                        'total_pnl_pct': float(row[4]),
+                        'snapshot_date': str(row[5]) if row[5] else None
+                    }
+                return None
+        except Exception as e:
+            logger.error(f"获取账户状态失败: {e}")
             return None
-    except Exception as e:
-        logger.error(f"获取账户状态失败: {e}")
-        return None
 
     
     
