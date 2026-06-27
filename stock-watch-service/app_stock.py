@@ -10,7 +10,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List
 import asyncpg
-from apscheduler.schedulers.background import BackgroundScheduler
 from contextlib import asynccontextmanager
 import logging
 import requests
@@ -22,6 +21,12 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 import re
+# 添加 APScheduler 导入
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.interval import IntervalTrigger
+import atexit
+
+
 
 # ---- 新增 Redis 导入 ----
 import redis
@@ -2224,7 +2229,123 @@ async def get_trade_stats():
 
 
 
+# ========== 企业微信推送 ==========
+def push_to_wechat(message: str) -> None:
+    """推送消息到企业微信"""
+    webhook_url = os.environ.get("WECHAT_WEBHOOK_URL", "")
+    if not webhook_url:
+        logger.warning("企业微信 Webhook URL 未配置")
+        return
+    
+    try:
+        # 如果消息是列表，拼接成字符串
+        if isinstance(message, list):
+            message = "\n".join(message)
+        
+        # 限制消息长度（企业微信限制）
+        if len(message) > 2000:
+            message = message[:1997] + "..."
+        
+        headers = {'Content-Type': 'application/json'}
+        data = {
+            "msgtype": "markdown",
+            "markdown": {
+                "content": f"## 📊 自动止盈止损通知\n\n{message}"
+            }
+        }
+        resp = requests.post(webhook_url, json=data, headers=headers, timeout=5)
+        if resp.status_code == 200:
+            result = resp.json()
+            if result.get('errcode') == 0:
+                logger.info("企业微信推送成功")
+            else:
+                logger.warning(f"企业微信推送失败: {result}")
+        else:
+            logger.warning(f"企业微信推送失败: HTTP {resp.status_code}")
+    except Exception as e:
+        logger.error(f"企业微信推送异常: {e}")
 
+# ========== 自动止盈止损定时任务 ==========
+
+# 全局任务状态
+_auto_stop_task_running = False
+_auto_stop_last_run = None
+
+def auto_check_stop_loss():
+    """定时检查止盈止损（每5分钟执行一次）"""
+    global _auto_stop_task_running, _auto_stop_last_run
+    
+    # 防止重复执行
+    if _auto_stop_task_running:
+        logger.info("上一次止盈止损检查还在运行，跳过本次")
+        return
+    
+    try:
+        _auto_stop_task_running = True
+        logger.info("开始执行定时止盈止损检查...")
+        
+        account = get_sim_account()
+        
+        # 检查止盈止损
+        results = account.check_stop_conditions()
+        
+        if results:
+            # 有交易发生，推送通知
+            success_results = [r for r in results if r.get('success')]
+            if success_results:
+                # 构建推送消息
+                messages = ["**止盈止损执行结果：**", ""]
+                for r in success_results:
+                    emoji = "🔴" if "止损" in r['message'] else "🟢"
+                    messages.append(f"{emoji} {r['message']}")
+                
+                # 更新账户信息
+                status = account.get_status()
+                if status:
+                    messages.append("")
+                    messages.append(f"**当前账户：**")
+                    messages.append(f"总资产：{status.get('total_value', 0):.2f}")
+                    messages.append(f"总盈亏：{status.get('total_pnl', 0):+.2f}")
+                    messages.append(f"收益率：{status.get('total_pnl_pct', 0):+.2f}%")
+                    messages.append(f"持仓数量：{status.get('position_count', 0)} 只")
+                
+                # 推送
+                push_to_wechat(messages)
+            else:
+                logger.info("止盈止损检查完成，无成功交易")
+        else:
+            logger.info("止盈止损检查完成，无触发条件")
+        
+        _auto_stop_last_run = datetime.now()
+        
+    except Exception as e:
+        logger.error(f"定时止盈止损检查失败: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        _auto_stop_task_running = False
+
+
+def start_stop_loss_scheduler():
+    """启动止盈止损定时任务"""
+    scheduler = BackgroundScheduler()
+    
+    # 每5分钟执行一次
+    scheduler.add_job(
+        func=auto_check_stop_loss,
+        trigger=IntervalTrigger(minutes=5),
+        id='auto_stop_loss_check',
+        replace_existing=True,
+        max_instances=1
+    )
+    
+    scheduler.start()
+    logger.info("止盈止损定时任务已启动（每5分钟检查一次）")
+    
+    # 注册关闭钩子
+    atexit.register(lambda: scheduler.shutdown())
+    
+    return scheduler
 
 
 
@@ -2234,18 +2355,78 @@ async def get_trade_stats():
 async def lifespan(app: FastAPI):
     logger.info("Starting Stock Watch System...")
     await init_database()
+    
     # 测试 Redis 连接
     try:
         redis_client.ping()
         logger.info("Redis 连接成功")
     except Exception as e:
         logger.error(f"Redis 连接失败: {e}")
+    
+    # 启动止盈止损定时任务
+    scheduler = start_stop_loss_scheduler()
+    
     logger.info("Stock Watch System ready!")
     yield
+    
+    # 关闭时清理
+    if scheduler:
+        scheduler.shutdown()
     if db_pool:
         await db_pool.close()
 
-app.router.lifespan_context = lifespan
+
+@app.post("/api/auto-trade/stop-loss/trigger")
+async def trigger_stop_loss_check():
+    """手动触发止盈止损检查"""
+    try:
+        account = get_sim_account()
+        results = account.check_stop_conditions()
+        
+        if results:
+            success_results = [r for r in results if r.get('success')]
+            return {
+                "code": 200,
+                "message": f"止盈止损检查完成，成功 {len(success_results)} 笔",
+                "data": results
+            }
+        else:
+            return {"code": 200, "message": "无止盈止损触发条件", "data": []}
+    except Exception as e:
+        logger.error(f"手动触发止盈止损失败: {e}")
+        return {"code": 500, "message": str(e)}
+
+
+@app.get("/api/auto-trade/stop-loss/status")
+async def get_stop_loss_status():
+    """获取止盈止损定时任务状态"""
+    return {
+        "code": 200,
+        "data": {
+            "is_running": _auto_stop_task_running,
+            "last_run": str(_auto_stop_last_run) if _auto_stop_last_run else None,
+            "interval": "5分钟"
+        }
+    }
+
+
+# ========== 启动事件 ==========
+# @asynccontextmanager
+# async def lifespan(app: FastAPI):
+#     logger.info("Starting Stock Watch System...")
+#     await init_database()
+#     # 测试 Redis 连接
+#     try:
+#         redis_client.ping()
+#         logger.info("Redis 连接成功")
+#     except Exception as e:
+#         logger.error(f"Redis 连接失败: {e}")
+#     logger.info("Stock Watch System ready!")
+#     yield
+#     if db_pool:
+#         await db_pool.close()
+
+# app.router.lifespan_context = lifespan
 
 # ========== 主入口 ==========
 if __name__ == "__main__":
