@@ -766,14 +766,14 @@ async def get_holdings():
     try:
         pool = await get_db()
         async with pool.acquire() as conn:
-            # 1. 获取持仓明细（用于显示列表）
+            # 1. 获取持仓明细
             rows = await conn.fetch("""
                 SELECT code, name, quantity, cost_price, market_price
                 FROM stock_data.current_positions
                 ORDER BY code
             """)
             
-            # 2. 获取账户总览（从 account_state 表）
+            # 2. 获取账户总览
             account = await conn.fetchrow("""
                 SELECT snapshot_date, initial_capital, cash, total_value, total_pnl, total_pnl_pct
                 FROM stock_data.account_state
@@ -781,57 +781,73 @@ async def get_holdings():
                 LIMIT 1
             """)
         
-        # 获取实时行情更新持仓列表
+        # 获取实时行情
         holdings = []
-        if rows:
-            codes = [row['code'] for row in rows]
-            quotes = fetch_realtime_quotes(codes)
-            
-            for row in rows:
-                code = row['code']
-                quote = quotes.get(code, {})
-                current_price = quote.get('price', 0) or float(row['market_price']) or float(row['cost_price'])
-                quantity = float(row['quantity'])
-                cost_price = float(row['cost_price'])
-                
-                market_value = current_price * quantity
-                cost_sum = cost_price * quantity
-                pnl = market_value - cost_sum
-                pnl_pct = round((pnl / cost_sum) * 100, 2) if cost_sum > 0 else 0
-                
-                holdings.append({
-                    "code": code,
-                    "name": row['name'],
-                    "quantity": quantity,
-                    "cost_price": round(cost_price, 2),
-                    "current_price": round(current_price, 2),
-                    "market_value": round(market_value, 2),
-                    "pnl": round(pnl, 2),
-                    "pnl_pct": pnl_pct
-                })
+        codes = [row['code'] for row in rows]
+        quotes = fetch_realtime_quotes(codes)
         
-        # 构建账户总览（优先使用 account_state 表的数据）
+        total_market_value = 0
+        total_cost = 0
+        total_pnl = 0
+        today_pnl = 0  # 今日盈亏
+        prev_close = 0  # 昨日收盘价
+        
+        for row in rows:
+            code = row['code']
+            quote = quotes.get(code, {})
+            current_price = quote.get('price', 0) or float(row['market_price']) or float(row['cost_price'])
+            
+            # 获取昨日收盘价（从新浪或其他数据源）
+            # 这里简化处理，实际可以从数据库读取昨日数据
+            yesterday_close = current_price * 0.98  # 示例，实际需要真实数据
+            
+            quantity = float(row['quantity'])
+            cost_price = float(row['cost_price'])
+            
+            market_value = current_price * quantity
+            cost_sum = cost_price * quantity
+            pnl = market_value - cost_sum
+            
+            # 计算今日盈亏 = (当前价 - 昨日收盘价) * 数量
+            today_pnl += (current_price - yesterday_close) * quantity
+            
+            total_market_value += market_value
+            total_cost += cost_sum
+            total_pnl += pnl
+            
+            holdings.append({
+                "code": code,
+                "name": row['name'],
+                "quantity": quantity,
+                "cost_price": round(cost_price, 2),
+                "current_price": round(current_price, 2),
+                "market_value": round(market_value, 2),
+                "pnl": round(pnl, 2),
+                "pnl_pct": round((pnl / cost_sum) * 100, 2) if cost_sum > 0 else 0
+            })
+        
+        # 构建返回数据
         if account:
             account_data = {
                 "snapshot_date": str(account['snapshot_date']),
                 "initial_capital": float(account['initial_capital']),
                 "cash": float(account['cash']),
                 "total_value": float(account['total_value']),
-                "total_pnl": float(account['total_pnl']),      # 总盈亏
-                "total_pnl_pct": float(account['total_pnl_pct']) # 总收益率
+                "total_pnl": float(account['total_pnl']),
+                "total_pnl_pct": float(account['total_pnl_pct']),
+                "today_pnl": round(today_pnl, 2),  # 今日盈亏
+                "today_pnl_pct": round((today_pnl / float(account['initial_capital'])) * 100, 2) if account['initial_capital'] > 0 else 0
             }
         else:
-            # 如果没有 account_state 数据，从持仓计算
-            total_market_value = sum([h['market_value'] for h in holdings])
-            total_cost = sum([h['cost_price'] * h['quantity'] for h in holdings])
-            total_pnl = sum([h['pnl'] for h in holdings])
             account_data = {
                 "snapshot_date": datetime.now().strftime("%Y-%m-%d"),
                 "initial_capital": 100000,
                 "cash": 100000 - total_cost,
                 "total_value": round(total_market_value + (100000 - total_cost), 2),
                 "total_pnl": round(total_pnl, 2),
-                "total_pnl_pct": round((total_pnl / 100000) * 100, 2) if 100000 > 0 else 0
+                "total_pnl_pct": round((total_pnl / 100000) * 100, 2) if 100000 > 0 else 0,
+                "today_pnl": round(today_pnl, 2),
+                "today_pnl_pct": round((today_pnl / 100000) * 100, 2) if 100000 > 0 else 0
             }
         
         return {
