@@ -1421,6 +1421,812 @@ async def get_latest_picks_api():
         logger.error(f"获取最新选股结果失败: {e}")
         return {"code": 500, "message": str(e), "data": []}
 
+
+
+
+# ========== 自动交易模块 ==========
+from datetime import datetime, timedelta
+from typing import Optional, List, Dict
+import uuid
+import json
+
+# ========== 模拟账户类（数据库存储）==========
+class SimulatedAccountDB:
+    """模拟交易账户 - 数据直接读写数据库"""
+    
+    def __init__(self):
+        self.engine = get_sync_engine()
+        self.commission_rate = 0.0001
+        self.min_commission = 5.0
+        self.stamp_tax_rate = 0.001
+        self._init_account()
+    
+    def _init_account(self):
+        """初始化或加载账户状态"""
+        with self.engine.connect() as conn:
+            # 检查 account_state 表是否有数据
+            result = conn.execute(
+                text(f"SELECT COUNT(*) FROM {SCHEMA_NAME}.account_state")
+            )
+            count = result.fetchone()[0]
+            
+            if count == 0:
+                conn.execute(
+                    text(f"""
+                        INSERT INTO {SCHEMA_NAME}.account_state 
+                        (snapshot_date, initial_capital, cash, total_value, total_pnl, total_pnl_pct)
+                        VALUES (CURRENT_DATE, 100000, 100000, 100000, 0, 0)
+                    """)
+                )
+                conn.commit()
+    
+    def _get_account_state(self):
+        """获取最新账户状态"""
+        with self.engine.connect() as conn:
+            result = conn.execute(
+                text(f"""
+                    SELECT initial_capital, cash, total_value, total_pnl, total_pnl_pct
+                    FROM {SCHEMA_NAME}.account_state
+                    ORDER BY id DESC
+                    LIMIT 1
+                """)
+            )
+            row = result.fetchone()
+            if row:
+                return {
+                    'initial_capital': float(row[0]),
+                    'cash': float(row[1]),
+                    'total_value': float(row[2]),
+                    'total_pnl': float(row[3]),
+                    'total_pnl_pct': float(row[4])
+                }
+            return None
+    
+    def _update_account_state(self, cash, total_value, total_pnl, total_pnl_pct):
+        """更新账户状态"""
+        with self.engine.connect() as conn:
+            conn.execute(
+                text(f"""
+                    INSERT INTO {SCHEMA_NAME}.account_state 
+                    (snapshot_date, initial_capital, cash, total_value, total_pnl, total_pnl_pct)
+                    VALUES (CURRENT_DATE, 100000, :cash, :total_value, :total_pnl, :total_pnl_pct)
+                """),
+                {
+                    'cash': cash,
+                    'total_value': total_value,
+                    'total_pnl': total_pnl,
+                    'total_pnl_pct': total_pnl_pct
+                }
+            )
+            conn.commit()
+    
+    def _get_position(self, code):
+        """获取单个持仓"""
+        with self.engine.connect() as conn:
+            result = conn.execute(
+                text(f"""
+                    SELECT code, name, quantity, cost_price, market_price, market_value, pnl, pnl_pct
+                    FROM {SCHEMA_NAME}.current_positions
+                    WHERE code = :code
+                """),
+                {'code': code}
+            )
+            row = result.fetchone()
+            if row:
+                return {
+                    'code': row[0],
+                    'name': row[1],
+                    'quantity': float(row[2]),
+                    'cost_price': float(row[3]),
+                    'market_price': float(row[4]) if row[4] else float(row[3]),
+                    'market_value': float(row[5]) if row[5] else 0,
+                    'pnl': float(row[6]) if row[6] else 0,
+                    'pnl_pct': float(row[7]) if row[7] else 0
+                }
+            return None
+    
+    def _get_all_positions(self):
+        """获取所有持仓"""
+        with self.engine.connect() as conn:
+            result = conn.execute(
+                text(f"""
+                    SELECT code, name, quantity, cost_price, market_price, market_value, pnl, pnl_pct
+                    FROM {SCHEMA_NAME}.current_positions
+                    ORDER BY code
+                """)
+            )
+            rows = result.fetchall()
+            positions = []
+            for row in rows:
+                positions.append({
+                    'code': row[0],
+                    'name': row[1],
+                    'quantity': float(row[2]),
+                    'cost_price': float(row[3]),
+                    'market_price': float(row[4]) if row[4] else float(row[3]),
+                    'market_value': float(row[5]) if row[5] else 0,
+                    'pnl': float(row[6]) if row[6] else 0,
+                    'pnl_pct': float(row[7]) if row[7] else 0
+                })
+            return positions
+    
+    def _update_position(self, code, name, quantity, cost_price, market_price, market_value, pnl, pnl_pct):
+        """更新或插入持仓"""
+        with self.engine.connect() as conn:
+            existing = conn.execute(
+                text(f"SELECT code FROM {SCHEMA_NAME}.current_positions WHERE code = :code"),
+                {'code': code}
+            ).fetchone()
+            
+            if existing:
+                conn.execute(
+                    text(f"""
+                        UPDATE {SCHEMA_NAME}.current_positions 
+                        SET name = :name, quantity = :quantity, cost_price = :cost_price,
+                            market_price = :market_price, market_value = :market_value,
+                            pnl = :pnl, pnl_pct = :pnl_pct, updated_at = NOW()
+                        WHERE code = :code
+                    """),
+                    {
+                        'code': code, 'name': name, 'quantity': quantity,
+                        'cost_price': cost_price, 'market_price': market_price,
+                        'market_value': market_value, 'pnl': pnl, 'pnl_pct': pnl_pct
+                    }
+                )
+            else:
+                conn.execute(
+                    text(f"""
+                        INSERT INTO {SCHEMA_NAME}.current_positions 
+                        (code, name, quantity, cost_price, market_price, market_value, pnl, pnl_pct, created_at, updated_at)
+                        VALUES (:code, :name, :quantity, :cost_price, :market_price, :market_value, :pnl, :pnl_pct, NOW(), NOW())
+                    """),
+                    {
+                        'code': code, 'name': name, 'quantity': quantity,
+                        'cost_price': cost_price, 'market_price': market_price,
+                        'market_value': market_value, 'pnl': pnl, 'pnl_pct': pnl_pct
+                    }
+                )
+            conn.commit()
+    
+    def _delete_position(self, code):
+        """删除持仓"""
+        with self.engine.connect() as conn:
+            conn.execute(
+                text(f"DELETE FROM {SCHEMA_NAME}.current_positions WHERE code = :code"),
+                {'code': code}
+            )
+            conn.commit()
+    
+    def _calc_commission(self, amount):
+        commission = amount * self.commission_rate
+        return max(commission, self.min_commission)
+    
+    def _get_current_price(self, code):
+        """获取实时价格"""
+        try:
+            quotes = fetch_realtime_quotes([code])
+            if code in quotes:
+                return quotes[code]['price']
+            return None
+        except Exception as e:
+            logger.error(f"获取实时价格失败 {code}: {e}")
+            return None
+    
+    def buy(self, code, name, price, quantity, reason=""):
+        """买入/加仓"""
+        if quantity <= 0:
+            return False, "数量必须大于0"
+        
+        trade_amount = price * quantity
+        commission = self._calc_commission(trade_amount)
+        total_cost = trade_amount + commission
+        
+        account = self._get_account_state()
+        if not account:
+            return False, "账户状态异常"
+        
+        cash = account['cash']
+        if cash < total_cost:
+            return False, f"资金不足 (需要 {total_cost:.2f}，可用 {cash:.2f})"
+        
+        existing = self._get_position(code)
+        
+        if existing:
+            old_qty = existing['quantity']
+            old_cost = existing['cost_price']
+            new_qty = old_qty + quantity
+            new_cost = (old_cost * old_qty + total_cost) / new_qty
+            
+            self._update_position(
+                code, name, new_qty, new_cost, price,
+                price * new_qty,
+                (price - new_cost) * new_qty,
+                ((price - new_cost) / new_cost) * 100 if new_cost > 0 else 0
+            )
+            action = "加仓"
+        else:
+            self._update_position(
+                code, name, quantity, price, price,
+                price * quantity, 0, 0
+            )
+            action = "买入"
+        
+        new_cash = cash - total_cost
+        
+        positions = self._get_all_positions()
+        total_market_value = sum([p['market_value'] for p in positions])
+        total_pnl = sum([p['pnl'] for p in positions])
+        total_value = new_cash + total_market_value
+        total_pnl_pct = (total_pnl / account['initial_capital']) * 100 if account['initial_capital'] > 0 else 0
+        
+        self._update_account_state(new_cash, total_value, total_pnl, total_pnl_pct)
+        
+        # 记录交易
+        self._save_trade_record(code, name, action, price, quantity, trade_amount, commission, 0, 0, 0, reason)
+        
+        log_msg = f"{action} - {name}({code}) 价格{price:.2f} x {quantity}股 = {trade_amount:.2f}元 原因: {reason}"
+        return True, log_msg
+    
+    def sell(self, code, price, quantity, reason=""):
+        """卖出/减仓"""
+        existing = self._get_position(code)
+        if not existing:
+            return False, f"无持仓: {code}"
+        
+        if quantity <= 0 or quantity > existing['quantity']:
+            return False, f"持仓不足 (持有 {existing['quantity']}股)"
+        
+        trade_amount = price * quantity
+        commission = self._calc_commission(trade_amount)
+        stamp_tax = trade_amount * self.stamp_tax_rate
+        net_proceeds = trade_amount - commission - stamp_tax
+        
+        avg_cost = existing['cost_price']
+        pnl = (price - avg_cost) * quantity - commission - stamp_tax
+        pnl_pct = ((price - avg_cost) / avg_cost) * 100 if avg_cost > 0 else 0
+        
+        account = self._get_account_state()
+        new_cash = account['cash'] + net_proceeds
+        
+        if quantity >= existing['quantity']:
+            self._delete_position(code)
+            action = "清仓"
+        else:
+            new_qty = existing['quantity'] - quantity
+            self._update_position(
+                code, existing['name'], new_qty, existing['cost_price'], price,
+                price * new_qty,
+                (price - existing['cost_price']) * new_qty,
+                ((price - existing['cost_price']) / existing['cost_price']) * 100
+            )
+            action = "减仓"
+        
+        positions = self._get_all_positions()
+        total_market_value = sum([p['market_value'] for p in positions])
+        total_pnl = sum([p['pnl'] for p in positions])
+        total_value = new_cash + total_market_value
+        total_pnl_pct = (total_pnl / account['initial_capital']) * 100 if account['initial_capital'] > 0 else 0
+        
+        self._update_account_state(new_cash, total_value, total_pnl, total_pnl_pct)
+        
+        # 记录交易
+        self._save_trade_record(code, existing['name'], action, price, quantity, trade_amount, commission, stamp_tax, pnl, pnl_pct, reason)
+        
+        log_msg = f"{action} - {existing['name']}({code}) 价格{price:.2f} x {quantity}股 盈亏: {pnl:+.2f} ({pnl_pct:+.2f}%) 原因: {reason}"
+        return True, log_msg
+    
+    def _save_trade_record(self, code, name, action, price, quantity, amount, commission, stamp_tax, pnl, pnl_pct, reason):
+        """保存交易记录到数据库"""
+        try:
+            with self.engine.connect() as conn:
+                conn.execute(
+                    text(f"""
+                        INSERT INTO {SCHEMA_NAME}.trade_records 
+                        (trade_date, trade_time, code, name, action, price, quantity, 
+                         amount, commission, stamp_tax, pnl, pnl_pct, reason)
+                        VALUES (CURRENT_DATE, NOW(), :code, :name, :action, :price, :quantity,
+                                :amount, :commission, :stamp_tax, :pnl, :pnl_pct, :reason)
+                    """),
+                    {
+                        'code': code, 'name': name, 'action': action,
+                        'price': price, 'quantity': quantity,
+                        'amount': amount, 'commission': commission,
+                        'stamp_tax': stamp_tax, 'pnl': pnl,
+                        'pnl_pct': pnl_pct, 'reason': reason
+                    }
+                )
+                conn.commit()
+        except Exception as e:
+            logger.error(f"保存交易记录失败: {e}")
+    
+    def _get_positions_dict(self):
+        """获取持仓字典"""
+        positions = self._get_all_positions()
+        return {p['code']: p for p in positions}
+    
+    def update_prices(self):
+        """更新所有持仓的实时价格"""
+        positions = self._get_all_positions()
+        codes = [p['code'] for p in positions]
+        
+        if not codes:
+            return
+        
+        quotes = fetch_realtime_quotes(codes)
+        
+        for code, pos in self._get_positions_dict().items():
+            quote = quotes.get(code, {})
+            current_price = quote.get('price', 0)
+            if current_price > 0:
+                cost_price = pos['cost_price']
+                quantity = pos['quantity']
+                market_value = current_price * quantity
+                pnl = market_value - (cost_price * quantity)
+                pnl_pct = (pnl / (cost_price * quantity)) * 100 if cost_price * quantity > 0 else 0
+                
+                self._update_position(
+                    code, pos['name'], quantity, cost_price,
+                    current_price, market_value, pnl, pnl_pct
+                )
+        
+        account = self._get_account_state()
+        if account:
+            positions = self._get_all_positions()
+            total_market_value = sum([p['market_value'] for p in positions])
+            total_pnl = sum([p['pnl'] for p in positions])
+            total_value = account['cash'] + total_market_value
+            total_pnl_pct = (total_pnl / account['initial_capital']) * 100 if account['initial_capital'] > 0 else 0
+            
+            self._update_account_state(account['cash'], total_value, total_pnl, total_pnl_pct)
+    
+    def check_stop_conditions(self):
+        """检查所有持仓的止盈止损"""
+        results = []
+        positions = self._get_all_positions()
+        
+        for pos in positions:
+            current_price = pos['market_price']
+            cost_price = pos['cost_price']
+            pnl_pct = (current_price - cost_price) / cost_price * 100 if cost_price > 0 else 0
+            
+            if pnl_pct <= -7.0:
+                success, msg = self.sell(pos['code'], current_price, pos['quantity'], f"止损触发: {pnl_pct:.2f}%")
+                results.append({'code': pos['code'], 'action': 'stop_loss', 'success': success, 'message': msg})
+            elif pnl_pct >= 15.0:
+                success, msg = self.sell(pos['code'], current_price, pos['quantity'], f"止盈触发: {pnl_pct:.2f}%")
+                results.append({'code': pos['code'], 'action': 'take_profit', 'success': success, 'message': msg})
+        
+        return results
+    
+    def get_status(self):
+        """获取账户状态"""
+        account = self._get_account_state()
+        positions = self._get_all_positions()
+        
+        if account:
+            return {
+                'cash': round(account['cash'], 2),
+                'total_value': round(account['total_value'], 2),
+                'total_pnl': round(account['total_pnl'], 2),
+                'total_pnl_pct': round(account['total_pnl_pct'], 2),
+                'position_count': len(positions),
+                'positions': positions
+            }
+        return None
+
+
+# 全局账户实例
+_sim_account = None
+
+def get_sim_account():
+    global _sim_account
+    if _sim_account is None:
+        _sim_account = SimulatedAccountDB()
+    return _sim_account
+
+
+# ========== 自动交易 API 接口 ==========
+
+@app.post("/api/auto-trade/execute")
+async def execute_auto_trade(request: Request):
+    """执行自动交易"""
+    try:
+        body = await request.json()
+        action = body.get('action', 'all')
+        code = body.get('code')
+        price = body.get('price')
+        quantity = body.get('quantity')
+        reason = body.get('reason', '')
+        
+        account = get_sim_account()
+        trades = []
+        
+        if action == 'buy':
+            if not code or not price or not quantity:
+                return {"code": 400, "message": "缺少必要参数"}
+            name = body.get('name', code)
+            success, msg = account.buy(code, name, float(price), int(quantity), reason)
+            return {"code": 200 if success else 400, "message": msg}
+        
+        elif action == 'sell':
+            if not code:
+                return {"code": 400, "message": "缺少股票代码"}
+            pos = account._get_position(code)
+            if not pos:
+                return {"code": 404, "message": "持仓不存在"}
+            if not price:
+                price = pos['market_price']
+            if not quantity:
+                quantity = pos['quantity']
+            success, msg = account.sell(code, float(price), int(quantity), reason)
+            return {"code": 200 if success else 400, "message": msg}
+        
+        elif action == 'check_stop':
+            results = account.check_stop_conditions()
+            account.update_prices()
+            return {"code": 200, "data": results}
+        
+        elif action == 'refresh':
+            account.update_prices()
+            return {"code": 200, "message": "价格已刷新"}
+        
+        elif action == 'auto_buy':
+            from db_manager import get_latest_selected_stocks
+            df = get_latest_selected_stocks(limit=30, fallback_to_prev=True)
+            
+            if df.empty:
+                return {"code": 200, "message": "无选股信号", "trades": [], "data_date": None, "is_fallback": False}
+            
+            data_date = df.iloc[0].get('date', '') if 'date' in df.columns else ''
+            is_fallback = data_date != datetime.now().strftime("%Y-%m-%d")
+            
+            account_state = account._get_account_state()
+            cash = account_state['cash'] if account_state else 100000
+            
+            for _, row in df.iterrows():
+                code = str(row.get('code', '')).zfill(6)
+                name = row.get('name', '')
+                score = row.get('total_score', 0)
+                price = row.get('price', 0)
+                
+                if code in account._get_positions_dict():
+                    continue
+                if score < 50:
+                    continue
+                if price <= 0:
+                    continue
+                
+                shares = int(min(10000, cash * 0.2) / price / 100) * 100
+                shares = max(shares, 100)
+                
+                if cash < price * shares:
+                    continue
+                
+                current_price = account._get_current_price(code)
+                if current_price and current_price > 0:
+                    price = current_price
+                
+                success, msg = account.buy(code, name, price, shares, f"自动买入 评分{score:.1f}")
+                trades.append({
+                    "action": "buy", 
+                    "code": code, 
+                    "name": name,
+                    "price": price,
+                    "quantity": shares,
+                    "success": success, 
+                    "message": msg
+                })
+                
+                if success:
+                    account_state = account._get_account_state()
+                    cash = account_state['cash'] if account_state else 0
+            
+            account.update_prices()
+            
+            return {
+                "code": 200,
+                "message": f"自动买入完成，执行 {len(trades)} 笔",
+                "trades": trades,
+                "data_date": str(data_date) if data_date else None,
+                "is_fallback": is_fallback
+            }
+        
+        elif action == 'all':
+            stop_results = account.check_stop_conditions()
+            for r in stop_results:
+                trades.append({
+                    "action": r['action'],
+                    "code": r['code'],
+                    "success": r['success'],
+                    "message": r['message']
+                })
+            
+            account.update_prices()
+            
+            from db_manager import get_latest_selected_stocks
+            df = get_latest_selected_stocks(limit=30, fallback_to_prev=True)
+            
+            data_date = None
+            is_fallback = False
+            
+            if not df.empty:
+                data_date = df.iloc[0].get('date', '') if 'date' in df.columns else ''
+                is_fallback = data_date != datetime.now().strftime("%Y-%m-%d")
+                
+                account_state = account._get_account_state()
+                cash = account_state['cash'] if account_state else 100000
+                
+                for _, row in df.iterrows():
+                    code = str(row.get('code', '')).zfill(6)
+                    name = row.get('name', '')
+                    score = row.get('total_score', 0)
+                    price = row.get('price', 0)
+                    
+                    if code in account._get_positions_dict():
+                        continue
+                    if score < 50:
+                        continue
+                    if price <= 0:
+                        continue
+                    
+                    shares = int(min(10000, cash * 0.2) / price / 100) * 100
+                    shares = max(shares, 100)
+                    
+                    if cash < price * shares:
+                        continue
+                    
+                    current_price = account._get_current_price(code)
+                    if current_price and current_price > 0:
+                        price = current_price
+                    
+                    success, msg = account.buy(code, name, price, shares, f"自动买入 评分{score:.1f}")
+                    trades.append({
+                        "action": "buy", 
+                        "code": code, 
+                        "name": name,
+                        "price": price,
+                        "quantity": shares,
+                        "success": success, 
+                        "message": msg
+                    })
+                    
+                    if success:
+                        account_state = account._get_account_state()
+                        cash = account_state['cash'] if account_state else 0
+            
+            account.update_prices()
+            status = account.get_status()
+            
+            return {
+                "code": 200,
+                "message": f"自动交易完成，执行 {len(trades)} 笔",
+                "trades": trades,
+                "account": status,
+                "data_date": str(data_date) if data_date else None,
+                "is_fallback": is_fallback
+            }
+        
+        else:
+            return {"code": 400, "message": f"未知操作: {action}"}
+            
+    except Exception as e:
+        logger.error(f"自动交易错误: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"code": 500, "message": str(e)}
+
+
+@app.get("/api/auto-trade/status")
+async def get_auto_trade_status():
+    """获取自动交易状态"""
+    try:
+        account = get_sim_account()
+        status = account.get_status()
+        if status:
+            today = datetime.now().strftime("%Y-%m-%d")
+            
+            with account.engine.connect() as conn:
+                result = conn.execute(
+                    text(f"""
+                        SELECT COUNT(*) 
+                        FROM {SCHEMA_NAME}.trade_records 
+                        WHERE DATE(created_at) = :today
+                    """),
+                    {'today': today}
+                )
+                daily_count = result.fetchone()[0]
+            
+            status['daily_trade_count'] = daily_count
+            status['last_trade_date'] = today
+            
+            return {"code": 200, "data": status}
+        return {"code": 404, "message": "账户状态不存在"}
+    except Exception as e:
+        logger.error(f"获取交易状态错误: {e}")
+        return {"code": 500, "message": str(e)}
+
+
+@app.post("/api/auto-trade/clear")
+async def clear_all_positions():
+    """清空所有持仓"""
+    try:
+        account = get_sim_account()
+        positions = account._get_all_positions()
+        
+        for pos in positions:
+            account.sell(pos['code'], pos['market_price'], pos['quantity'], "手动清仓")
+        
+        account.update_prices()
+        status = account.get_status()
+        
+        return {"code": 200, "message": f"已清仓 {len(positions)} 只股票", "account": status}
+    except Exception as e:
+        logger.error(f"清仓错误: {e}")
+        return {"code": 500, "message": str(e)}
+
+
+@app.get("/api/auto-trade/trades")
+async def get_trade_records(
+    limit: int = Query(50, ge=1, le=200),
+    code: Optional[str] = Query(None, description="筛选股票代码"),
+    start_date: Optional[str] = Query(None, description="开始日期 YYYY-MM-DD"),
+    end_date: Optional[str] = Query(None, description="结束日期 YYYY-MM-DD")
+):
+    """获取交易记录"""
+    try:
+        engine = get_sync_engine()
+        
+        with engine.connect() as conn:
+            sql = f"""
+                SELECT id, trade_date, trade_time, code, name, action, 
+                       price, quantity, amount, commission, stamp_tax, 
+                       pnl, pnl_pct, reason
+                FROM {SCHEMA_NAME}.trade_records
+                WHERE 1=1
+            """
+            params = {}
+            
+            if code:
+                sql += " AND code = :code"
+                params['code'] = code
+            
+            if start_date:
+                sql += " AND trade_date >= :start_date"
+                params['start_date'] = start_date
+            
+            if end_date:
+                sql += " AND trade_date <= :end_date"
+                params['end_date'] = end_date
+            
+            sql += " ORDER BY trade_date DESC, id DESC LIMIT :limit"
+            params['limit'] = limit
+            
+            result = conn.execute(text(sql), params)
+            rows = result.fetchall()
+            
+            records = []
+            for row in rows:
+                records.append({
+                    'id': row[0],
+                    'trade_date': str(row[1]) if row[1] else '',
+                    'trade_time': str(row[2]) if row[2] else '',
+                    'code': row[3] or '',
+                    'name': row[4] or '',
+                    'action': row[5] or '',
+                    'price': float(row[6]) if row[6] else 0,
+                    'quantity': float(row[7]) if row[7] else 0,
+                    'amount': float(row[8]) if row[8] else 0,
+                    'commission': float(row[9]) if row[9] else 0,
+                    'stamp_tax': float(row[10]) if row[10] else 0,
+                    'pnl': float(row[11]) if row[11] else 0,
+                    'pnl_pct': float(row[12]) if row[12] else 0,
+                    'reason': row[13] or ''
+                })
+            
+            return {"code": 200, "data": records, "count": len(records)}
+            
+    except Exception as e:
+        logger.error(f"获取交易记录错误: {e}")
+        return {"code": 500, "message": str(e), "data": []}
+
+
+@app.get("/api/auto-trade/trades/stats")
+async def get_trade_stats():
+    """获取交易统计"""
+    try:
+        engine = get_sync_engine()
+        
+        with engine.connect() as conn:
+            result = conn.execute(
+                text(f"""
+                    SELECT 
+                        COUNT(*) as total_trades,
+                        SUM(CASE WHEN action LIKE '%买入%' OR action = '买入' THEN 1 ELSE 0 END) as buy_count,
+                        SUM(CASE WHEN action LIKE '%卖出%' OR action = '卖出' OR action LIKE '%清仓%' THEN 1 ELSE 0 END) as sell_count,
+                        SUM(amount) as total_amount,
+                        SUM(commission) as total_commission,
+                        SUM(stamp_tax) as total_stamp_tax,
+                        SUM(pnl) as total_pnl,
+                        AVG(pnl_pct) as avg_pnl_pct
+                    FROM {SCHEMA_NAME}.trade_records
+                """)
+            )
+            row = result.fetchone()
+            
+            today = datetime.now().strftime("%Y-%m-%d")
+            result_today = conn.execute(
+                text(f"""
+                    SELECT 
+                        COUNT(*) as today_trades,
+                        SUM(CASE WHEN action LIKE '%买入%' OR action = '买入' THEN 1 ELSE 0 END) as today_buy,
+                        SUM(CASE WHEN action LIKE '%卖出%' OR action = '卖出' OR action LIKE '%清仓%' THEN 1 ELSE 0 END) as today_sell,
+                        SUM(pnl) as today_pnl
+                    FROM {SCHEMA_NAME}.trade_records
+                    WHERE trade_date = :today
+                """),
+                {'today': today}
+            )
+            row_today = result_today.fetchone()
+            
+            result_stocks = conn.execute(
+                text(f"""
+                    SELECT 
+                        code, name,
+                        COUNT(*) as trade_count,
+                        SUM(CASE WHEN action LIKE '%买入%' OR action = '买入' THEN quantity ELSE 0 END) as buy_quantity,
+                        SUM(CASE WHEN action LIKE '%卖出%' OR action = '卖出' OR action LIKE '%清仓%' THEN quantity ELSE 0 END) as sell_quantity,
+                        SUM(pnl) as total_pnl
+                    FROM {SCHEMA_NAME}.trade_records
+                    GROUP BY code, name
+                    ORDER BY total_pnl DESC
+                    LIMIT 20
+                """)
+            )
+            stocks = []
+            for r in result_stocks.fetchall():
+                stocks.append({
+                    'code': r[0] or '',
+                    'name': r[1] or '',
+                    'trade_count': r[2] or 0,
+                    'buy_quantity': float(r[3]) if r[3] else 0,
+                    'sell_quantity': float(r[4]) if r[4] else 0,
+                    'total_pnl': float(r[5]) if r[5] else 0
+                })
+            
+            return {
+                "code": 200,
+                "data": {
+                    "total": {
+                        "trades": row[0] or 0,
+                        "buy_count": row[1] or 0,
+                        "sell_count": row[2] or 0,
+                        "total_amount": float(row[3]) if row[3] else 0,
+                        "total_commission": float(row[4]) if row[4] else 0,
+                        "total_stamp_tax": float(row[5]) if row[5] else 0,
+                        "total_pnl": float(row[6]) if row[6] else 0,
+                        "avg_pnl_pct": float(row[7]) if row[7] else 0
+                    },
+                    "today": {
+                        "trades": row_today[0] or 0,
+                        "buy_count": row_today[1] or 0,
+                        "sell_count": row_today[2] or 0,
+                        "today_pnl": float(row_today[3]) if row_today[3] else 0
+                    },
+                    "top_stocks": stocks
+                }
+            }
+            
+    except Exception as e:
+        logger.error(f"获取交易统计错误: {e}")
+        return {"code": 500, "message": str(e)}
+
+
+
+
+
+
+
+
 # ========== 启动事件 ==========
 @asynccontextmanager
 async def lifespan(app: FastAPI):
