@@ -4902,59 +4902,61 @@ class MusicSpider:
         
 
     def get_download_url(self, content_id, copyright_id):
-        """获取歌曲下载链接"""
+        """获取歌曲下载链接，返回 (url, status, message)"""
         url = 'https://app.c.nf.migu.cn/MIGUM3.0/strategy/pc/listen/v1.0'
         
-        # 尝试不同的音质和格式组合
-        tone_flags = [
-            ('SQ', '2'),  # 超高品质
-            ('HQ', '1'),  # 高品质
-            ('PQ', '0'),  # 标准品质
+        # 尝试不同的音质组合
+        test_cases = [
+            ('HQ', '1'),
+            ('PQ', '0'),
+            ('SQ', '1'),
+            ('HQ', '0'),
         ]
         
-        for tone, resource_type in tone_flags:
+        for tone, resource_type in test_cases:
             params = {
                 'contentId': content_id,
                 'copyrightId': copyright_id,
                 'toneFlag': tone,
                 'scene': '',
                 'netType': '01',
-                'resourceType': resource_type,  # 动态设置
+                'resourceType': resource_type,
             }
             try:
                 resp = requests.get(url, params=params, headers=self._get_headers(), timeout=10)
                 data = resp.json()
                 logger.info(f"音质 {tone} 响应: code={data.get('code')}, cannotCode={data.get('data', {}).get('cannotCode', '')}")
                 
-                if data.get('code') == '000000':
-                    cannot_code = data.get('data', {}).get('cannotCode')
-                    if cannot_code == '440018':
-                        # 该音质不支持，尝试下一个
-                        logger.info(f"音质 {tone} 不支持，尝试下一个")
-                        continue
-                    elif cannot_code:
-                        logger.warning(f"音质 {tone} 返回错误: {cannot_code}")
-                        continue
-                    
-                    # 尝试多种 url 路径
+                if data.get('code') == '200000':
+                    # 成功响应，尝试获取 url
                     url_value = data.get('data', {}).get('url')
                     if url_value and url_value.startswith('http'):
-                        return url_value
-                        
+                        return url_value, 'success', None
+                    
+                    # 尝试其他路径
                     url_value = data.get('data', {}).get('playUrl')
                     if url_value and url_value.startswith('http'):
-                        return url_value
-                        
-                    url_value = data.get('url')
-                    if url_value and url_value.startswith('http'):
-                        return url_value
-                        
+                        return url_value, 'success', None
+                    
+                    # 没有 url，但有其他信息
                     logger.warning(f"音质 {tone} 无播放链接")
+                    continue
+                    
+                elif data.get('code') == '000000':
+                    cannot_code = data.get('data', {}).get('cannotCode')
+                    if cannot_code:
+                        logger.warning(f"音质 {tone} 返回错误: {cannot_code}")
+                        continue
+                else:
+                    logger.warning(f"音质 {tone} 未知响应: {data.get('code')}")
+                    continue
+                    
             except Exception as e:
                 logger.error(f"获取音质 {tone} 失败: {e}")
                 continue
         
-        return None
+        # 所有音质都失败
+        return None, 'failed', '无可用播放链接'
     
 
     def download_song(self, song_url, song_name):
@@ -4988,7 +4990,6 @@ def background_download(task_id, content_id, copyright_id, song_name):
         url, status, message = spider.get_download_url(content_id, copyright_id)
         
         if status == 'copyright':
-            # 版权限制
             redis_client.setex(f"music:task:{task_id}", 3600, json.dumps({
                 'status': 'copyright',
                 'error': message,
