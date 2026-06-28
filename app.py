@@ -4802,7 +4802,7 @@ class MusicSpider:
         import os
         
         # 初始化 Redis
-        self.redis_client = redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379/0"))
+        self.redis_client = redis.from_url(os.environ.get("REDIS_URL", "redis://default:FBRTgBVjJPiTrVTBCpaZqrSfVsaIaxrA@redis.railway.internal:6379"))
         
         self.headers = {
             'Accept': 'application/json, text/plain, */*',
