@@ -34,7 +34,7 @@ from loguru import logger
 # Redis 连接（假设已存在 redis_client）
 # 如果 redis_client 未定义，可参考：
 # import redis
-# redis_client = redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379/0"))
+# redis_client = redis.from_url(os.environ.get("REDIS_URL", "redis://default:FBRTgBVjJPiTrVTBCpaZqrSfVsaIaxrA@redis.railway.internal:6379"))
 
 # 歌曲保存目录
 MUSIC_DIR = os.path.join(os.path.dirname(__file__), "music_downloads")
