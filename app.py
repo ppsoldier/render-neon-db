@@ -4905,12 +4905,10 @@ class MusicSpider:
         """获取歌曲下载链接，返回 (url, status, message)"""
         url = 'https://app.c.nf.migu.cn/MIGUM3.0/strategy/pc/listen/v1.0'
         
-        # 尝试不同的音质组合
         test_cases = [
             ('HQ', '1'),
             ('PQ', '0'),
             ('SQ', '1'),
-            ('HQ', '0'),
         ]
         
         for tone, resource_type in test_cases:
@@ -4925,38 +4923,42 @@ class MusicSpider:
             try:
                 resp = requests.get(url, params=params, headers=self._get_headers(), timeout=10)
                 data = resp.json()
-                logger.info(f"音质 {tone} 响应: code={data.get('code')}, cannotCode={data.get('data', {}).get('cannotCode', '')}")
+                
+                # 打印完整响应以便调试
+                logger.info(f"音质 {tone} 完整响应: {json.dumps(data, ensure_ascii=False)[:500]}")
                 
                 if data.get('code') == '200000':
-                    # 成功响应，尝试获取 url
-                    url_value = data.get('data', {}).get('url')
-                    if url_value and url_value.startswith('http'):
-                        return url_value, 'success', None
+                    # 检查 data 中是否有 url
+                    if 'data' in data and data['data']:
+                        # 打印 data 的 keys
+                        logger.info(f"data keys: {data['data'].keys()}")
+                        
+                        # 尝试获取 url
+                        url_value = data['data'].get('url')
+                        if url_value and url_value.startswith('http'):
+                            return url_value, 'success', None
+                        
+                        # 尝试其他字段
+                        for field in ['playUrl', 'listenUrl', 'downloadUrl', 'url']:
+                            url_value = data['data'].get(field)
+                            if url_value and url_value.startswith('http'):
+                                return url_value, 'success', None
+                        
+                        # 如果有 dialogInfo，可能是版权或其他限制
+                        dialog_info = data['data'].get('dialogInfo')
+                        if dialog_info:
+                            logger.warning(f"音质 {tone} 对话框信息: {dialog_info}")
+                            return None, 'failed', dialog_info.get('text', '无法播放')
                     
-                    # 尝试其他路径
-                    url_value = data.get('data', {}).get('playUrl')
-                    if url_value and url_value.startswith('http'):
-                        return url_value, 'success', None
-                    
-                    # 没有 url，但有其他信息
                     logger.warning(f"音质 {tone} 无播放链接")
-                    continue
-                    
-                elif data.get('code') == '000000':
-                    cannot_code = data.get('data', {}).get('cannotCode')
-                    if cannot_code:
-                        logger.warning(f"音质 {tone} 返回错误: {cannot_code}")
-                        continue
-                else:
-                    logger.warning(f"音质 {tone} 未知响应: {data.get('code')}")
                     continue
                     
             except Exception as e:
                 logger.error(f"获取音质 {tone} 失败: {e}")
                 continue
         
-        # 所有音质都失败
         return None, 'failed', '无可用播放链接'
+    
     
 
     def download_song(self, song_url, song_name):
