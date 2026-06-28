@@ -4802,7 +4802,7 @@ class MusicSpider:
         import os
         
         # 初始化 Redis
-        self.redis_client = redis.from_url(os.environ.get("REDIS_URL", "redis://default:FBRTgBVjJPiTrVTBCpaZqrSfVsaIaxrA@redis.railway.internal:6379"))
+        self.redis_client = redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379/0"))
         
         self.headers = {
             'Accept': 'application/json, text/plain, */*',
@@ -4818,7 +4818,7 @@ class MusicSpider:
             'Sec-Fetch-Dest': 'empty',
             'Sec-Fetch-Mode': 'cors',
             'Sec-Fetch-Site': 'same-site',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (Chrome/144.0.0.0 Safari/537.36 Edg/144.0.0.0',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36 Edg/144.0.0.0',
             'activityId': 'MUSIC-WWW',
             'appId': 'h5',
             'channel': '014X031',
@@ -4831,22 +4831,24 @@ class MusicSpider:
             'sec-ch-ua-platform': '"Windows"',
             'subchannel': '014X031',
             'test': '00',
-            'timestamp': str(int(time.time() * 1000)),
             'ua': 'Android_migu',
             'uid': '',
             'Cookie': 'mgAppH5CookieId=948369795-2nc77k5eec0be638d9174dad01e8a5-1782609536; idmpauth=true@passport.migu.cn; mg_auth_sid=UDnid0000011782613907520M1vIw24HzEoc4PDxAkLz1UamLAln85Vv; pacmtoken=C9948B8F93A6A38B6B918FA2888293729A9B868D92A8A691629A8FA5807A9A77999B8D8E91A6A6895EC3BCCEB87D9D75C590B58AC6D49F8C6AC78D9A8C7B9C73909ABABBC3A9D4BA649A87A589-3218941327',
         }
 
     def _get_headers(self):
+        """动态生成请求头"""
         headers = self.headers.copy()
         headers["timestamp"] = str(int(time.time() * 1000))
-        # 确保 channel 和 subchannel 在请求头中
-        headers["channel"] = "014X031"
-        headers["subchannel"] = "014X031"
         return headers
 
+    def parse_jsonpath(self, data, expr):
+        """封装jsonpath，匹配不到返回空列表"""
+        res = jsonpath.jsonpath(data, expr)
+        return res if res is not False else []
+
     def search(self, keyword, limit=5):
-        # 尝试从缓存读取
+        """搜索歌曲"""
         try:
             cache_key = f"music:search:{keyword}"
             cached = self.redis_client.get(cache_key)
@@ -4854,8 +4856,8 @@ class MusicSpider:
                 logger.info(f"从缓存加载搜索结果: {keyword}")
                 return json.loads(cached)
         except Exception as e:
-            logger.warning(f"Redis 读取失败: {e}，跳过缓存")
-    
+            logger.warning(f"Redis 读取失败: {e}")
+
         url = 'https://app.u.nf.migu.cn/pc/resource/song/item/search/v1.0'
         params = {'text': keyword, 'pageNo': '1', 'pageSize': '20'}
         
@@ -4868,23 +4870,21 @@ class MusicSpider:
             
             data = resp.json()
             
-            # 直接解析列表
+            # 使用 jsonpath 解析（与本地代码一致）
+            content_ids = self.parse_jsonpath(data, '$..contentId')
+            copy_ids = self.parse_jsonpath(data, '$..copyrightId')
+            song_names = self.parse_jsonpath(data, '$..songName')
+            singers = self.parse_jsonpath(data, '$..singerName')
+            
             results = []
-            for item in data:
+            for cid, copid, name, singer in zip(content_ids, copy_ids, song_names, singers):
                 if len(results) >= limit:
                     break
-                
-                # 检查是否有版权限制（先默认可下载，后续通过下载接口验证）
-                content_id = item.get('contentId', '')
-                copyright_id = item.get('copyrightId', '') or item.get('ringCopyrightId', '')
-                
                 results.append({
-                    'contentId': content_id,
-                    'copyrightId': copyright_id,
-                    'songName': item.get('songName', ''),
-                    'singer': item.get('singerName', '') or item.get('artists', [{}])[0].get('name', ''),
-                    'downloadable': True,  # 默认可下载，实际下载时会验证
-                    'hasCopyright': True
+                    'contentId': cid,
+                    'copyrightId': copid,
+                    'songName': name,
+                    'singer': singer
                 })
             
             # 缓存结果
@@ -4899,70 +4899,45 @@ class MusicSpider:
         except Exception as e:
             logger.error(f"搜索请求失败: {e}")
             return []
-        
 
     def get_download_url(self, content_id, copyright_id):
-        """获取歌曲下载链接，返回 (url, status, message)"""
+        """获取歌曲下载链接（与本地代码逻辑一致）"""
         url = 'https://app.c.nf.migu.cn/MIGUM3.0/strategy/pc/listen/v1.0'
+        # 优先320K HQ高清，然后是SQ，最后是PQ
+        tone_list = ["SQ", "HQ", "PQ"]
         
-        test_cases = [
-            ('HQ', '1'),
-            ('PQ', '0'),
-            ('SQ', '1'),
-        ]
-        
-        for tone, resource_type in test_cases:
+        for tone in tone_list:
             params = {
                 'contentId': content_id,
                 'copyrightId': copyright_id,
-                'toneFlag': tone,
                 'scene': '',
                 'netType': '01',
-                'resourceType': resource_type,
+                'resourceType': '2',  # 与本地代码一致
+                'toneFlag': tone,
             }
             try:
                 resp = requests.get(url, params=params, headers=self._get_headers(), timeout=10)
                 data = resp.json()
                 
-                # 打印完整响应以便调试
-                logger.info(f"音质 {tone} 完整响应: {json.dumps(data, ensure_ascii=False)[:500]}")
-                
-                if data.get('code') == '200000':
-                    # 检查 data 中是否有 url
-                    if 'data' in data and data['data']:
-                        # 打印 data 的 keys
-                        logger.info(f"data keys: {data['data'].keys()}")
-                        
-                        # 尝试获取 url
-                        url_value = data['data'].get('url')
-                        if url_value and url_value.startswith('http'):
-                            return url_value, 'success', None
-                        
-                        # 尝试其他字段
-                        for field in ['playUrl', 'listenUrl', 'downloadUrl', 'url']:
-                            url_value = data['data'].get(field)
-                            if url_value and url_value.startswith('http'):
-                                return url_value, 'success', None
-                        
-                        # 如果有 dialogInfo，可能是版权或其他限制
-                        dialog_info = data['data'].get('dialogInfo')
-                        if dialog_info:
-                            logger.warning(f"音质 {tone} 对话框信息: {dialog_info}")
-                            return None, 'failed', dialog_info.get('text', '无法播放')
-                    
-                    logger.warning(f"音质 {tone} 无播放链接")
+                # 与本地代码一致：检查 code 是否为 000000
+                if data.get("code") != "000000":
+                    logger.info(f"音质 {tone} 返回: code={data.get('code')}, info={data.get('info', '')}")
                     continue
+                    
+                data_info = data.get("data")
+                if data_info and "url" in data_info:
+                    song_url = data_info["url"]
+                    logger.info(f"获取音质 {tone} 链接成功")
+                    return song_url
                     
             except Exception as e:
                 logger.error(f"获取音质 {tone} 失败: {e}")
                 continue
         
-        return None, 'failed', '无可用播放链接'
-    
-    
+        return None
 
     def download_song(self, song_url, song_name):
-        """下载 MP3 文件到本地"""
+        """下载 MP3 文件"""
         try:
             resp = requests.get(song_url, headers=self._get_headers(), timeout=30)
             if resp.status_code == 200:
@@ -4970,11 +4945,13 @@ class MusicSpider:
                 path = os.path.join(MUSIC_DIR, f"{safe_name}.mp3")
                 with open(path, 'wb') as f:
                     f.write(resp.content)
+                logger.info(f'{song_name} 下载完成')
                 return path
             else:
+                logger.error(f'{song_name} 下载失败: HTTP {resp.status_code}')
                 return None
         except Exception as e:
-            logger.error(f"下载失败: {e}")
+            logger.error(f'{song_name} 下载失败：{e}')
             return None
 
 
