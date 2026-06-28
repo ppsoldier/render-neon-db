@@ -4892,35 +4892,46 @@ class MusicSpider:
         
 
     def get_download_url(self, content_id, copyright_id):
-        """获取歌曲下载链接"""
-        url = 'https://app.c.nf.migu.cn/MIGUM3.0/strategy/pc/listen/v1.0'
-        
-        for tone in ['SQ', 'HQ', 'PQ']:
-            params = {
-                'contentId': content_id,
-                'copyrightId': copyright_id,
-                'toneFlag': tone,
-                'scene': '',
-                'netType': '01',
-                'resourceType': '2',
-                'channel': '014X031',      # ← 添加
-                'subchannel': '014X031',   # ← 添加
-                'platform': 'H5',
-                'appId': 'h5',
-            }
-            try:
-                resp = requests.get(url, params=params, headers=self._get_headers(), timeout=10)
-                data = resp.json()
-                logger.info(f"音质 {tone} 响应: code={data.get('code')}")
-                if data.get('code') == '000000' and data.get('data', {}).get('url'):
-                    logger.info(f"获取音质 {tone} 链接成功")
-                    return data['data']['url']
-                else:
-                    logger.warning(f"音质 {tone} 返回: {data.get('code')} - {data.get('info', '')}")
-            except Exception as e:
-                logger.error(f"获取音质 {tone} 失败: {e}")
-                continue
-        return None
+    """获取歌曲下载链接"""
+    url = 'https://app.c.nf.migu.cn/MIGUM3.0/strategy/pc/listen/v1.0'
+    
+    for tone in ['SQ', 'HQ', 'PQ']:
+        params = {
+            'contentId': content_id,
+            'copyrightId': copyright_id,
+            'toneFlag': tone,
+            'scene': '',
+            'netType': '01',
+            'resourceType': '2',
+            'channel': '014X031',
+            'subchannel': '014X031',
+            'platform': 'H5',
+            'appId': 'h5',
+        }
+        try:
+            resp = requests.get(url, params=params, headers=self._get_headers(), timeout=10)
+            data = resp.json()
+            logger.info(f"音质 {tone} 完整响应: {json.dumps(data, ensure_ascii=False)[:500]}")
+            
+            if data.get('code') == '000000':
+                # 尝试多种可能的路径获取 url
+                url_paths = [
+                    data.get('data', {}).get('url'),
+                    data.get('url'),
+                    data.get('data', {}).get('playUrl'),
+                    data.get('playUrl'),
+                    data.get('data', {}).get('listenUrl'),
+                ]
+                for url_value in url_paths:
+                    if url_value and url_value.startswith('http'):
+                        logger.info(f"获取音质 {tone} 链接成功")
+                        return url_value
+            logger.warning(f"音质 {tone} 返回: {data.get('code')} - {data.get('info', '')}")
+        except Exception as e:
+            logger.error(f"获取音质 {tone} 失败: {e}")
+            continue
+    return None
+    
 
     def download_song(self, song_url, song_name):
         """下载 MP3 文件到本地"""
