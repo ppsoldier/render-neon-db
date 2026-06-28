@@ -4930,6 +4930,8 @@ def background_download(task_id, content_id, copyright_id, song_name):
 
 @app.route('/api/music/search', methods=['POST'])
 def music_search():
+    print("收到的请求数据:", request.get_data())  # 打印原始数据
+    print("解析的 JSON:", request.get_json())    # 打印解析后的 JSON
     """搜索歌曲"""
     data = request.get_json()
     keyword = data.get('keyword', '').strip()
