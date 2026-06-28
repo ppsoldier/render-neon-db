@@ -8,4 +8,6 @@ apscheduler==3.10.4
 python-docx>=1.1.0
 celery>=5.3.0
 redis>=5.0.0
-josnpath
+jsonpath
+loguru
+
