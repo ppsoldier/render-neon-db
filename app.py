@@ -18,11 +18,28 @@ import json
 import time
 import requests
 from io import BytesIO
-import re
-
 from concurrent.futures import ThreadPoolExecutor
 import uuid
 import subprocess
+import os
+import time
+import json
+import uuid
+import threading
+import requests
+import jsonpath
+from flask import request, jsonify
+from loguru import logger
+
+# Redis 连接（假设已存在 redis_client）
+# 如果 redis_client 未定义，可参考：
+# import redis
+# redis_client = redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379/0"))
+
+# 歌曲保存目录
+MUSIC_DIR = os.path.join(os.path.dirname(__file__), "music_downloads")
+os.makedirs(MUSIC_DIR, exist_ok=True)
+
 
 
 
@@ -4776,6 +4793,207 @@ def export_attendance_record():
         import traceback
         traceback.print_exc()
         return jsonify({"code": 500, "msg": str(e)}), 500
+
+
+
+
+class MusicSpider:
+    def __init__(self):
+        self.headers = {
+            'Accept': 'application/json, text/plain, */*',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'Content-Type': 'application/json',
+            'Origin': 'https://music.migu.cn',
+            'Referer': 'https://music.migu.cn/',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'appId': 'h5',
+            'channel': '014X031',
+            'platform': 'H5',
+            # 其他固定头...
+        }
+        # 必要头可动态生成 timestamp
+
+    def _get_headers(self):
+        headers = self.headers.copy()
+        headers["timestamp"] = str(int(time.time() * 1000))
+        return headers
+
+    def search(self, keyword, limit=5):
+        """搜索歌曲，返回列表"""
+        cache_key = f"music:search:{keyword}"
+        cached = redis_client.get(cache_key)
+        if cached:
+            logger.info(f"从缓存加载搜索结果: {keyword}")
+            return json.loads(cached)
+
+        url = 'https://app.u.nf.migu.cn/pc/resource/song/item/search/v1.0'
+        params = {'text': keyword, 'pageNo': '1', 'pageSize': '20'}
+        try:
+            resp = requests.get(url, params=params, headers=self._get_headers(), timeout=10)
+            data = resp.json()
+            content_ids = jsonpath.jsonpath(data, '$..contentId') or []
+            copy_ids = jsonpath.jsonpath(data, '$..copyrightId') or []
+            song_names = jsonpath.jsonpath(data, '$..songName') or []
+            singers = jsonpath.jsonpath(data, '$..singerName') or []
+            
+            results = []
+            for cid, copid, name, singer in zip(content_ids, copy_ids, song_names, singers):
+                if len(results) >= limit:
+                    break
+                results.append({
+                    'contentId': cid,
+                    'copyrightId': copid,
+                    'songName': name,
+                    'singer': singer
+                })
+            # 缓存 1 小时
+            redis_client.setex(cache_key, 3600, json.dumps(results))
+            return results
+        except Exception as e:
+            logger.error(f"搜索失败: {e}")
+            return []
+
+    def get_download_url(self, content_id, copyright_id, tone_flag='SQ'):
+        """获取歌曲下载链接（优先 HQ/SQ）"""
+        url = 'https://app.c.nf.migu.cn/MIGUM3.0/strategy/pc/listen/v1.0'
+        for tone in ['SQ', 'HQ', 'PQ']:
+            params = {
+                'contentId': content_id,
+                'copyrightId': copyright_id,
+                'toneFlag': tone,
+            }
+            try:
+                resp = requests.get(url, params=params, headers=self._get_headers(), timeout=10)
+                data = resp.json()
+                if data.get('code') == '000000' and data.get('data', {}).get('url'):
+                    return data['data']['url']
+            except:
+                continue
+        return None
+
+    def download_song(self, song_url, song_name):
+        """下载 MP3 文件到本地"""
+        try:
+            resp = requests.get(song_url, headers=self._get_headers(), timeout=30)
+            if resp.status_code == 200:
+                safe_name = song_name.replace("?", "").replace("/", "").replace("\\", "").replace("*", "")
+                path = os.path.join(MUSIC_DIR, f"{safe_name}.mp3")
+                with open(path, 'wb') as f:
+                    f.write(resp.content)
+                return path
+            else:
+                return None
+        except Exception as e:
+            logger.error(f"下载失败: {e}")
+            return None
+
+
+def background_download(task_id, content_id, copyright_id, song_name):
+    """后台下载任务，更新 Redis 状态"""
+    try:
+        # 更新状态：进行中
+        redis_client.setex(f"music:task:{task_id}", 3600, json.dumps({
+            'status': 'downloading',
+            'progress': 0,
+            'song_name': song_name
+        }))
+        
+        spider = MusicSpider()
+        url = spider.get_download_url(content_id, copyright_id)
+        if not url:
+            redis_client.setex(f"music:task:{task_id}", 3600, json.dumps({
+                'status': 'failed',
+                'error': '获取下载链接失败'
+            }))
+            return
+        
+        # 下载文件
+        file_path = spider.download_song(url, song_name)
+        if file_path:
+            redis_client.setex(f"music:task:{task_id}", 3600, json.dumps({
+                'status': 'completed',
+                'file_path': file_path,
+                'song_name': song_name
+            }))
+        else:
+            redis_client.setex(f"music:task:{task_id}", 3600, json.dumps({
+                'status': 'failed',
+                'error': '下载文件失败'
+            }))
+    except Exception as e:
+        logger.error(f"后台下载异常: {e}")
+        redis_client.setex(f"music:task:{task_id}", 3600, json.dumps({
+            'status': 'failed',
+            'error': str(e)
+        }))
+
+@app.route('/api/music/search', methods=['POST'])
+def music_search():
+    """搜索歌曲"""
+    data = request.get_json()
+    keyword = data.get('keyword', '').strip()
+    if not keyword:
+        return jsonify({'code': 400, 'msg': '请输入歌曲名称'})
+    spider = MusicSpider()
+    results = spider.search(keyword, limit=5)
+    return jsonify({'code': 200, 'data': results})
+
+@app.route('/api/music/download', methods=['POST'])
+def music_download():
+    """提交下载任务"""
+    data = request.get_json()
+    content_id = data.get('contentId')
+    copyright_id = data.get('copyrightId')
+    song_name = data.get('songName')
+    if not all([content_id, copyright_id, song_name]):
+        return jsonify({'code': 400, 'msg': '缺少必要参数'})
+    
+    task_id = str(uuid.uuid4())
+    # 启动后台线程下载
+    thread = threading.Thread(target=background_download, args=(task_id, content_id, copyright_id, song_name))
+    thread.daemon = True
+    thread.start()
+    
+    return jsonify({
+        'code': 200,
+        'data': {'task_id': task_id, 'status': 'queued'}
+    })
+
+@app.route('/api/music/status/<task_id>', methods=['GET'])
+def music_status(task_id):
+    """查询下载状态"""
+    key = f"music:task:{task_id}"
+    data = redis_client.get(key)
+    if not data:
+        return jsonify({'code': 404, 'msg': '任务不存在或已过期'})
+    return jsonify({'code': 200, 'data': json.loads(data)})
+
+@app.route('/api/music/list', methods=['GET'])
+def music_list():
+    """列出已下载的歌曲文件"""
+    files = []
+    for f in os.listdir(MUSIC_DIR):
+        if f.endswith('.mp3'):
+            files.append({
+                'name': f,
+                'path': os.path.join(MUSIC_DIR, f),
+                'size': os.path.getsize(os.path.join(MUSIC_DIR, f))
+            })
+    return jsonify({'code': 200, 'data': files})
+
+@app.route('/api/music/download/<filename>', methods=['GET'])
+def music_download_file(filename):
+    """提供文件下载（需安全处理，建议仅允许已下载文件）"""
+    # 简单实现，生产环境应验证文件存在性并限制路径
+    from flask import send_from_directory
+    return send_from_directory(MUSIC_DIR, filename, as_attachment=True)
+
+
+
+
+
 
 
 # ------------------- 启动应用 -------------------
