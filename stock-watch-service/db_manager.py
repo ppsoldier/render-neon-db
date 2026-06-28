@@ -223,7 +223,7 @@ def get_latest_picks(limit: int = 10):
 
 
 def save_selected_stocks(df: pd.DataFrame, delete_existing: bool = True):
-    """保存选股结果到数据库"""
+    """保存选股结果到数据库（包括详细评分）"""
     if df.empty:
         logger.warning("DataFrame 为空，跳过保存")
         return
@@ -245,16 +245,20 @@ def save_selected_stocks(df: pd.DataFrame, delete_existing: bool = True):
         df_copy = df.copy()
         df_copy['date'] = today
         
-        # 选择需要的列
-        cols = ['code', 'name', 'price', 'change_pct', 'total_score', 'advice', 'fin_rating', 'date']
-        existing_cols = [c for c in cols if c in df_copy.columns]
+        # 定义所有可能保存的列（包含详细评分）
+        possible_cols = [
+            'code', 'name', 'price', 'change_pct', 'total_score',
+            'advice', 'fin_rating', 'date',
+            'trend_score', 'volume_score', 'flow_score',
+            'tech_score', 'sentiment_score', 'risk_score', 'position_score'
+        ]
+        # 只选择在 df 中存在的列
+        existing_cols = [c for c in possible_cols if c in df_copy.columns]
         df_copy = df_copy[existing_cols]
         
-        # 如果缺少 advice 列，添加默认值
+        # 如果缺少 advice 或 fin_rating，添加默认值
         if 'advice' not in df_copy.columns:
             df_copy['advice'] = '持有/观望'
-        
-        # 如果缺少 fin_rating 列，添加默认值
         if 'fin_rating' not in df_copy.columns:
             df_copy['fin_rating'] = '一般'
         
@@ -266,7 +270,7 @@ def save_selected_stocks(df: pd.DataFrame, delete_existing: bool = True):
             if_exists='append',
             index=False
         )
-        logger.info(f"✅ 选股结果已保存到数据库: {len(df_copy)} 条")
+        logger.info(f"✅ 选股结果已保存到数据库: {len(df_copy)} 条，包含 {len(existing_cols)} 个字段")
         
     except Exception as e:
         logger.error(f"❌ 保存选股结果失败: {e}")
