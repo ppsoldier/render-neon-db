@@ -4843,58 +4843,52 @@ class MusicSpider:
         return headers
 
     def search(self, keyword, limit=5):
-        # 尝试从缓存读取（Redis 不可用时跳过）
-        try:
-            cache_key = f"music:search:{keyword}"
-            cached = self.redis_client.get(cache_key)
-            if cached:
-                logger.info(f"从缓存加载搜索结果: {keyword}")
-                return json.loads(cached)
-        except Exception as e:
-            logger.warning(f"Redis 读取失败: {e}，跳过缓存")
+    # 尝试从缓存读取
+    try:
+        cache_key = f"music:search:{keyword}"
+        cached = self.redis_client.get(cache_key)
+        if cached:
+            logger.info(f"从缓存加载搜索结果: {keyword}")
+            return json.loads(cached)
+    except Exception as e:
+        logger.warning(f"Redis 读取失败: {e}")
 
-        url = 'https://app.u.nf.migu.cn/pc/resource/song/item/search/v1.0'
-        params = {'text': keyword, 'pageNo': '1', 'pageSize': '20'}
+    url = 'https://app.u.nf.migu.cn/pc/resource/song/item/search/v1.0'
+    params = {'text': keyword, 'pageNo': '1', 'pageSize': '20'}
+    
+    try:
+        resp = requests.get(url, params=params, headers=self._get_headers(), timeout=10)
+        logger.info(f"第三方API状态码: {resp.status_code}")
         
-        try:
-            resp = requests.get(url, params=params, headers=self._get_headers(), timeout=10)
-            logger.info(f"第三方API状态码: {resp.status_code}")
-            
-            if resp.status_code != 200:
-                logger.warning(f"API返回非200: {resp.status_code}")
-                return []
-            
-            data = resp.json()
-            
-            # 解析数据
-            content_ids = jsonpath.jsonpath(data, '$..contentId') or []
-            copy_ids = jsonpath.jsonpath(data, '$..copyrightId') or []
-            song_names = jsonpath.jsonpath(data, '$..songName') or []
-            singers = jsonpath.jsonpath(data, '$..singerName') or []
-            
-            results = []
-            for cid, copid, name, singer in zip(content_ids, copy_ids, song_names, singers):
-                if len(results) >= limit:
-                    break
-                results.append({
-                    'contentId': cid,
-                    'copyrightId': copid,
-                    'songName': name,
-                    'singer': singer
-                })
-            
-            # 缓存结果
-            try:
-                self.redis_client.setex(cache_key, 3600, json.dumps(results))
-            except Exception as e:
-                logger.warning(f"Redis 写入失败: {e}")
-            
-            logger.info(f"搜索结果: 找到 {len(results)} 首歌曲")
-            return results
-            
-        except Exception as e:
-            logger.error(f"搜索请求失败: {e}")
+        if resp.status_code != 200:
             return []
+        
+        data = resp.json()
+        
+        # 直接解析列表（不再使用 jsonpath）
+        results = []
+        for item in data:
+            if len(results) >= limit:
+                break
+            results.append({
+                'contentId': item.get('contentId', ''),
+                'copyrightId': item.get('copyrightId', '') or item.get('ringCopyrightId', ''),
+                'songName': item.get('songName', ''),
+                'singer': item.get('singerName', '') or item.get('artists', [{}])[0].get('name', '')
+            })
+        
+        # 缓存结果
+        try:
+            self.redis_client.setex(cache_key, 3600, json.dumps(results))
+        except Exception as e:
+            logger.warning(f"Redis 写入失败: {e}")
+        
+        logger.info(f"搜索结果: 找到 {len(results)} 首歌曲")
+        return results
+        
+    except Exception as e:
+        logger.error(f"搜索请求失败: {e}")
+        return []
         
 
     def get_download_url(self, content_id, copyright_id, tone_flag='SQ'):
