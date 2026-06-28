@@ -4825,6 +4825,7 @@ class MusicSpider:
         cached = redis_client.get(cache_key)
         if cached:
             logger.info(f"从缓存加载搜索结果: {keyword}")
+            logger.info(f"API 返回完整数据: {json.dumps(data, ensure_ascii=False)[:1000]}")
             return json.loads(cached)
 
         url = 'https://app.u.nf.migu.cn/pc/resource/song/item/search/v1.0'
