@@ -4902,13 +4902,21 @@ class MusicSpider:
                 'toneFlag': tone,
                 'scene': '',
                 'netType': '01',
-                'resourceType': '2',  # ← 添加这个参数
+                'resourceType': '2',
+                'channel': '014X031',      # ← 添加
+                'subchannel': '014X031',   # ← 添加
+                'platform': 'H5',
+                'appId': 'h5',
             }
             try:
                 resp = requests.get(url, params=params, headers=self._get_headers(), timeout=10)
                 data = resp.json()
+                logger.info(f"音质 {tone} 响应: code={data.get('code')}")
                 if data.get('code') == '000000' and data.get('data', {}).get('url'):
+                    logger.info(f"获取音质 {tone} 链接成功")
                     return data['data']['url']
+                else:
+                    logger.warning(f"音质 {tone} 返回: {data.get('code')} - {data.get('info', '')}")
             except Exception as e:
                 logger.error(f"获取音质 {tone} 失败: {e}")
                 continue
