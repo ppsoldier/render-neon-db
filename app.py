@@ -4798,6 +4798,12 @@ def export_attendance_record():
 
 class MusicSpider:
     def __init__(self):
+        import redis
+        import os
+        
+        # 初始化 Redis
+        self.redis_client = redis.from_url(os.environ.get("REDIS_URL", "redis://default:FBRTgBVjJPiTrVTBCpaZqrSfVsaIaxrA@redis.railway.internal:6379"))
+        
         self.headers = {
             'Accept': 'application/json, text/plain, */*',
             'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
@@ -4812,7 +4818,7 @@ class MusicSpider:
             'Sec-Fetch-Dest': 'empty',
             'Sec-Fetch-Mode': 'cors',
             'Sec-Fetch-Site': 'same-site',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36 Edg/144.0.0.0',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (Chrome/144.0.0.0 Safari/537.36 Edg/144.0.0.0',
             'activityId': 'MUSIC-WWW',
             'appId': 'h5',
             'channel': '014X031',
@@ -4825,44 +4831,42 @@ class MusicSpider:
             'sec-ch-ua-platform': '"Windows"',
             'subchannel': '014X031',
             'test': '00',
-            'timestamp': str(int(time.time() * 1000)),  # 动态生成
+            'timestamp': str(int(time.time() * 1000)),
             'ua': 'Android_migu',
             'uid': '',
             'Cookie': 'mgAppH5CookieId=948369795-2nc77k5eec0be638d9174dad01e8a5-1782609536; idmpauth=true@passport.migu.cn; mg_auth_sid=UDnid0000011782613907520M1vIw24HzEoc4PDxAkLz1UamLAln85Vv; pacmtoken=C9948B8F93A6A38B6B918FA2888293729A9B868D92A8A691629A8FA5807A9A77999B8D8E91A6A6895EC3BCCEB87D9D75C590B58AC6D49F8C6AC78D9A8C7B9C73909ABABBC3A9D4BA649A87A589-3218941327',
         }
 
     def _get_headers(self):
-        """动态生成请求头（主要是 timestamp）"""
         headers = self.headers.copy()
         headers["timestamp"] = str(int(time.time() * 1000))
         return headers
 
     def search(self, keyword, limit=5):
-        cache_key = f"music:search:{keyword}"
-        cached = self.redis_client.get(cache_key)
-        if cached:
-            logger.info(f"从缓存加载搜索结果: {keyword}")
-            return json.loads(cached)
-    
-        url = 'https://app.u.nf.migu.cn/pc/resource/song/item/search/v1.0'
-        params = {
-            'text': keyword,
-            'pageNo': '1',
-            'pageSize': '20',
-        }
+        # 尝试从缓存读取（Redis 不可用时跳过）
         try:
-            # 使用动态生成的完整请求头
+            cache_key = f"music:search:{keyword}"
+            cached = self.redis_client.get(cache_key)
+            if cached:
+                logger.info(f"从缓存加载搜索结果: {keyword}")
+                return json.loads(cached)
+        except Exception as e:
+            logger.warning(f"Redis 读取失败: {e}，跳过缓存")
+
+        url = 'https://app.u.nf.migu.cn/pc/resource/song/item/search/v1.0'
+        params = {'text': keyword, 'pageNo': '1', 'pageSize': '20'}
+        
+        try:
             resp = requests.get(url, params=params, headers=self._get_headers(), timeout=10)
             logger.info(f"第三方API状态码: {resp.status_code}")
             
             if resp.status_code != 200:
-                logger.warning(f"第三方API返回非200状态码: {resp.status_code}")
+                logger.warning(f"API返回非200: {resp.status_code}")
                 return []
-                
-            data = resp.json()
-            logger.info(f"第三方API响应数据: {json.dumps(data, ensure_ascii=False)[:500]}")
             
-            # 使用 jsonpath 解析
+            data = resp.json()
+            
+            # 解析数据
             content_ids = jsonpath.jsonpath(data, '$..contentId') or []
             copy_ids = jsonpath.jsonpath(data, '$..copyrightId') or []
             song_names = jsonpath.jsonpath(data, '$..songName') or []
@@ -4879,8 +4883,12 @@ class MusicSpider:
                     'singer': singer
                 })
             
-            # 缓存结果（即使是空结果也缓存，避免重复请求）
-            self.redis_client.setex(cache_key, 3600, json.dumps(results))
+            # 缓存结果
+            try:
+                self.redis_client.setex(cache_key, 3600, json.dumps(results))
+            except Exception as e:
+                logger.warning(f"Redis 写入失败: {e}")
+            
             logger.info(f"搜索结果: 找到 {len(results)} 首歌曲")
             return results
             
