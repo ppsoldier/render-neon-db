@@ -4892,27 +4892,27 @@ class MusicSpider:
         
 
     def get_download_url(self, content_id, copyright_id):
-    """获取歌曲下载链接"""
-    url = 'https://app.c.nf.migu.cn/MIGUM3.0/strategy/pc/listen/v1.0'
-    
-    for tone in ['SQ', 'HQ', 'PQ']:
-        params = {
-            'contentId': content_id,
-            'copyrightId': copyright_id,
-            'toneFlag': tone,
-            'scene': '',
-            'netType': '01',
-            'resourceType': '2',  # ← 添加这个参数
-        }
-        try:
-            resp = requests.get(url, params=params, headers=self._get_headers(), timeout=10)
-            data = resp.json()
-            if data.get('code') == '000000' and data.get('data', {}).get('url'):
-                return data['data']['url']
-        except Exception as e:
-            logger.error(f"获取音质 {tone} 失败: {e}")
-            continue
-    return None
+        """获取歌曲下载链接"""
+        url = 'https://app.c.nf.migu.cn/MIGUM3.0/strategy/pc/listen/v1.0'
+        
+        for tone in ['SQ', 'HQ', 'PQ']:
+            params = {
+                'contentId': content_id,
+                'copyrightId': copyright_id,
+                'toneFlag': tone,
+                'scene': '',
+                'netType': '01',
+                'resourceType': '2',  # ← 添加这个参数
+            }
+            try:
+                resp = requests.get(url, params=params, headers=self._get_headers(), timeout=10)
+                data = resp.json()
+                if data.get('code') == '000000' and data.get('data', {}).get('url'):
+                    return data['data']['url']
+            except Exception as e:
+                logger.error(f"获取音质 {tone} 失败: {e}")
+                continue
+        return None
 
     def download_song(self, song_url, song_name):
         """下载 MP3 文件到本地"""
