@@ -4838,55 +4838,55 @@ class MusicSpider:
         return headers
 
     def search(self, keyword, limit=5):
-    cache_key = f"music:search:{keyword}"
-    cached = self.redis_client.get(cache_key)
-    if cached:
-        logger.info(f"从缓存加载搜索结果: {keyword}")
-        return json.loads(cached)
-
-    url = 'https://app.u.nf.migu.cn/pc/resource/song/item/search/v1.0'
-    params = {
-        'text': keyword,
-        'pageNo': '1',
-        'pageSize': '20',
-    }
-    try:
-        # 使用动态生成的完整请求头
-        resp = requests.get(url, params=params, headers=self._get_headers(), timeout=10)
-        logger.info(f"第三方API状态码: {resp.status_code}")
-        
-        if resp.status_code != 200:
-            logger.warning(f"第三方API返回非200状态码: {resp.status_code}")
-            return []
+        cache_key = f"music:search:{keyword}"
+        cached = self.redis_client.get(cache_key)
+        if cached:
+            logger.info(f"从缓存加载搜索结果: {keyword}")
+            return json.loads(cached)
+    
+        url = 'https://app.u.nf.migu.cn/pc/resource/song/item/search/v1.0'
+        params = {
+            'text': keyword,
+            'pageNo': '1',
+            'pageSize': '20',
+        }
+        try:
+            # 使用动态生成的完整请求头
+            resp = requests.get(url, params=params, headers=self._get_headers(), timeout=10)
+            logger.info(f"第三方API状态码: {resp.status_code}")
             
-        data = resp.json()
-        logger.info(f"第三方API响应数据: {json.dumps(data, ensure_ascii=False)[:500]}")
-        
-        # 使用 jsonpath 解析
-        content_ids = jsonpath.jsonpath(data, '$..contentId') or []
-        copy_ids = jsonpath.jsonpath(data, '$..copyrightId') or []
-        song_names = jsonpath.jsonpath(data, '$..songName') or []
-        singers = jsonpath.jsonpath(data, '$..singerName') or []
-        
-        results = []
-        for cid, copid, name, singer in zip(content_ids, copy_ids, song_names, singers):
-            if len(results) >= limit:
-                break
-            results.append({
-                'contentId': cid,
-                'copyrightId': copid,
-                'songName': name,
-                'singer': singer
-            })
-        
-        # 缓存结果（即使是空结果也缓存，避免重复请求）
-        self.redis_client.setex(cache_key, 3600, json.dumps(results))
-        logger.info(f"搜索结果: 找到 {len(results)} 首歌曲")
-        return results
-        
-    except Exception as e:
-        logger.error(f"搜索请求失败: {e}")
-        return []
+            if resp.status_code != 200:
+                logger.warning(f"第三方API返回非200状态码: {resp.status_code}")
+                return []
+                
+            data = resp.json()
+            logger.info(f"第三方API响应数据: {json.dumps(data, ensure_ascii=False)[:500]}")
+            
+            # 使用 jsonpath 解析
+            content_ids = jsonpath.jsonpath(data, '$..contentId') or []
+            copy_ids = jsonpath.jsonpath(data, '$..copyrightId') or []
+            song_names = jsonpath.jsonpath(data, '$..songName') or []
+            singers = jsonpath.jsonpath(data, '$..singerName') or []
+            
+            results = []
+            for cid, copid, name, singer in zip(content_ids, copy_ids, song_names, singers):
+                if len(results) >= limit:
+                    break
+                results.append({
+                    'contentId': cid,
+                    'copyrightId': copid,
+                    'songName': name,
+                    'singer': singer
+                })
+            
+            # 缓存结果（即使是空结果也缓存，避免重复请求）
+            self.redis_client.setex(cache_key, 3600, json.dumps(results))
+            logger.info(f"搜索结果: 找到 {len(results)} 首歌曲")
+            return results
+            
+        except Exception as e:
+            logger.error(f"搜索请求失败: {e}")
+            return []
         
 
     def get_download_url(self, content_id, copyright_id, tone_flag='SQ'):
