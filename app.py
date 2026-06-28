@@ -4840,6 +4840,9 @@ class MusicSpider:
     def _get_headers(self):
         headers = self.headers.copy()
         headers["timestamp"] = str(int(time.time() * 1000))
+        # 确保 channel 和 subchannel 在请求头中
+        headers["channel"] = "014X031"
+        headers["subchannel"] = "014X031"
         return headers
 
     def search(self, keyword, limit=5):
