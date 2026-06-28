@@ -4800,60 +4800,94 @@ class MusicSpider:
     def __init__(self):
         self.headers = {
             'Accept': 'application/json, text/plain, */*',
-            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
             'Cache-Control': 'no-cache',
             'Connection': 'keep-alive',
             'Content-Type': 'application/json',
+            'IMEI': 'h5page',
+            'IMSI': 'h5page',
             'Origin': 'https://music.migu.cn',
+            'Pragma': 'no-cache',
             'Referer': 'https://music.migu.cn/',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Sec-Fetch-Dest': 'empty',
+            'Sec-Fetch-Mode': 'cors',
+            'Sec-Fetch-Site': 'same-site',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36 Edg/144.0.0.0',
+            'activityId': 'MUSIC-WWW',
             'appId': 'h5',
             'channel': '014X031',
+            'deviceId': 'B32CD8C3-3B9A-4D64-8823-9B10D6D10EFD',
+            'logId': 'cfrom=&appId=h5',
+            'pacmtoken': '',
             'platform': 'H5',
-            # 其他固定头...
+            'sec-ch-ua': '"Not(A:Brand";v="8", "Chromium";v="144", "Microsoft Edge";v="144"',
+            'sec-ch-ua-mobile': '?0',
+            'sec-ch-ua-platform': '"Windows"',
+            'subchannel': '014X031',
+            'test': '00',
+            'timestamp': str(int(time.time() * 1000)),  # 动态生成
+            'ua': 'Android_migu',
+            'uid': '',
+            'Cookie': 'mgAppH5CookieId=948369795-2nc77k5eec0be638d9174dad01e8a5-1782609536; idmpauth=true@passport.migu.cn; mg_auth_sid=UDnid0000011782613907520M1vIw24HzEoc4PDxAkLz1UamLAln85Vv; pacmtoken=C9948B8F93A6A38B6B918FA2888293729A9B868D92A8A691629A8FA5807A9A77999B8D8E91A6A6895EC3BCCEB87D9D75C590B58AC6D49F8C6AC78D9A8C7B9C73909ABABBC3A9D4BA649A87A589-3218941327',
         }
-        # 必要头可动态生成 timestamp
 
     def _get_headers(self):
+        """动态生成请求头（主要是 timestamp）"""
         headers = self.headers.copy()
         headers["timestamp"] = str(int(time.time() * 1000))
         return headers
 
     def search(self, keyword, limit=5):
-        """搜索歌曲，返回列表"""
-        cache_key = f"music:search:{keyword}"
-        cached = redis_client.get(cache_key)
-        if cached:
-            logger.info(f"从缓存加载搜索结果: {keyword}")
-            logger.info(f"API 返回完整数据: {json.dumps(data, ensure_ascii=False)[:1000]}")
-            return json.loads(cached)
+    cache_key = f"music:search:{keyword}"
+    cached = self.redis_client.get(cache_key)
+    if cached:
+        logger.info(f"从缓存加载搜索结果: {keyword}")
+        return json.loads(cached)
 
-        url = 'https://app.u.nf.migu.cn/pc/resource/song/item/search/v1.0'
-        params = {'text': keyword, 'pageNo': '1', 'pageSize': '20'}
-        try:
-            resp = requests.get(url, params=params, headers=self._get_headers(), timeout=10)
-            data = resp.json()
-            content_ids = jsonpath.jsonpath(data, '$..contentId') or []
-            copy_ids = jsonpath.jsonpath(data, '$..copyrightId') or []
-            song_names = jsonpath.jsonpath(data, '$..songName') or []
-            singers = jsonpath.jsonpath(data, '$..singerName') or []
-            
-            results = []
-            for cid, copid, name, singer in zip(content_ids, copy_ids, song_names, singers):
-                if len(results) >= limit:
-                    break
-                results.append({
-                    'contentId': cid,
-                    'copyrightId': copid,
-                    'songName': name,
-                    'singer': singer
-                })
-            # 缓存 1 小时
-            redis_client.setex(cache_key, 3600, json.dumps(results))
-            return results
-        except Exception as e:
-            logger.error(f"搜索失败: {e}")
+    url = 'https://app.u.nf.migu.cn/pc/resource/song/item/search/v1.0'
+    params = {
+        'text': keyword,
+        'pageNo': '1',
+        'pageSize': '20',
+    }
+    try:
+        # 使用动态生成的完整请求头
+        resp = requests.get(url, params=params, headers=self._get_headers(), timeout=10)
+        logger.info(f"第三方API状态码: {resp.status_code}")
+        
+        if resp.status_code != 200:
+            logger.warning(f"第三方API返回非200状态码: {resp.status_code}")
             return []
+            
+        data = resp.json()
+        logger.info(f"第三方API响应数据: {json.dumps(data, ensure_ascii=False)[:500]}")
+        
+        # 使用 jsonpath 解析
+        content_ids = jsonpath.jsonpath(data, '$..contentId') or []
+        copy_ids = jsonpath.jsonpath(data, '$..copyrightId') or []
+        song_names = jsonpath.jsonpath(data, '$..songName') or []
+        singers = jsonpath.jsonpath(data, '$..singerName') or []
+        
+        results = []
+        for cid, copid, name, singer in zip(content_ids, copy_ids, song_names, singers):
+            if len(results) >= limit:
+                break
+            results.append({
+                'contentId': cid,
+                'copyrightId': copid,
+                'songName': name,
+                'singer': singer
+            })
+        
+        # 缓存结果（即使是空结果也缓存，避免重复请求）
+        self.redis_client.setex(cache_key, 3600, json.dumps(results))
+        logger.info(f"搜索结果: 找到 {len(results)} 首歌曲")
+        return results
+        
+    except Exception as e:
+        logger.error(f"搜索请求失败: {e}")
+        return []
+        
 
     def get_download_url(self, content_id, copyright_id, tone_flag='SQ'):
         """获取歌曲下载链接（优先 HQ/SQ）"""
