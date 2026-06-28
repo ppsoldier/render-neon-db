@@ -4854,7 +4854,7 @@ class MusicSpider:
                 logger.info(f"从缓存加载搜索结果: {keyword}")
                 return json.loads(cached)
         except Exception as e:
-            logger.warning(f"Redis 读取失败: {e}")
+            logger.warning(f"Redis 读取失败: {e}，跳过缓存")
     
         url = 'https://app.u.nf.migu.cn/pc/resource/song/item/search/v1.0'
         params = {'text': keyword, 'pageNo': '1', 'pageSize': '20'}
@@ -4868,16 +4868,23 @@ class MusicSpider:
             
             data = resp.json()
             
-            # 直接解析列表（不再使用 jsonpath）
+            # 直接解析列表
             results = []
             for item in data:
                 if len(results) >= limit:
                     break
+                
+                # 检查是否有版权限制（先默认可下载，后续通过下载接口验证）
+                content_id = item.get('contentId', '')
+                copyright_id = item.get('copyrightId', '') or item.get('ringCopyrightId', '')
+                
                 results.append({
-                    'contentId': item.get('contentId', ''),
-                    'copyrightId': item.get('copyrightId', '') or item.get('ringCopyrightId', ''),
+                    'contentId': content_id,
+                    'copyrightId': copyright_id,
                     'songName': item.get('songName', ''),
-                    'singer': item.get('singerName', '') or item.get('artists', [{}])[0].get('name', '')
+                    'singer': item.get('singerName', '') or item.get('artists', [{}])[0].get('name', ''),
+                    'downloadable': True,  # 默认可下载，实际下载时会验证
+                    'hasCopyright': True
                 })
             
             # 缓存结果
@@ -4895,7 +4902,7 @@ class MusicSpider:
         
 
     def get_download_url(self, content_id, copyright_id):
-        """获取歌曲下载链接"""
+        """获取歌曲下载链接，返回 (url, status, message)"""
         url = 'https://app.c.nf.migu.cn/MIGUM3.0/strategy/pc/listen/v1.0'
         
         for tone in ['SQ', 'HQ', 'PQ']:
@@ -4905,35 +4912,40 @@ class MusicSpider:
                 'toneFlag': tone,
                 'scene': '',
                 'netType': '01',
-                'resourceType': '2',
-                'channel': '014X031',
-                'subchannel': '014X031',
-                'platform': 'H5',
-                'appId': 'h5',
+                'resourceType': '2'
             }
             try:
                 resp = requests.get(url, params=params, headers=self._get_headers(), timeout=10)
                 data = resp.json()
-                logger.info(f"音质 {tone} 完整响应: {json.dumps(data, ensure_ascii=False)[:500]}")
                 
                 if data.get('code') == '000000':
-                    # 尝试多种可能的路径获取 url
-                    url_paths = [
-                        data.get('data', {}).get('url'),
-                        data.get('url'),
-                        data.get('data', {}).get('playUrl'),
-                        data.get('playUrl'),
-                        data.get('data', {}).get('listenUrl'),
-                    ]
-                    for url_value in url_paths:
-                        if url_value and url_value.startswith('http'):
-                            logger.info(f"获取音质 {tone} 链接成功")
-                            return url_value
-                logger.warning(f"音质 {tone} 返回: {data.get('code')} - {data.get('info', '')}")
+                    # 检查是否有版权限制
+                    cannot_code = data.get('data', {}).get('cannotCode')
+                    if cannot_code:
+                        logger.warning(f"歌曲 {content_id} 版权限制: {cannot_code}")
+                        return None, 'copyright', f'该歌曲因版权限制无法下载 (代码: {cannot_code})'
+                    
+                    # 检查是否有 dialogInfo 提示
+                    dialog_info = data.get('data', {}).get('dialogInfo', {})
+                    if dialog_info and dialog_info.get('text'):
+                        return None, 'copyright', dialog_info.get('text', '版权限制')
+                    
+                    # 尝试获取 url
+                    url_value = data.get('data', {}).get('url')
+                    if url_value and url_value.startswith('http'):
+                        logger.info(f"获取音质 {tone} 链接成功")
+                        return url_value, 'success', None
+                        
+                    # 如果 data 中没有 url，尝试从其他路径获取
+                    if data.get('data', {}).get('playUrl'):
+                        return data['data']['playUrl'], 'success', None
+                        
+                    logger.warning(f"音质 {tone} 无播放链接: {data.get('data', {})}")
             except Exception as e:
                 logger.error(f"获取音质 {tone} 失败: {e}")
                 continue
-        return None
+        
+        return None, 'failed', '无可用播放链接'
     
 
     def download_song(self, song_url, song_name):
@@ -4964,11 +4976,22 @@ def background_download(task_id, content_id, copyright_id, song_name):
         }))
         
         spider = MusicSpider()
-        url = spider.get_download_url(content_id, copyright_id)
+        url, status, message = spider.get_download_url(content_id, copyright_id)
+        
+        if status == 'copyright':
+            # 版权限制
+            redis_client.setex(f"music:task:{task_id}", 3600, json.dumps({
+                'status': 'copyright',
+                'error': message,
+                'song_name': song_name
+            }))
+            return
+        
         if not url:
             redis_client.setex(f"music:task:{task_id}", 3600, json.dumps({
                 'status': 'failed',
-                'error': '获取下载链接失败'
+                'error': message or '获取下载链接失败',
+                'song_name': song_name
             }))
             return
         
@@ -4983,14 +5006,17 @@ def background_download(task_id, content_id, copyright_id, song_name):
         else:
             redis_client.setex(f"music:task:{task_id}", 3600, json.dumps({
                 'status': 'failed',
-                'error': '下载文件失败'
+                'error': '下载文件失败',
+                'song_name': song_name
             }))
     except Exception as e:
         logger.error(f"后台下载异常: {e}")
         redis_client.setex(f"music:task:{task_id}", 3600, json.dumps({
             'status': 'failed',
-            'error': str(e)
+            'error': str(e),
+            'song_name': song_name
         }))
+        
 
 @app.route('/api/music/search', methods=['POST'])
 def music_search():
