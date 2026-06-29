@@ -5007,312 +5007,312 @@ def background_download(task_id, content_id, copyright_id, song_name):
         }))
         
 
-# @app.route('/api/music/search', methods=['POST'])
-# def music_search():
-#     print("收到的请求数据:", request.get_data())  # 打印原始数据
-#     print("解析的 JSON:", request.get_json())    # 打印解析后的 JSON
-#     """搜索歌曲"""
-#     data = request.get_json()
-#     keyword = data.get('keyword', '').strip()
-#     if not keyword:
-#         return jsonify({'code': 400, 'msg': '请输入歌曲名称'})
-#     spider = MusicSpider()
-#     results = spider.search(keyword, limit=5)
-#     return jsonify({'code': 200, 'data': results})
+@app.route('/api/music/search', methods=['POST'])
+def music_search():
+    print("收到的请求数据:", request.get_data())  # 打印原始数据
+    print("解析的 JSON:", request.get_json())    # 打印解析后的 JSON
+    """搜索歌曲"""
+    data = request.get_json()
+    keyword = data.get('keyword', '').strip()
+    if not keyword:
+        return jsonify({'code': 400, 'msg': '请输入歌曲名称'})
+    spider = MusicSpider()
+    results = spider.search(keyword, limit=5)
+    return jsonify({'code': 200, 'data': results})
 
-# @app.route('/api/music/download', methods=['POST'])
-# def music_download():
-#     """提交下载任务"""
-#     data = request.get_json()
-#     content_id = data.get('contentId')
-#     copyright_id = data.get('copyrightId')
-#     song_name = data.get('songName')
-#     if not all([content_id, copyright_id, song_name]):
-#         return jsonify({'code': 400, 'msg': '缺少必要参数'})
+@app.route('/api/music/download', methods=['POST'])
+def music_download():
+    """提交下载任务"""
+    data = request.get_json()
+    content_id = data.get('contentId')
+    copyright_id = data.get('copyrightId')
+    song_name = data.get('songName')
+    if not all([content_id, copyright_id, song_name]):
+        return jsonify({'code': 400, 'msg': '缺少必要参数'})
     
-#     task_id = str(uuid.uuid4())
-#     # 启动后台线程下载
-#     thread = threading.Thread(target=background_download, args=(task_id, content_id, copyright_id, song_name))
-#     thread.daemon = True
-#     thread.start()
+    task_id = str(uuid.uuid4())
+    # 启动后台线程下载
+    thread = threading.Thread(target=background_download, args=(task_id, content_id, copyright_id, song_name))
+    thread.daemon = True
+    thread.start()
     
-#     return jsonify({
-#         'code': 200,
-#         'data': {'task_id': task_id, 'status': 'queued'}
-#     })
+    return jsonify({
+        'code': 200,
+        'data': {'task_id': task_id, 'status': 'queued'}
+    })
 
-# @app.route('/api/music/status/<task_id>', methods=['GET'])
-# def music_status(task_id):
-#     """查询下载状态"""
-#     key = f"music:task:{task_id}"
-#     data = redis_client.get(key)
-#     if not data:
-#         return jsonify({'code': 404, 'msg': '任务不存在或已过期'})
-#     return jsonify({'code': 200, 'data': json.loads(data)})
+@app.route('/api/music/status/<task_id>', methods=['GET'])
+def music_status(task_id):
+    """查询下载状态"""
+    key = f"music:task:{task_id}"
+    data = redis_client.get(key)
+    if not data:
+        return jsonify({'code': 404, 'msg': '任务不存在或已过期'})
+    return jsonify({'code': 200, 'data': json.loads(data)})
 
-# @app.route('/api/music/list', methods=['GET'])
-# def music_list():
-#     """列出已下载的歌曲文件"""
-#     files = []
-#     for f in os.listdir(MUSIC_DIR):
-#         if f.endswith('.mp3'):
-#             files.append({
-#                 'name': f,
-#                 'path': os.path.join(MUSIC_DIR, f),
-#                 'size': os.path.getsize(os.path.join(MUSIC_DIR, f))
-#             })
-#     return jsonify({'code': 200, 'data': files})
+@app.route('/api/music/list', methods=['GET'])
+def music_list():
+    """列出已下载的歌曲文件"""
+    files = []
+    for f in os.listdir(MUSIC_DIR):
+        if f.endswith('.mp3'):
+            files.append({
+                'name': f,
+                'path': os.path.join(MUSIC_DIR, f),
+                'size': os.path.getsize(os.path.join(MUSIC_DIR, f))
+            })
+    return jsonify({'code': 200, 'data': files})
 
-# @app.route('/api/music/download/<filename>', methods=['GET'])
-# def music_download_file(filename):
-#     """提供文件下载（需安全处理，建议仅允许已下载文件）"""
-#     # 简单实现，生产环境应验证文件存在性并限制路径
-#     from flask import send_from_directory
-#     return send_from_directory(MUSIC_DIR, filename, as_attachment=True)
+@app.route('/api/music/download/<filename>', methods=['GET'])
+def music_download_file(filename):
+    """提供文件下载（需安全处理，建议仅允许已下载文件）"""
+    # 简单实现，生产环境应验证文件存在性并限制路径
+    from flask import send_from_directory
+    return send_from_directory(MUSIC_DIR, filename, as_attachment=True)
 
 
 
 
 # ========== 网易云音乐 API ==========
-import hashlib
-import random
-from urllib.parse import urlencode
+# import hashlib
+# import random
+# from urllib.parse import urlencode
 
-class NetEaseMusicSpider:
-    """网易云音乐爬虫（无需 Cookie，海外可用）"""
+# class NetEaseMusicSpider:
+#     """网易云音乐爬虫（无需 Cookie，海外可用）"""
     
-    def __init__(self):
-        import redis
-        import os
+#     def __init__(self):
+#         import redis
+#         import os
         
-        # 初始化 Redis
-        self.redis_client = redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379/0"))
+#         # 初始化 Redis
+#         self.redis_client = redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379/0"))
         
-        # 网易云音乐 API 基础 URL
-        self.base_url = 'https://music.163.com/api'
-        self.weapi_url = 'https://music.163.com/weapi'
+#         # 网易云音乐 API 基础 URL
+#         self.base_url = 'https://music.163.com/api'
+#         self.weapi_url = 'https://music.163.com/weapi'
         
-        self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36 Edg/144.0.0.0',
-            'Referer': 'https://music.163.com/',
-            'Origin': 'https://music.163.com',
-            'Content-Type': 'application/x-www-form-urlencoded',
-        }
+#         self.headers = {
+#             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36 Edg/144.0.0.0',
+#             'Referer': 'https://music.163.com/',
+#             'Origin': 'https://music.163.com',
+#             'Content-Type': 'application/x-www-form-urlencoded',
+#         }
         
-        # 歌曲保存目录
-        global MUSIC_DIR
-        if not os.path.exists(MUSIC_DIR):
-            os.makedirs(MUSIC_DIR, exist_ok=True)
+#         # 歌曲保存目录
+#         global MUSIC_DIR
+#         if not os.path.exists(MUSIC_DIR):
+#             os.makedirs(MUSIC_DIR, exist_ok=True)
     
-    def _get_headers(self):
-        """获取请求头"""
-        headers = self.headers.copy()
-        return headers
+#     def _get_headers(self):
+#         """获取请求头"""
+#         headers = self.headers.copy()
+#         return headers
     
-    def _encrypt_params(self, params):
-        """网易云音乐参数加密（模拟 Web 加密）"""
-        # 使用简单的加密方式（网易云音乐 API 的标准加密）
-        # 这里简化处理，使用无加密的 POST 方式
-        return urlencode(params)
+#     def _encrypt_params(self, params):
+#         """网易云音乐参数加密（模拟 Web 加密）"""
+#         # 使用简单的加密方式（网易云音乐 API 的标准加密）
+#         # 这里简化处理，使用无加密的 POST 方式
+#         return urlencode(params)
     
-    def search(self, keyword, limit=5):
-        """搜索歌曲"""
-        try:
-            cache_key = f"netease:search:{keyword}"
-            cached = self.redis_client.get(cache_key)
-            if cached:
-                logger.info(f"从缓存加载搜索结果: {keyword}")
-                return json.loads(cached)
-        except Exception as e:
-            logger.warning(f"Redis 读取失败: {e}")
+#     def search(self, keyword, limit=5):
+#         """搜索歌曲"""
+#         try:
+#             cache_key = f"netease:search:{keyword}"
+#             cached = self.redis_client.get(cache_key)
+#             if cached:
+#                 logger.info(f"从缓存加载搜索结果: {keyword}")
+#                 return json.loads(cached)
+#         except Exception as e:
+#             logger.warning(f"Redis 读取失败: {e}")
         
-        url = 'https://music.163.com/api/cloudsearch/pc'
-        params = {
-            's': keyword,
-            'type': 1,  # 1: 单曲
-            'offset': 0,
-            'limit': limit,
-        }
+#         url = 'https://music.163.com/api/cloudsearch/pc'
+#         params = {
+#             's': keyword,
+#             'type': 1,  # 1: 单曲
+#             'offset': 0,
+#             'limit': limit,
+#         }
         
-        try:
-            resp = requests.get(url, params=params, headers=self._get_headers(), timeout=10)
-            logger.info(f"网易云搜索状态码: {resp.status_code}")
+#         try:
+#             resp = requests.get(url, params=params, headers=self._get_headers(), timeout=10)
+#             logger.info(f"网易云搜索状态码: {resp.status_code}")
             
-            if resp.status_code != 200:
-                return []
+#             if resp.status_code != 200:
+#                 return []
             
-            data = resp.json()
+#             data = resp.json()
             
-            if data.get('code') != 200:
-                logger.warning(f"网易云搜索失败: {data.get('msg', '')}")
-                return []
+#             if data.get('code') != 200:
+#                 logger.warning(f"网易云搜索失败: {data.get('msg', '')}")
+#                 return []
             
-            songs = data.get('result', {}).get('songs', [])
+#             songs = data.get('result', {}).get('songs', [])
             
-            results = []
-            for song in songs[:limit]:
-                # 获取歌手名
-                artists = song.get('artists', [])
-                singer = artists[0].get('name', '') if artists else ''
+#             results = []
+#             for song in songs[:limit]:
+#                 # 获取歌手名
+#                 artists = song.get('artists', [])
+#                 singer = artists[0].get('name', '') if artists else ''
                 
-                results.append({
-                    'contentId': str(song.get('id', '')),
-                    'copyrightId': '',  # 网易云不需要 copyrightId
-                    'songName': song.get('name', ''),
-                    'singer': singer,
-                    'source': 'netease'
-                })
+#                 results.append({
+#                     'contentId': str(song.get('id', '')),
+#                     'copyrightId': '',  # 网易云不需要 copyrightId
+#                     'songName': song.get('name', ''),
+#                     'singer': singer,
+#                     'source': 'netease'
+#                 })
             
-            # 缓存结果
-            try:
-                self.redis_client.setex(cache_key, 3600, json.dumps(results))
-            except Exception as e:
-                logger.warning(f"Redis 写入失败: {e}")
+#             # 缓存结果
+#             try:
+#                 self.redis_client.setex(cache_key, 3600, json.dumps(results))
+#             except Exception as e:
+#                 logger.warning(f"Redis 写入失败: {e}")
             
-            logger.info(f"网易云搜索结果: 找到 {len(results)} 首歌曲")
-            return results
+#             logger.info(f"网易云搜索结果: 找到 {len(results)} 首歌曲")
+#             return results
             
-        except Exception as e:
-            logger.error(f"网易云搜索失败: {e}")
-            return []
+#         except Exception as e:
+#             logger.error(f"网易云搜索失败: {e}")
+#             return []
     
-    def get_download_url(self, song_id):
-        """获取歌曲下载链接"""
-        url = 'https://music.163.com/api/song/enhance/player/url'
-        params = {
-            'ids': [song_id],
-            'br': 320000,  # 320kbps
-        }
+#     def get_download_url(self, song_id):
+#         """获取歌曲下载链接"""
+#         url = 'https://music.163.com/api/song/enhance/player/url'
+#         params = {
+#             'ids': [song_id],
+#             'br': 320000,  # 320kbps
+#         }
         
-        try:
-            resp = requests.get(url, params={'ids': song_id, 'br': 320000}, headers=self._get_headers(), timeout=10)
-            data = resp.json()
+#         try:
+#             resp = requests.get(url, params={'ids': song_id, 'br': 320000}, headers=self._get_headers(), timeout=10)
+#             data = resp.json()
             
-            if data.get('code') != 200:
-                logger.warning(f"获取播放链接失败: {data.get('msg', '')}")
-                return None
+#             if data.get('code') != 200:
+#                 logger.warning(f"获取播放链接失败: {data.get('msg', '')}")
+#                 return None
             
-            songs = data.get('data', [])
-            if songs and songs[0].get('url'):
-                return songs[0]['url']
+#             songs = data.get('data', [])
+#             if songs and songs[0].get('url'):
+#                 return songs[0]['url']
             
-            return None
+#             return None
             
-        except Exception as e:
-            logger.error(f"获取播放链接失败: {e}")
-            return None
+#         except Exception as e:
+#             logger.error(f"获取播放链接失败: {e}")
+#             return None
     
-    def download_song(self, song_url, song_name):
-        """下载 MP3 文件"""
-        try:
-            if not song_url:
-                return None
+#     def download_song(self, song_url, song_name):
+#         """下载 MP3 文件"""
+#         try:
+#             if not song_url:
+#                 return None
             
-            resp = requests.get(song_url, headers=self._get_headers(), timeout=30)
-            if resp.status_code == 200:
-                safe_name = song_name.replace("?", "").replace("/", "").replace("\\", "").replace("*", "").replace(":", "")
-                path = os.path.join(MUSIC_DIR, f"{safe_name}.mp3")
-                with open(path, 'wb') as f:
-                    f.write(resp.content)
-                logger.info(f'{song_name} 下载完成')
-                return path
-            else:
-                logger.error(f'{song_name} 下载失败: HTTP {resp.status_code}')
-                return None
-        except Exception as e:
-            logger.error(f'{song_name} 下载失败：{e}')
-            return None
+#             resp = requests.get(song_url, headers=self._get_headers(), timeout=30)
+#             if resp.status_code == 200:
+#                 safe_name = song_name.replace("?", "").replace("/", "").replace("\\", "").replace("*", "").replace(":", "")
+#                 path = os.path.join(MUSIC_DIR, f"{safe_name}.mp3")
+#                 with open(path, 'wb') as f:
+#                     f.write(resp.content)
+#                 logger.info(f'{song_name} 下载完成')
+#                 return path
+#             else:
+#                 logger.error(f'{song_name} 下载失败: HTTP {resp.status_code}')
+#                 return None
+#         except Exception as e:
+#             logger.error(f'{song_name} 下载失败：{e}')
+#             return None
 
 
-@app.route('/api/music/search', methods=['POST'])
-def music_search():
-    """搜索歌曲（使用网易云音乐）"""
-    try:
-        data = request.get_json()
-        keyword = data.get('keyword', '').strip()
-        if not keyword:
-            return jsonify({'code': 400, 'msg': '请输入歌曲名称'})
+# @app.route('/api/music/search', methods=['POST'])
+# def music_search():
+#     """搜索歌曲（使用网易云音乐）"""
+#     try:
+#         data = request.get_json()
+#         keyword = data.get('keyword', '').strip()
+#         if not keyword:
+#             return jsonify({'code': 400, 'msg': '请输入歌曲名称'})
         
-        spider = NetEaseMusicSpider()
-        results = spider.search(keyword, limit=10)
-        return jsonify({'code': 200, 'data': results})
-    except Exception as e:
-        logger.error(f"音乐搜索异常: {e}")
-        return jsonify({'code': 500, 'msg': str(e)})
+#         spider = NetEaseMusicSpider()
+#         results = spider.search(keyword, limit=10)
+#         return jsonify({'code': 200, 'data': results})
+#     except Exception as e:
+#         logger.error(f"音乐搜索异常: {e}")
+#         return jsonify({'code': 500, 'msg': str(e)})
 
 
-@app.route('/api/music/download', methods=['POST'])
-def music_download():
-    """提交下载任务（使用网易云音乐）"""
-    try:
-        data = request.get_json()
-        content_id = data.get('contentId')
-        song_name = data.get('songName')
+# @app.route('/api/music/download', methods=['POST'])
+# def music_download():
+#     """提交下载任务（使用网易云音乐）"""
+#     try:
+#         data = request.get_json()
+#         content_id = data.get('contentId')
+#         song_name = data.get('songName')
         
-        if not content_id or not song_name:
-            return jsonify({'code': 400, 'msg': '缺少必要参数'})
+#         if not content_id or not song_name:
+#             return jsonify({'code': 400, 'msg': '缺少必要参数'})
         
-        task_id = str(uuid.uuid4())
+#         task_id = str(uuid.uuid4())
         
-        # 启动后台下载线程
-        thread = threading.Thread(
-            target=background_download_netease, 
-            args=(task_id, content_id, song_name)
-        )
-        thread.daemon = True
-        thread.start()
+#         # 启动后台下载线程
+#         thread = threading.Thread(
+#             target=background_download_netease, 
+#             args=(task_id, content_id, song_name)
+#         )
+#         thread.daemon = True
+#         thread.start()
         
-        return jsonify({
-            'code': 200,
-            'data': {'task_id': task_id, 'status': 'queued'}
-        })
+#         return jsonify({
+#             'code': 200,
+#             'data': {'task_id': task_id, 'status': 'queued'}
+#         })
         
-    except Exception as e:
-        logger.error(f"提交下载任务异常: {e}")
-        return jsonify({'code': 500, 'msg': str(e)})
+#     except Exception as e:
+#         logger.error(f"提交下载任务异常: {e}")
+#         return jsonify({'code': 500, 'msg': str(e)})
 
 
-def background_download_netease(task_id, song_id, song_name):
-    """网易云音乐后台下载任务"""
-    try:
-        redis_client.setex(f"music:task:{task_id}", 3600, json.dumps({
-            'status': 'downloading',
-            'progress': 0,
-            'song_name': song_name
-        }))
+# def background_download_netease(task_id, song_id, song_name):
+#     """网易云音乐后台下载任务"""
+#     try:
+#         redis_client.setex(f"music:task:{task_id}", 3600, json.dumps({
+#             'status': 'downloading',
+#             'progress': 0,
+#             'song_name': song_name
+#         }))
         
-        spider = NetEaseMusicSpider()
-        song_url = spider.get_download_url(song_id)
+#         spider = NetEaseMusicSpider()
+#         song_url = spider.get_download_url(song_id)
         
-        if not song_url:
-            redis_client.setex(f"music:task:{task_id}", 3600, json.dumps({
-                'status': 'failed',
-                'error': '获取播放链接失败，可能为付费歌曲',
-                'song_name': song_name
-            }))
-            return
+#         if not song_url:
+#             redis_client.setex(f"music:task:{task_id}", 3600, json.dumps({
+#                 'status': 'failed',
+#                 'error': '获取播放链接失败，可能为付费歌曲',
+#                 'song_name': song_name
+#             }))
+#             return
         
-        file_path = spider.download_song(song_url, song_name)
-        if file_path:
-            redis_client.setex(f"music:task:{task_id}", 3600, json.dumps({
-                'status': 'completed',
-                'file_path': file_path,
-                'song_name': song_name
-            }))
-        else:
-            redis_client.setex(f"music:task:{task_id}", 3600, json.dumps({
-                'status': 'failed',
-                'error': '下载文件失败',
-                'song_name': song_name
-            }))
+#         file_path = spider.download_song(song_url, song_name)
+#         if file_path:
+#             redis_client.setex(f"music:task:{task_id}", 3600, json.dumps({
+#                 'status': 'completed',
+#                 'file_path': file_path,
+#                 'song_name': song_name
+#             }))
+#         else:
+#             redis_client.setex(f"music:task:{task_id}", 3600, json.dumps({
+#                 'status': 'failed',
+#                 'error': '下载文件失败',
+#                 'song_name': song_name
+#             }))
             
-    except Exception as e:
-        logger.error(f"后台下载异常: {e}")
-        redis_client.setex(f"music:task:{task_id}", 3600, json.dumps({
-            'status': 'failed',
-            'error': str(e),
-            'song_name': song_name
-        }))
+#     except Exception as e:
+#         logger.error(f"后台下载异常: {e}")
+#         redis_client.setex(f"music:task:{task_id}", 3600, json.dumps({
+#             'status': 'failed',
+#             'error': str(e),
+#             'song_name': song_name
+#         }))
 
 
 
