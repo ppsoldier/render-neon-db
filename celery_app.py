@@ -3,7 +3,7 @@ from celery import Celery
 import os
 
 # 从环境变量读取 Redis 地址（支持 Railway 自动注入）
-REDIS_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
+REDIS_URL = os.environ.get('REDIS_URL', 'redis://default:FBRTgBVjJPiTrVTBCpaZqrSfVsaIaxrA@redis.railway.internal:6379')
 print(f"使用 Redis 地址: {REDIS_URL}")
 
 app = Celery(
