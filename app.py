@@ -3984,27 +3984,27 @@ def send_today_confirm_internal():
 
 
 # 启动定时任务
-def start_scheduler():
-    scheduler = BackgroundScheduler()
+# def start_scheduler():
+#     scheduler = BackgroundScheduler()
 
-    # 每天早上 9:00 发送明日课程提醒
-    scheduler.add_job(
-        func=scheduled_send_remind,
-        trigger=CronTrigger(hour=9, minute=0, timezone='Asia/Shanghai'),
-        id='daily_remind',
-        replace_existing=True
-    )
+#     # 每天早上 9:00 发送明日课程提醒
+#     scheduler.add_job(
+#         func=scheduled_send_remind,
+#         trigger=CronTrigger(hour=9, minute=0, timezone='Asia/Shanghai'),
+#         id='daily_remind',
+#         replace_existing=True
+#     )
 
-    # 每天晚上 20:00 发送今日课程确认提醒
-    scheduler.add_job(
-        func=scheduled_send_confirm,
-        trigger=CronTrigger(hour=20, minute=0, timezone='Asia/Shanghai'),
-        id='daily_confirm',
-        replace_existing=True
-    )
+#     # 每天晚上 20:00 发送今日课程确认提醒
+#     scheduler.add_job(
+#         func=scheduled_send_confirm,
+#         trigger=CronTrigger(hour=20, minute=0, timezone='Asia/Shanghai'),
+#         id='daily_confirm',
+#         replace_existing=True
+#     )
 
-    scheduler.start()
-    print("定时任务已启动")
+#     scheduler.start()
+#     print("定时任务已启动")
 
 
 
