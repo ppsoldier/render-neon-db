@@ -9,4 +9,4 @@ python-docx>=1.1.0
 redis>=5.0.0
 jsonpath==0.82.2
 loguru==0.7.2
-
+psycopg2-binary
