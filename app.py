@@ -96,6 +96,15 @@ def get_db():
         raise e
 
 
+
+@app.route('/debug')
+def debug():
+    from flask import jsonify
+    routes = [str(rule) for rule in app.url_map.iter_rules()]
+    return jsonify({'routes': routes})
+
+
+
 # ------------------- 健康检查 -------------------
 @app.route("/")
 def index():
