@@ -771,227 +771,227 @@ def test_remind():
 
 
 
-# ========== B站视频下载模块（完全模仿脚本逻辑）==========
-import re
-import requests
-import os
-import uuid
-import time
-from flask import request, jsonify, Response
+# # ========== B站视频下载模块（完全模仿脚本逻辑）==========
+# import re
+# import requests
+# import os
+# import uuid
+# import time
+# from flask import request, jsonify, Response
 
-# 脚本中使用的 Cookies 和 Headers（完整复制）
-BILI_COOKIES = {
-    'buvid3': 'E1AC41CE-8298-B4E8-2B11-711D83FCEB4D07978infoc',
-    'b_nut': '1774395407',
-    'bsource': 'search_bing',
-    '_uuid': '696B6B59-DCBB-93710-106A9-2F84CAC10BCA957649infoc',
-    'home_feed_column': '5',
-    'browser_resolution': '1912-956',
-    'buvid4': '4DB22FA4-9C1B-3FF9-09D1-FC56BA6029AA09187-026032507-s5Db6HTmRJMFxI7gzVHFJA%3D%3D',
-    'buvid_fp': '82d07d9422c9ad7c67f3c53cc409b7e8',
-    'bmg_af_switch': '1',
-    'bmg_src_def_domain': 'i2.hdslb.com',
-    'bili_ticket': 'eyJhbGciOiJIUzI1NiIsImtpZCI6InMwMyIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NzQ2NTQ2MjQsImlhdCI6MTc3NDM5NTM2NCwicGx0IjotMX0.KbRAOmZjhvBQ7MrPSaVnGd_5qhwK_WyiYs25aY5WJ5I',
-    'bili_ticket_expires': '1774654564',
-    'sid': '83jnmdei',
-    'CURRENT_QUALITY': '0',
-    'rpdid': "|(umR~lRuRlJ0J'u~~RJmlRRu",
-    'CURRENT_FNVAL': '4048',
-    'b_lsid': 'C9BCD791_19D225F6A76',
-}
+# # 脚本中使用的 Cookies 和 Headers（完整复制）
+# BILI_COOKIES = {
+#     'buvid3': 'E1AC41CE-8298-B4E8-2B11-711D83FCEB4D07978infoc',
+#     'b_nut': '1774395407',
+#     'bsource': 'search_bing',
+#     '_uuid': '696B6B59-DCBB-93710-106A9-2F84CAC10BCA957649infoc',
+#     'home_feed_column': '5',
+#     'browser_resolution': '1912-956',
+#     'buvid4': '4DB22FA4-9C1B-3FF9-09D1-FC56BA6029AA09187-026032507-s5Db6HTmRJMFxI7gzVHFJA%3D%3D',
+#     'buvid_fp': '82d07d9422c9ad7c67f3c53cc409b7e8',
+#     'bmg_af_switch': '1',
+#     'bmg_src_def_domain': 'i2.hdslb.com',
+#     'bili_ticket': 'eyJhbGciOiJIUzI1NiIsImtpZCI6InMwMyIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NzQ2NTQ2MjQsImlhdCI6MTc3NDM5NTM2NCwicGx0IjotMX0.KbRAOmZjhvBQ7MrPSaVnGd_5qhwK_WyiYs25aY5WJ5I',
+#     'bili_ticket_expires': '1774654564',
+#     'sid': '83jnmdei',
+#     'CURRENT_QUALITY': '0',
+#     'rpdid': "|(umR~lRuRlJ0J'u~~RJmlRRu",
+#     'CURRENT_FNVAL': '4048',
+#     'b_lsid': 'C9BCD791_19D225F6A76',
+# }
 
-BILI_HEADERS = {
-    'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-    'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
-    'cache-control': 'no-cache',
-    'pragma': 'no-cache',
-    'priority': 'u=0, i',
-    'referer': 'https://search.bilibili.com/all?keyword=%E8%88%9E%E8%B9%88+%E8%87%AD%E5%BC%9F%E5%BC%9F&from_source=webtop_search&spm_id_from=333.1007&search_source=5',
-    'sec-ch-ua': '"Not(A:Brand";v="8", "Chromium";v="144", "Microsoft Edge";v="144"',
-    'sec-ch-ua-mobile': '?0',
-    'sec-ch-ua-platform': '"Windows"',
-    'sec-fetch-dest': 'document',
-    'sec-fetch-mode': 'navigate',
-    'sec-fetch-site': 'same-site',
-    'sec-fetch-user': '?1',
-    'upgrade-insecure-requests': '1',
-    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36 Edg/144.0.0.0',
-}
+# BILI_HEADERS = {
+#     'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+#     'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
+#     'cache-control': 'no-cache',
+#     'pragma': 'no-cache',
+#     'priority': 'u=0, i',
+#     'referer': 'https://search.bilibili.com/all?keyword=%E8%88%9E%E8%B9%88+%E8%87%AD%E5%BC%9F%E5%BC%9F&from_source=webtop_search&spm_id_from=333.1007&search_source=5',
+#     'sec-ch-ua': '"Not(A:Brand";v="8", "Chromium";v="144", "Microsoft Edge";v="144"',
+#     'sec-ch-ua-mobile': '?0',
+#     'sec-ch-ua-platform': '"Windows"',
+#     'sec-fetch-dest': 'document',
+#     'sec-fetch-mode': 'navigate',
+#     'sec-fetch-site': 'same-site',
+#     'sec-fetch-user': '?1',
+#     'upgrade-insecure-requests': '1',
+#     'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36 Edg/144.0.0.0',
+# }
 
-def search_videos(keyword):
-    """模拟脚本的搜索逻辑，返回视频链接列表"""
-    params = {
-        'keyword': keyword,
-        'from_source': 'webtop_search',
-        'spm_id_from': '333.1007',
-        'search_source': '5',
-    }
-    base_url = 'https://search.bilibili.com/all/'
-    resp = requests.get(base_url, params=params, cookies=BILI_COOKIES, headers=BILI_HEADERS, timeout=10)
-    urls = re.findall('<a href="(.*?)"', resp.text)
-    url_list = []
-    for url in urls:
-        if "video" in url:
-            full_url = 'https:' + url if url.startswith('//') else url
-            url_list.append(full_url)
-    return list(set(url_list))  # 去重
+# def search_videos(keyword):
+#     """模拟脚本的搜索逻辑，返回视频链接列表"""
+#     params = {
+#         'keyword': keyword,
+#         'from_source': 'webtop_search',
+#         'spm_id_from': '333.1007',
+#         'search_source': '5',
+#     }
+#     base_url = 'https://search.bilibili.com/all/'
+#     resp = requests.get(base_url, params=params, cookies=BILI_COOKIES, headers=BILI_HEADERS, timeout=10)
+#     urls = re.findall('<a href="(.*?)"', resp.text)
+#     url_list = []
+#     for url in urls:
+#         if "video" in url:
+#             full_url = 'https:' + url if url.startswith('//') else url
+#             url_list.append(full_url)
+#     return list(set(url_list))  # 去重
 
-def parse_video_page(url):
-    """解析单个视频页面，提取标题、视频baseUrl、音频baseUrl"""
-    resp = requests.get(url, cookies=BILI_COOKIES, headers=BILI_HEADERS, timeout=10)
-    html = resp.text
-    title_match = re.search(r'<title>(.*?)_哔哩哔哩_bilibili</title>', html)
-    if not title_match:
-        return None
-    title = title_match.group(1).replace(' ', '').replace('|', '').replace("'", '').replace('/', '_')
-    video_match = re.search(r'"video".*?"baseUrl":"(.*?)"', html)
-    audio_match = re.search(r'"audio".*?"baseUrl":"(.*?)"', html)
-    if not video_match or not audio_match:
-        return None
-    video_url = video_match.group(1)
-    audio_url = audio_match.group(1)
-    return {'title': title, 'video_url': video_url, 'audio_url': audio_url}
-
-
-
-# 在文件末尾添加 Redis 存储函数
-import redis
-import base64
-
-def store_video_to_redis(task_id, file_path):
-    """将视频文件存储到 Redis"""
-    try:
-        r = redis.from_url(os.environ.get('REDIS_URL'))
-        with open(file_path, 'rb') as f:
-            file_data = base64.b64encode(f.read()).decode('utf-8')
-        r.setex(f'video:{task_id}', 3600, file_data)  # 1小时过期
-        print(f"视频已存储到 Redis: {task_id}, 大小: {len(file_data)} bytes")
-        return True
-    except Exception as e:
-        print(f"存储到 Redis 失败: {e}")
-        return False
+# def parse_video_page(url):
+#     """解析单个视频页面，提取标题、视频baseUrl、音频baseUrl"""
+#     resp = requests.get(url, cookies=BILI_COOKIES, headers=BILI_HEADERS, timeout=10)
+#     html = resp.text
+#     title_match = re.search(r'<title>(.*?)_哔哩哔哩_bilibili</title>', html)
+#     if not title_match:
+#         return None
+#     title = title_match.group(1).replace(' ', '').replace('|', '').replace("'", '').replace('/', '_')
+#     video_match = re.search(r'"video".*?"baseUrl":"(.*?)"', html)
+#     audio_match = re.search(r'"audio".*?"baseUrl":"(.*?)"', html)
+#     if not video_match or not audio_match:
+#         return None
+#     video_url = video_match.group(1)
+#     audio_url = audio_match.group(1)
+#     return {'title': title, 'video_url': video_url, 'audio_url': audio_url}
 
 
 
+# # 在文件末尾添加 Redis 存储函数
+# import redis
+# import base64
+
+# def store_video_to_redis(task_id, file_path):
+#     """将视频文件存储到 Redis"""
+#     try:
+#         r = redis.from_url(os.environ.get('REDIS_URL'))
+#         with open(file_path, 'rb') as f:
+#             file_data = base64.b64encode(f.read()).decode('utf-8')
+#         r.setex(f'video:{task_id}', 3600, file_data)  # 1小时过期
+#         print(f"视频已存储到 Redis: {task_id}, 大小: {len(file_data)} bytes")
+#         return True
+#     except Exception as e:
+#         print(f"存储到 Redis 失败: {e}")
+#         return False
 
 
-# API 路由
 
-@app.route('/api/video/search', methods=['POST'])
-def video_search():
-    """搜索接口，返回视频列表（含标题、封面等）"""
-    data = request.get_json()
-    keyword = data.get('keyword', '').strip()
-    if not keyword:
-        return jsonify({'code': 400, 'msg': '请输入搜索关键词'})
-    try:
-        urls = search_videos(keyword)
-        if not urls:
-            return jsonify({'code': 404, 'msg': '未找到相关视频'})
-        # 获取每个视频的基本信息（标题、封面等，仅从搜索结果页获取）
-        # 但搜索结果页只有链接，没有详细信息，我们只返回链接列表，前端点击后再获取详情
-        video_list = []
-        for url in urls[:20]:  # 限制20个
-            # 从url中提取bv号
-            bv_match = re.search(r'/video/(BV[a-zA-Z0-9]+)', url)
-            bvid = bv_match.group(1) if bv_match else ''
-            video_list.append({
-                'bvid': bvid,
-                'url': url,
-                'title': f'视频 {bvid}',  # 占位，点击后获取详情
-                'pic': '',
-                'author': '',
-                'duration': 0,
-                'play': 0,
-                'danmaku': 0
-            })
-        return jsonify({'code': 200, 'data': video_list, 'total': len(video_list)})
-    except Exception as e:
-        print(f"搜索错误: {e}")
-        return jsonify({'code': 500, 'msg': str(e)})
 
-@app.route('/api/video/info', methods=['POST'])
-def video_info():
-    """获取视频详情（标题、封面、播放地址）"""
-    data = request.get_json()
-    url = data.get('url', '')
-    if not url:
-        return jsonify({'code': 400, 'msg': '缺少视频链接'})
-    try:
-        info = parse_video_page(url)
-        if not info:
-            return jsonify({'code': 404, 'msg': '解析视频失败，可能受限制'})
-        # 额外获取封面等（可从页面提取，简化起见）
-        resp = requests.get(url, cookies=BILI_COOKIES, headers=BILI_HEADERS, timeout=10)
-        pic_match = re.search(r'"pic":"(.*?)"', resp.text)
-        pic = pic_match.group(1) if pic_match else ''
-        # 返回
-        return jsonify({
-            'code': 200,
-            'data': {
-                'title': info['title'],
-                'pic': pic,
-                'video_url': info['video_url'],
-                'audio_url': info['audio_url'],
-                'bvid': re.search(r'BV[a-zA-Z0-9]+', url).group(0) if re.search(r'BV[a-zA-Z0-9]+', url) else '',
-                'url': url
-            }
-        })
-    except Exception as e:
-        print(f"视频详情错误: {e}")
-        return jsonify({'code': 500, 'msg': str(e)})
 
-@app.route('/api/video/download', methods=['POST'])
-def video_download():
-    """下载视频（合成音频，需ffmpeg）"""
-    data = request.get_json()
-    url = data.get('url', '')
-    if not url:
-        return jsonify({'code': 400, 'msg': '缺少视频链接'})
-    try:
-        info = parse_video_page(url)
-        if not info:
-            return jsonify({'code': 404, 'msg': '解析视频失败'})
-        # 下载视频和音频
-        video_content = requests.get(info['video_url'], headers=BILI_HEADERS, timeout=60).content
-        audio_content = requests.get(info['audio_url'], headers=BILI_HEADERS, timeout=60).content
-        # 保存临时文件
-        temp_id = str(uuid.uuid4())[:8]
-        video_path = f'/tmp/{temp_id}_{info["title"]}.mp4'
-        audio_path = f'/tmp/{temp_id}_{info["title"]}.mp3'
-        output_path = f'/tmp/{temp_id}_{info["title"]}_合成.mp4'
-        with open(video_path, 'wb') as f:
-            f.write(video_content)
-        with open(audio_path, 'wb') as f:
-            f.write(audio_content)
-        # 调用ffmpeg合成
-        import subprocess
-        cmd = f'ffmpeg -i "{video_path}" -i "{audio_path}" -c:v copy -c:a copy "{output_path}" -y -loglevel error'
-        subprocess.run(cmd, shell=True, timeout=600, check=False)
-        if not os.path.exists(output_path):
-            # 合成失败，返回视频文件（无音频）
-            return send_file(video_path, as_attachment=True, download_name=f'{info["title"]}.mp4')
-        return send_file(output_path, as_attachment=True, download_name=f'{info["title"]}.mp4')
-    except Exception as e:
-        print(f"下载错误: {e}")
-        return jsonify({'code': 500, 'msg': str(e)})
+# # API 路由
 
-# 视频播放代理（同前）
-@app.route('/api/video/play', methods=['GET'])
-def video_play():
-    video_url = request.args.get('url')
-    if not video_url:
-        return jsonify({'code': 400, 'msg': '缺少视频地址'}), 400
-    try:
-        headers = {'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.bilibili.com/'}
-        resp = requests.get(video_url, headers=headers, stream=True, timeout=30)
-        def generate():
-            for chunk in resp.iter_content(chunk_size=8192):
-                if chunk:
-                    yield chunk
-        return Response(generate(), mimetype='video/mp4', headers={'Content-Disposition': 'inline'})
-    except Exception as e:
-        return jsonify({'code': 500, 'msg': str(e)})
+# @app.route('/api/video/search', methods=['POST'])
+# def video_search():
+#     """搜索接口，返回视频列表（含标题、封面等）"""
+#     data = request.get_json()
+#     keyword = data.get('keyword', '').strip()
+#     if not keyword:
+#         return jsonify({'code': 400, 'msg': '请输入搜索关键词'})
+#     try:
+#         urls = search_videos(keyword)
+#         if not urls:
+#             return jsonify({'code': 404, 'msg': '未找到相关视频'})
+#         # 获取每个视频的基本信息（标题、封面等，仅从搜索结果页获取）
+#         # 但搜索结果页只有链接，没有详细信息，我们只返回链接列表，前端点击后再获取详情
+#         video_list = []
+#         for url in urls[:20]:  # 限制20个
+#             # 从url中提取bv号
+#             bv_match = re.search(r'/video/(BV[a-zA-Z0-9]+)', url)
+#             bvid = bv_match.group(1) if bv_match else ''
+#             video_list.append({
+#                 'bvid': bvid,
+#                 'url': url,
+#                 'title': f'视频 {bvid}',  # 占位，点击后获取详情
+#                 'pic': '',
+#                 'author': '',
+#                 'duration': 0,
+#                 'play': 0,
+#                 'danmaku': 0
+#             })
+#         return jsonify({'code': 200, 'data': video_list, 'total': len(video_list)})
+#     except Exception as e:
+#         print(f"搜索错误: {e}")
+#         return jsonify({'code': 500, 'msg': str(e)})
+
+# @app.route('/api/video/info', methods=['POST'])
+# def video_info():
+#     """获取视频详情（标题、封面、播放地址）"""
+#     data = request.get_json()
+#     url = data.get('url', '')
+#     if not url:
+#         return jsonify({'code': 400, 'msg': '缺少视频链接'})
+#     try:
+#         info = parse_video_page(url)
+#         if not info:
+#             return jsonify({'code': 404, 'msg': '解析视频失败，可能受限制'})
+#         # 额外获取封面等（可从页面提取，简化起见）
+#         resp = requests.get(url, cookies=BILI_COOKIES, headers=BILI_HEADERS, timeout=10)
+#         pic_match = re.search(r'"pic":"(.*?)"', resp.text)
+#         pic = pic_match.group(1) if pic_match else ''
+#         # 返回
+#         return jsonify({
+#             'code': 200,
+#             'data': {
+#                 'title': info['title'],
+#                 'pic': pic,
+#                 'video_url': info['video_url'],
+#                 'audio_url': info['audio_url'],
+#                 'bvid': re.search(r'BV[a-zA-Z0-9]+', url).group(0) if re.search(r'BV[a-zA-Z0-9]+', url) else '',
+#                 'url': url
+#             }
+#         })
+#     except Exception as e:
+#         print(f"视频详情错误: {e}")
+#         return jsonify({'code': 500, 'msg': str(e)})
+
+# @app.route('/api/video/download', methods=['POST'])
+# def video_download():
+#     """下载视频（合成音频，需ffmpeg）"""
+#     data = request.get_json()
+#     url = data.get('url', '')
+#     if not url:
+#         return jsonify({'code': 400, 'msg': '缺少视频链接'})
+#     try:
+#         info = parse_video_page(url)
+#         if not info:
+#             return jsonify({'code': 404, 'msg': '解析视频失败'})
+#         # 下载视频和音频
+#         video_content = requests.get(info['video_url'], headers=BILI_HEADERS, timeout=60).content
+#         audio_content = requests.get(info['audio_url'], headers=BILI_HEADERS, timeout=60).content
+#         # 保存临时文件
+#         temp_id = str(uuid.uuid4())[:8]
+#         video_path = f'/tmp/{temp_id}_{info["title"]}.mp4'
+#         audio_path = f'/tmp/{temp_id}_{info["title"]}.mp3'
+#         output_path = f'/tmp/{temp_id}_{info["title"]}_合成.mp4'
+#         with open(video_path, 'wb') as f:
+#             f.write(video_content)
+#         with open(audio_path, 'wb') as f:
+#             f.write(audio_content)
+#         # 调用ffmpeg合成
+#         import subprocess
+#         cmd = f'ffmpeg -i "{video_path}" -i "{audio_path}" -c:v copy -c:a copy "{output_path}" -y -loglevel error'
+#         subprocess.run(cmd, shell=True, timeout=600, check=False)
+#         if not os.path.exists(output_path):
+#             # 合成失败，返回视频文件（无音频）
+#             return send_file(video_path, as_attachment=True, download_name=f'{info["title"]}.mp4')
+#         return send_file(output_path, as_attachment=True, download_name=f'{info["title"]}.mp4')
+#     except Exception as e:
+#         print(f"下载错误: {e}")
+#         return jsonify({'code': 500, 'msg': str(e)})
+
+# # 视频播放代理（同前）
+# @app.route('/api/video/play', methods=['GET'])
+# def video_play():
+#     video_url = request.args.get('url')
+#     if not video_url:
+#         return jsonify({'code': 400, 'msg': '缺少视频地址'}), 400
+#     try:
+#         headers = {'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.bilibili.com/'}
+#         resp = requests.get(video_url, headers=headers, stream=True, timeout=30)
+#         def generate():
+#             for chunk in resp.iter_content(chunk_size=8192):
+#                 if chunk:
+#                     yield chunk
+#         return Response(generate(), mimetype='video/mp4', headers={'Content-Disposition': 'inline'})
+#     except Exception as e:
+#         return jsonify({'code': 500, 'msg': str(e)})
 
 
 
@@ -1002,101 +1002,101 @@ def video_play():
 
 
 # app.py 中添加
-from tasks import download_video_task, get_task_status, get_task_result
+# from tasks import download_video_task, get_task_status, get_task_result
 
-@app.route('/api/video/download/async', methods=['POST'])
-def video_download_async():
-    """异步下载接口，返回任务ID"""
-    data = request.get_json()
-    url = data.get('url', '')
-    if not url:
-        return jsonify({'code': 400, 'msg': '缺少视频链接'})
+# @app.route('/api/video/download/async', methods=['POST'])
+# def video_download_async():
+#     """异步下载接口，返回任务ID"""
+#     data = request.get_json()
+#     url = data.get('url', '')
+#     if not url:
+#         return jsonify({'code': 400, 'msg': '缺少视频链接'})
     
-    # 启动异步任务
-    task = download_video_task.delay(url)
-    return jsonify({
-        'code': 200,
-        'data': {
-            'task_id': task.id,
-            'status': 'started'
-        }
-    })
+#     # 启动异步任务
+#     task = download_video_task.delay(url)
+#     return jsonify({
+#         'code': 200,
+#         'data': {
+#             'task_id': task.id,
+#             'status': 'started'
+#         }
+#     })
 
-from celery_app import app as celery_app
+# # from celery_app import app as celery_app
 
-@app.route('/api/video/status/<task_id>', methods=['GET'])
-def video_task_status(task_id):
-    """查询任务状态（使用 Celery AsyncResult）"""
-    try:
-        result = celery_app.AsyncResult(task_id)
+# @app.route('/api/video/status/<task_id>', methods=['GET'])
+# def video_task_status(task_id):
+#     """查询任务状态（使用 Celery AsyncResult）"""
+#     try:
+#         result = celery_app.AsyncResult(task_id)
         
-        if result.state == 'PENDING':
-            return jsonify({
-                'code': 200,
-                'data': {'status': 'pending', 'progress': 0}
-            })
-        elif result.state == 'PROGRESS':
-            info = result.info or {}
-            return jsonify({
-                'code': 200,
-                'data': {
-                    'status': 'processing',
-                    'progress': info.get('progress', 50),
-                    'step': info.get('status', '处理中')
-                }
-            })
-        elif result.state == 'SUCCESS':
-            return jsonify({
-                'code': 200,
-                'data': {
-                    'status': 'completed',
-                    'progress': 100
-                }
-            })
-        elif result.state == 'FAILURE':
-            return jsonify({
-                'code': 200,
-                'data': {
-                    'status': 'failed',
-                    'error': str(result.info)
-                }
-            })
-        else:
-            return jsonify({
-                'code': 200,
-                'data': {'status': result.state, 'progress': 0}
-            })
-    except Exception as e:
-        print(f"查询任务状态错误: {e}")
-        return jsonify({'code': 500, 'msg': str(e)})
+#         if result.state == 'PENDING':
+#             return jsonify({
+#                 'code': 200,
+#                 'data': {'status': 'pending', 'progress': 0}
+#             })
+#         elif result.state == 'PROGRESS':
+#             info = result.info or {}
+#             return jsonify({
+#                 'code': 200,
+#                 'data': {
+#                     'status': 'processing',
+#                     'progress': info.get('progress', 50),
+#                     'step': info.get('status', '处理中')
+#                 }
+#             })
+#         elif result.state == 'SUCCESS':
+#             return jsonify({
+#                 'code': 200,
+#                 'data': {
+#                     'status': 'completed',
+#                     'progress': 100
+#                 }
+#             })
+#         elif result.state == 'FAILURE':
+#             return jsonify({
+#                 'code': 200,
+#                 'data': {
+#                     'status': 'failed',
+#                     'error': str(result.info)
+#                 }
+#             })
+#         else:
+#             return jsonify({
+#                 'code': 200,
+#                 'data': {'status': result.state, 'progress': 0}
+#             })
+#     except Exception as e:
+#         print(f"查询任务状态错误: {e}")
+#         return jsonify({'code': 500, 'msg': str(e)})
 
 
 
 
 
 
-@app.route('/api/video/result/<task_id>', methods=['GET'])
-def video_task_result(task_id):
-    """从 Redis 获取视频文件"""
-    import redis
-    import base64
-    from flask import Response
+# @app.route('/api/video/result/<task_id>', methods=['GET'])
+# def video_task_result(task_id):
+#     """从 Redis 获取视频文件"""
+#     import redis
+#     import base64
+#     from flask import Response
     
-    try:
-        r = redis.from_url(os.environ.get('REDIS_URL'))
-        data = r.get(f'video:{task_id}')
-        if not data:
-            return jsonify({'code': 404, 'msg': '视频文件不存在或已过期'})
+#     try:
+#         r = redis.from_url(os.environ.get('REDIS_URL'))
+#         data = r.get(f'video:{task_id}')
+#         if not data:
+#             return jsonify({'code': 404, 'msg': '视频文件不存在或已过期'})
         
-        file_data = base64.b64decode(data)
-        return Response(
-            file_data,
-            mimetype='video/mp4',
-            headers={'Content-Disposition': f'attachment; filename={task_id}.mp4'}
-        )
-    except Exception as e:
-        print(f"获取视频错误: {e}")
-        return jsonify({'code': 500, 'msg': str(e)})
+#         file_data = base64.b64decode(data)
+#         return Response(
+#             file_data,
+#             mimetype='video/mp4',
+#             headers={'Content-Disposition': f'attachment; filename={task_id}.mp4'}
+#         )
+#     except Exception as e:
+#         print(f"获取视频错误: {e}")
+#         return jsonify({'code': 500, 'msg': str(e)})
 
 
 
