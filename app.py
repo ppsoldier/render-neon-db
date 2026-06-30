@@ -37,13 +37,20 @@ REDIS_URL = os.environ.get("REDIS_URL", "redis://default:FBRTgBVjJPiTrVTBCpaZqrS
 redis_client = redis.from_url(REDIS_URL)
 
 # 歌曲保存目录
-# 判断是否在 Vercel 环境
-if os.environ.get('VERCEL'):
-    MUSIC_DIR = '/tmp/music_downloads'
-else:
-    MUSIC_DIR = os.path.join(os.path.dirname(__file__), 'music_downloads')
+# 环境判断
+IS_VERCEL = os.environ.get('VERCEL') == '1' or os.environ.get('VERCEL_ENV') is not None
 
-os.makedirs(MUSIC_DIR, exist_ok=True)
+if IS_VERCEL:
+    # Vercel 只读文件系统 → 直接禁用音乐下载功能
+    MUSIC_DIR = None
+    MUSIC_DOWNLOAD_ENABLED = False
+else:
+    # 本地开发环境
+    MUSIC_DIR = os.path.join(os.path.dirname(__file__), 'music_downloads')
+    MUSIC_DOWNLOAD_ENABLED = True
+    os.makedirs(MUSIC_DIR, exist_ok=True)
+
+print(f"音乐下载功能: {'启用' if MUSIC_DOWNLOAD_ENABLED else '禁用 (Vercel 环境)'}")
 
 
 
@@ -5015,6 +5022,12 @@ def background_download(task_id, content_id, copyright_id, song_name):
 
 @app.route('/api/music/search', methods=['POST'])
 def music_search():
+    if not MUSIC_DOWNLOAD_ENABLED:
+        return jsonify({
+            'code': 503,
+            'msg': 'Vercel 环境暂不支持音乐下载功能，请使用本地环境或 Render'
+        }), 503
+        
     print("收到的请求数据:", request.get_data())  # 打印原始数据
     print("解析的 JSON:", request.get_json())    # 打印解析后的 JSON
     """搜索歌曲"""
@@ -5028,6 +5041,12 @@ def music_search():
 
 @app.route('/api/music/download', methods=['POST'])
 def music_download():
+    if not MUSIC_DOWNLOAD_ENABLED:
+        return jsonify({
+            'code': 503,
+            'msg': 'Vercel 环境暂不支持音乐下载功能，请使用本地环境或 Render'
+        }), 503
+        
     """提交下载任务"""
     data = request.get_json()
     content_id = data.get('contentId')
