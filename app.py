@@ -66,7 +66,40 @@ def get_beijing_time():
 app = Flask(__name__)
 CORS(app)
 
-# Neon 云数据库配置
+# # Neon 云数据库配置
+# DB_CONFIG = {
+#     'host': os.environ.get('DB_HOST', 'ep-rapid-frog-ani7chkm.c-6.us-east-1.aws.neon.tech'),
+#     'user': os.environ.get('DB_USER', 'neondb_owner'),
+#     'password': os.environ.get('DB_PASSWORD', 'npg_b1QR9lMdusev'),
+#     'database': os.environ.get('DB_NAME', 'neondb'),
+#     'port': int(os.environ.get('DB_PORT', 5432))
+# }
+
+
+# def get_db():
+#     """获取数据库连接"""
+#     try:
+#         import ssl
+#         ssl_context = ssl.create_default_context()
+
+#         conn = pg8000.connect(
+#             host=DB_CONFIG['host'],
+#             user=DB_CONFIG['user'],
+#             password=DB_CONFIG['password'],
+#             database=DB_CONFIG['database'],
+#             port=DB_CONFIG['port'],
+#             ssl_context=ssl_context
+#         )
+#         return conn
+#     except Exception as e:
+#         print(f"数据库连接错误: {e}")
+#         raise e
+
+
+# ========== 数据库配置（硬编码，仅作为默认值）==========
+# 建议改为从环境变量读取
+import os
+
 DB_CONFIG = {
     'host': os.environ.get('DB_HOST', 'ep-rapid-frog-ani7chkm.c-6.us-east-1.aws.neon.tech'),
     'user': os.environ.get('DB_USER', 'neondb_owner'),
@@ -77,7 +110,10 @@ DB_CONFIG = {
 
 
 def get_db():
-    """获取数据库连接"""
+    """
+    获取数据库连接（懒加载：仅在调用时连接）
+    不会在应用启动时自动执行
+    """
     try:
         import ssl
         ssl_context = ssl.create_default_context()
@@ -96,12 +132,21 @@ def get_db():
         raise e
 
 
+@app.route("/api/test-db")
+def test_db():
+    """测试数据库连接（懒加载）"""
+    try:
+        db = get_db()  # 只有访问这个路由时才会连接数据库
+        cur = db.cursor()
+        cur.execute("SELECT NOW()")
+        result = cur.fetchone()
+        cur.close()
+        db.close()
+        return jsonify({"status": "success", "db_time": str(result[0])})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
-@app.route('/debug')
-def debug():
-    from flask import jsonify
-    routes = [str(rule) for rule in app.url_map.iter_rules()]
-    return jsonify({'routes': routes})
+
 
 
 
@@ -116,19 +161,19 @@ def health():
     return jsonify({"status": "healthy"})
 
 
-@app.route("/api/test-db")
-def test_db():
-    """测试数据库连接"""
-    try:
-        db = get_db()
-        cur = db.cursor()
-        cur.execute("SELECT NOW()")
-        result = cur.fetchone()
-        cur.close()
-        db.close()
-        return jsonify({"status": "success", "db_time": str(result[0])})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+# @app.route("/api/test-db")
+# def test_db():
+#     """测试数据库连接"""
+#     try:
+#         db = get_db()
+#         cur = db.cursor()
+#         cur.execute("SELECT NOW()")
+#         result = cur.fetchone()
+#         cur.close()
+#         db.close()
+#         return jsonify({"status": "success", "db_time": str(result[0])})
+#     except Exception as e:
+#         return jsonify({"status": "error", "message": str(e)}), 500
 
 
 # ------------------- 初始化数据库表 -------------------
