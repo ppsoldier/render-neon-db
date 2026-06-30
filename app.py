@@ -665,11 +665,12 @@ def migrate_passwords():
     db.close()
     print("密码迁移完成")
     
-# #临时接口
-# @app.route("/migrate-passwords")
-# def migrate_passwords_route():
-#     migrate_passwords()
-#     return "密码迁移完成"
+
+
+
+@app.route('/health')
+def health_check():
+    return jsonify({'status': 'healthy'})
 
 
 
