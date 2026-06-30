@@ -68,11 +68,11 @@ CORS(app)
 
 # Neon 云数据库配置
 DB_CONFIG = {
-    'host': 'ep-rapid-frog-ani7chkm.c-6.us-east-1.aws.neon.tech',
-    'user': 'neondb_owner',
-    'password': 'npg_b1QR9lMdusev',
-    'database': 'neondb',
-    'port': 5432
+    'host': os.environ.get('DB_HOST', 'ep-rapid-frog-ani7chkm.c-6.us-east-1.aws.neon.tech'),
+    'user': os.environ.get('DB_USER', 'neondb_owner'),
+    'password': os.environ.get('DB_PASSWORD', 'npg_b1QR9lMdusev'),
+    'database': os.environ.get('DB_NAME', 'neondb'),
+    'port': int(os.environ.get('DB_PORT', 5432))
 }
 
 
