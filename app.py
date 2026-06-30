@@ -31,12 +31,18 @@ import jsonpath
 from flask import request, jsonify
 from loguru import logger
 import redis
+import tempfile
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://default:FBRTgBVjJPiTrVTBCpaZqrSfVsaIaxrA@redis.railway.internal:6379")
 redis_client = redis.from_url(REDIS_URL)
 
 # 歌曲保存目录
-MUSIC_DIR = os.path.join(os.path.dirname(__file__), "music_downloads")
+# 判断是否在 Vercel 环境
+if os.environ.get('VERCEL'):
+    MUSIC_DIR = '/tmp/music_downloads'
+else:
+    MUSIC_DIR = os.path.join(os.path.dirname(__file__), 'music_downloads')
+
 os.makedirs(MUSIC_DIR, exist_ok=True)
 
 
