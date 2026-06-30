@@ -8,4 +8,4 @@ COPY requirements.txt .
 RUN pip install -r requirements.txt
 COPY . .
 
-CMD ["celery", "-A", "celery_app", "worker", "--loglevel=info", "--concurrency=1"]
+CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:8080", "--timeout", "120"]
