@@ -955,21 +955,83 @@ def run():
     logger.info(f"final_df 列名: {final_df.columns.tolist()}")
     logger.info(f"final_df 前3行: {final_df[['code', 'name', 'rsi']].head(3)}")
 
-    # LLM 分析
-    llm_analysis = None
-    if LLM_CONFIG.get("enable_llm", False):
-        try:
-            logger.info("调用 LLM 分析...")
-            llm_analysis = call_llm_analysis(final_df, sentiment)
-            if llm_analysis:
-                logger.info("LLM 分析完成")
-        except Exception as e:
-            logger.warning(f"LLM 分析失败: {e}")
+    # # LLM 分析
+    # llm_analysis = None
+    # if LLM_CONFIG.get("enable_llm", False):
+    #     try:
+    #         logger.info("调用 LLM 分析...")
+    #         llm_analysis = call_llm_analysis(final_df, sentiment)
+    #         if llm_analysis:
+    #             logger.info("LLM 分析完成")
+    #     except Exception as e:
+    #         logger.warning(f"LLM 分析失败: {e}")
 
-    report = generate_report(final_df, sentiment, llm_analysis, market_result)
+    # report = generate_report(final_df, sentiment, llm_analysis, market_result)
+    # print(report)
+    # send_to_wechat(report)
+
+    # ========== LLM 分析（双模型对比，不同视角） ==========
+    llm_text_silicon = None
+    llm_text_dashscope = None
+
+    # 硅基流动侧重技术面
+    if LLM_CONFIG_SILICON.get("enable_llm", False):
+        try:
+            logger.info("调用硅基流动 LLM 分析（技术面视角）...")
+            llm_text_silicon = call_llm_analysis(
+                final_df, sentiment,
+                config=LLM_CONFIG_SILICON,
+                perspective="技术面"
+            )
+            if llm_text_silicon:
+                logger.info("硅基流动 LLM 分析完成")
+            else:
+                logger.warning("硅基流动 LLM 返回空结果")
+        except Exception as e:
+            logger.warning(f"硅基流动 LLM 分析失败: {e}")
+
+    # 通义千问侧重基本面
+    if LLM_CONFIG_DASHSCOPE.get("enable_llm", False):
+        try:
+            logger.info("调用通义千问 LLM 分析（基本面视角）...")
+            llm_text_dashscope = call_llm_analysis(
+                final_df, sentiment,
+                config=LLM_CONFIG_DASHSCOPE,
+                perspective="基本面"
+            )
+            if llm_text_dashscope:
+                logger.info("通义千问 LLM 分析完成")
+            else:
+                logger.warning("通义千问 LLM 返回空结果")
+        except Exception as e:
+            logger.warning(f"通义千问 LLM 分析失败: {e}")
+
+    # 合并结果
+    combined_llm = None
+    if llm_text_silicon and llm_text_dashscope:
+        combined_llm = (
+            "## 🤖 AI 智能分析（技术面 vs 基本面）\n\n"
+            "### 技术面分析（硅基流动）\n"
+            f"{llm_text_silicon}\n\n"
+            "### 基本面分析（通义千问）\n"
+            f"{llm_text_dashscope}\n\n"
+            "> 注：以上分别从技术面和基本面角度分析，对比参考。"
+        )
+    elif llm_text_silicon:
+        combined_llm = "## 🤖 AI 智能分析（技术面）\n\n" + llm_text_silicon
+    elif llm_text_dashscope:
+        combined_llm = "## 🤖 AI 智能分析（基本面）\n\n" + llm_text_dashscope
+    else:
+        combined_llm = None
+
+    # 生成报告
+    report = generate_report(final_df, sentiment, combined_llm, market_result)
     print(report)
     send_to_wechat(report)
 
+
+
+    
     # 保存结果
     filename = f"selected_stocks_{datetime.now().strftime('%Y%m%d')}.csv"
     filepath = os.path.join(OUTPUT_DIR, filename)
