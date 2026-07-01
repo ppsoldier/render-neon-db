@@ -920,19 +920,31 @@ def music_search():
             return jsonify({'code': 500, 'msg': '搜索服务异常'}), 500
 
         result = response.json()
-        # 提取字段
-        content_ids = jsonpath.jsonpath(result, '$..contentId') or []
-        copy_ids = jsonpath.jsonpath(result, '$..copyrightId') or []
-        song_names = jsonpath.jsonpath(result, '$..songName') or []
-        singers = jsonpath.jsonpath(result, '$..singerName') or []
 
+        # 解析结果
         songs = []
-        for i in range(min(10, len(content_ids))):
+        items = result.get('data', [])  # 根据实际数据结构调整
+        for item in items:
+            # 提取基本信息
+            content_id = item.get('contentId')
+            copyright_id = item.get('copyrightId')
+            song_name = item.get('songName')
+            singer = item.get('singerName') or '未知歌手'
+
+            # 提取第一个可用的播放 URL（从 audioFormats 中取）
+            audio_formats = item.get('audioFormats', [])
+            download_url = None
+            for fmt in audio_formats:
+                if fmt.get('url'):
+                    download_url = fmt['url']
+                    break
+
             songs.append({
-                'contentId': content_ids[i],
-                'copyrightId': copy_ids[i],
-                'songName': song_names[i],
-                'singer': singers[i] if i < len(singers) else '未知歌手'
+                'contentId': content_id,
+                'copyrightId': copyright_id,
+                'songName': song_name,
+                'singer': singer,
+                'downloadUrl': download_url  # 新增字段
             })
 
         return jsonify({'code': 200, 'data': songs})
@@ -945,36 +957,26 @@ def music_search():
 # ---------- 下载任务路由 ----------
 @app.route('/api/music/download_task', methods=['POST'])
 def music_download_task():
-    """
-    仅保存歌曲信息和下载链接到云数据库，不下载文件
-    前端传参：content_id, copyright_id, song_name, singer（可选）
-    """
     try:
         data = request.get_json()
         content_id = data.get('content_id')
         copyright_id = data.get('copyright_id')
         song_name = data.get('song_name')
         singer = data.get('singer', '')
+        download_url = data.get('download_url')  # 前端直接传
 
-        if not content_id or not copyright_id or not song_name:
+        if not content_id or not copyright_id or not song_name or not download_url:
             return jsonify({'code': 400, 'msg': '缺少必要参数'}), 400
 
-        # 1. 获取下载链接（可能因版权限制失败）
-        download_url = fetch_migu_download_url(content_id, copyright_id)
-        if not download_url:
-            return jsonify({'code': 500, 'msg': '获取下载链接失败，可能是版权限制'}), 500
-
-        # 2. 保存到数据库（不下载文件）
+        # 直接保存到数据库，不再调用 fetch_migu_download_url
         conn = get_db_connection()
         if not conn:
             return jsonify({'code': 500, 'msg': '数据库连接失败'}), 500
 
         cur = conn.cursor()
-        # 检查是否已存在（以 content_id 和 copyright_id 为唯一标识）
         cur.execute("SELECT id FROM music_downloads WHERE content_id = %s AND copyright_id = %s", (content_id, copyright_id))
         existing = cur.fetchone()
         if existing:
-            # 更新 download_url 和下载时间
             cur.execute("""
                 UPDATE music_downloads 
                 SET download_url = %s, download_date = %s
@@ -982,7 +984,6 @@ def music_download_task():
             """, (download_url, datetime.now(), existing[0]))
             new_id = existing[0]
         else:
-            # 插入新记录（file_path 置空，status 标记为 'linked' 表示只存储链接）
             cur.execute("""
                 INSERT INTO music_downloads 
                 (song_name, artist, content_id, copyright_id, download_url, file_path, file_size, download_date, status)
