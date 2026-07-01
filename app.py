@@ -901,82 +901,43 @@ def fetch_migu_download_url(content_id, copyright_id):
 # ---------- 搜索路由 ----------
 @app.route('/api/music/search', methods=['POST'])
 def music_search():
+    """
+    从云数据库 music_downloads 表搜索歌曲
+    不再调用咪咕 API
+    """
     try:
         data = request.get_json()
         keyword = data.get('keyword', '').strip()
         if not keyword:
             return jsonify({'code': 400, 'msg': '请输入搜索关键词'})
 
-        url = 'https://app.u.nf.migu.cn/pc/resource/song/item/search/v1.0'
-        params = {'text': keyword, 'pageNo': '1', 'pageSize': '20'}
-        headers = MIGU_HEADERS.copy()
-        headers['timestamp'] = str(int(time.time() * 1000))
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({'code': 500, 'msg': '数据库连接失败'}), 500
 
-        response = requests.get(url, params=params, headers=headers, timeout=10)
-        if response.status_code != 200:
-            return jsonify({'code': 500, 'msg': '搜索服务异常'}), 500
-
-        result = response.json()
-
-        # 处理不同的返回结构
-        items = []
-        if isinstance(result, list):
-            items = result
-        elif isinstance(result, dict):
-            items = result.get('data', [])
-            if not items:
-                items = result.get('result', {}).get('data', [])
-            if not items:
-                items = result.get('songs', [])
-
-        if not items:
-            return jsonify({'code': 200, 'data': []})
+        cur = conn.cursor()
+        # 模糊匹配歌曲名或歌手
+        like_pattern = f'%{keyword}%'
+        cur.execute("""
+            SELECT id, song_name, artist, content_id, copyright_id, download_url
+            FROM music_downloads
+            WHERE song_name ILIKE %s OR artist ILIKE %s
+            ORDER BY id DESC
+            LIMIT 20
+        """, (like_pattern, like_pattern))
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
 
         songs = []
-        for item in items:
-            try:
-                content_id = item.get('contentId', '')
-                copyright_id = item.get('copyrightId', '')
-                song_name = item.get('songName', '')
-                singer = item.get('singerName', '') or item.get('artist', '')
-
-                # ---- 提取下载链接（多字段兼容） ----
-                download_url = None
-
-                # 1. 优先从 audioFormats 提取
-                audio_formats = item.get('audioFormats', [])
-                for fmt in audio_formats:
-                    # 优先取 SQ/HQ/PQ 音质的 url
-                    if fmt.get('url'):
-                        download_url = fmt['url']
-                        break
-
-                # 2. 如果 audioFormats 没有，尝试 playUrl
-                if not download_url:
-                    download_url = item.get('playUrl')
-
-                # 3. 尝试 listenUrl
-                if not download_url:
-                    download_url = item.get('listenUrl')
-
-                # 4. 尝试直接 url
-                if not download_url:
-                    download_url = item.get('url')
-
-                # 5. 如果还是没有，设置为 None，前端会提示
-                # 但我们要确保有 content_id 和 copyright_id，以供后续获取链接（虽然可能失败）
-
-                # 即使是 None 也返回，让前端决定
-                if content_id and copyright_id and song_name:
-                    songs.append({
-                        'contentId': content_id,
-                        'copyrightId': copyright_id,
-                        'songName': song_name,
-                        'singer': singer,
-                        'downloadUrl': download_url  # 可能为 None
-                    })
-            except Exception as e:
-                app.logger.warning(f"解析歌曲项失败: {e}")
+        for row in rows:
+            songs.append({
+                'contentId': row[3] or '',
+                'copyrightId': row[4] or '',
+                'songName': row[1] or '',
+                'singer': row[2] or '未知歌手',
+                'downloadUrl': row[5] or ''  # 可能为空
+            })
 
         return jsonify({'code': 200, 'data': songs})
 
