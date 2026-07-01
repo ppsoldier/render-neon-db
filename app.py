@@ -981,6 +981,7 @@ def music_search():
 def music_download_task():
     try:
         data = request.get_json()
+        print("收到的数据:", data)  # 添加这行，在日志里查看实际收到的数据
         app.logger.info(f"下载任务请求数据: {data}")
 
         # 兼容多种字段名
