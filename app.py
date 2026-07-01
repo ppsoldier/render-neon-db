@@ -871,7 +871,6 @@ def fetch_migu_download_url(content_id, copyright_id):
     返回: 音频 URL 或 None
     """
     url = 'https://app.c.nf.migu.cn/MIGUM3.0/strategy/pc/listen/v1.0'
-    # 按音质优先级尝试：SQ(超品) -> HQ(高品) -> PQ(标准)
     tone_list = ["SQ", "HQ", "PQ"]
 
     for tone in tone_list:
@@ -884,19 +883,17 @@ def fetch_migu_download_url(content_id, copyright_id):
             'resourceType': '2',
         }
         try:
-            # 构造请求头（需带时间戳）
             headers = MIGU_HEADERS.copy()
             headers['timestamp'] = str(int(time.time() * 1000))
 
             resp = requests.get(url, params=params, headers=headers, timeout=10)
             data = resp.json()
             if data.get('code') == '000000':
-                # 检查是否有 url 字段
                 play_url = data.get('data', {}).get('url')
                 if play_url:
                     return play_url
         except Exception as e:
-            print(f"获取音质 {tone} 失败: {e}")
+            app.logger.warning(f"获取音质 {tone} 失败: {e}")
             continue
     return None
 
@@ -920,8 +917,6 @@ def music_search():
             return jsonify({'code': 500, 'msg': '搜索服务异常'}), 500
 
         result = response.json()
-        # 打印返回类型和内容到日志（便于调试）
-        app.logger.info(f"咪咕搜索返回类型: {type(result)}, 内容: {json.dumps(result, ensure_ascii=False)[:500]}")
 
         # 处理不同的返回结构
         items = []
@@ -945,23 +940,40 @@ def music_search():
                 song_name = item.get('songName', '')
                 singer = item.get('singerName', '') or item.get('artist', '')
 
-                # 提取下载链接（优先 audioFormats，其次 playUrl）
+                # ---- 提取下载链接（多字段兼容） ----
                 download_url = None
+
+                # 1. 优先从 audioFormats 提取
                 audio_formats = item.get('audioFormats', [])
                 for fmt in audio_formats:
+                    # 优先取 SQ/HQ/PQ 音质的 url
                     if fmt.get('url'):
                         download_url = fmt['url']
                         break
-                if not download_url:
-                    download_url = item.get('playUrl') or item.get('url')
 
+                # 2. 如果 audioFormats 没有，尝试 playUrl
+                if not download_url:
+                    download_url = item.get('playUrl')
+
+                # 3. 尝试 listenUrl
+                if not download_url:
+                    download_url = item.get('listenUrl')
+
+                # 4. 尝试直接 url
+                if not download_url:
+                    download_url = item.get('url')
+
+                # 5. 如果还是没有，设置为 None，前端会提示
+                # 但我们要确保有 content_id 和 copyright_id，以供后续获取链接（虽然可能失败）
+
+                # 即使是 None 也返回，让前端决定
                 if content_id and copyright_id and song_name:
                     songs.append({
                         'contentId': content_id,
                         'copyrightId': copyright_id,
                         'songName': song_name,
                         'singer': singer,
-                        'downloadUrl': download_url
+                        'downloadUrl': download_url  # 可能为 None
                     })
             except Exception as e:
                 app.logger.warning(f"解析歌曲项失败: {e}")
@@ -979,9 +991,12 @@ def music_search():
 # ---------- 下载任务路由 ----------
 @app.route('/api/music/download_task', methods=['POST'])
 def music_download_task():
+    """
+    保存歌曲信息和下载链接到云数据库（不下载文件）
+    请求参数：content_id, copyright_id, song_name, singer, download_url
+    """
     try:
         data = request.get_json()
-        print("收到的数据:", data)  # 添加这行，在日志里查看实际收到的数据
         app.logger.info(f"下载任务请求数据: {data}")
 
         # 兼容多种字段名
@@ -991,9 +1006,18 @@ def music_download_task():
         singer = data.get('singer', '')
         download_url = data.get('download_url') or data.get('downloadUrl')
 
-        if not content_id or not copyright_id or not song_name or not download_url:
-            app.logger.warning(f"缺少参数: content_id={content_id}, copyright_id={copyright_id}, song_name={song_name}, download_url={download_url}")
-            return jsonify({'code': 400, 'msg': '缺少必要参数'}), 400
+        # 校验必填参数
+        if not content_id or not copyright_id or not song_name:
+            return jsonify({'code': 400, 'msg': '缺少必要参数（content_id, copyright_id, song_name）'}), 400
+
+        # 如果前端没有提供 download_url，尝试从咪咕获取
+        if not download_url:
+            app.logger.info(f"前端未提供 download_url，尝试从咪咕获取: content_id={content_id}, copyright_id={copyright_id}")
+            download_url = fetch_migu_download_url(content_id, copyright_id)
+
+        # 如果仍然无法获取，返回错误
+        if not download_url:
+            return jsonify({'code': 400, 'msg': '该歌曲暂无可用播放链接，可能是版权限制'}), 400
 
         # 保存到数据库
         conn = get_db_connection()
@@ -1001,16 +1025,24 @@ def music_download_task():
             return jsonify({'code': 500, 'msg': '数据库连接失败'}), 500
 
         cur = conn.cursor()
-        cur.execute("SELECT id FROM music_downloads WHERE content_id = %s AND copyright_id = %s", (content_id, copyright_id))
+
+        # 检查是否已存在（按 content_id + copyright_id）
+        cur.execute(
+            "SELECT id FROM music_downloads WHERE content_id = %s AND copyright_id = %s",
+            (content_id, copyright_id)
+        )
         existing = cur.fetchone()
+
         if existing:
+            # 更新已有记录
             cur.execute("""
                 UPDATE music_downloads 
-                SET download_url = %s, download_date = %s
+                SET download_url = %s, download_date = %s, status = 'linked'
                 WHERE id = %s
             """, (download_url, datetime.now(), existing[0]))
             new_id = existing[0]
         else:
+            # 插入新记录
             cur.execute("""
                 INSERT INTO music_downloads 
                 (song_name, artist, content_id, copyright_id, download_url, file_path, file_size, download_date, status)
