@@ -991,79 +991,60 @@ def music_search():
 # ---------- 下载任务路由 ----------
 @app.route('/api/music/download_task', methods=['POST'])
 def music_download_task():
-    """
-    保存歌曲信息和下载链接到云数据库（不下载文件）
-    请求参数：content_id, copyright_id, song_name, singer, download_url
-    """
     try:
         data = request.get_json()
         app.logger.info(f"下载任务请求数据: {data}")
 
-        # 兼容多种字段名
         content_id = data.get('content_id') or data.get('contentId')
         copyright_id = data.get('copyright_id') or data.get('copyrightId')
         song_name = data.get('song_name') or data.get('songName')
         singer = data.get('singer', '')
         download_url = data.get('download_url') or data.get('downloadUrl')
 
-        # 校验必填参数
         if not content_id or not copyright_id or not song_name:
-            return jsonify({'code': 400, 'msg': '缺少必要参数（content_id, copyright_id, song_name）'}), 400
+            return jsonify({'code': 400, 'msg': '缺少必要参数'}), 400
 
-        # 如果前端没有提供 download_url，尝试从咪咕获取
+        # 如果前端未提供 download_url，尝试获取
         if not download_url:
-            app.logger.info(f"前端未提供 download_url，尝试从咪咕获取: content_id={content_id}, copyright_id={copyright_id}")
             download_url = fetch_migu_download_url(content_id, copyright_id)
 
-        # 如果仍然无法获取，返回错误
-        if not download_url:
-            return jsonify({'code': 400, 'msg': '该歌曲暂无可用播放链接，可能是版权限制'}), 400
+        # 无论是否获取到，都保存记录，但标记状态
+        status = 'linked' if download_url else 'no_link'
 
-        # 保存到数据库
         conn = get_db_connection()
         if not conn:
             return jsonify({'code': 500, 'msg': '数据库连接失败'}), 500
 
         cur = conn.cursor()
-
-        # 检查是否已存在（按 content_id + copyright_id）
-        cur.execute(
-            "SELECT id FROM music_downloads WHERE content_id = %s AND copyright_id = %s",
-            (content_id, copyright_id)
-        )
+        # 检查是否已存在
+        cur.execute("SELECT id FROM music_downloads WHERE content_id = %s AND copyright_id = %s", (content_id, copyright_id))
         existing = cur.fetchone()
-
         if existing:
-            # 更新已有记录
             cur.execute("""
                 UPDATE music_downloads 
-                SET download_url = %s, download_date = %s, status = 'linked'
+                SET download_url = %s, download_date = %s, status = %s
                 WHERE id = %s
-            """, (download_url, datetime.now(), existing[0]))
+            """, (download_url, datetime.now(), status, existing[0]))
             new_id = existing[0]
         else:
-            # 插入新记录
             cur.execute("""
                 INSERT INTO music_downloads 
                 (song_name, artist, content_id, copyright_id, download_url, file_path, file_size, download_date, status)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """, (song_name, singer, content_id, copyright_id, download_url, '', 0, datetime.now(), 'linked'))
+            """, (song_name, singer, content_id, copyright_id, download_url, '', 0, datetime.now(), status))
             new_id = cur.lastrowid
 
         conn.commit()
         cur.close()
         conn.close()
 
-        return jsonify({
-            'code': 200,
-            'msg': '歌曲已保存到云库',
-            'data': {'id': new_id, 'download_url': download_url}
-        })
+        if download_url:
+            return jsonify({'code': 200, 'msg': '歌曲已保存到云库', 'data': {'id': new_id, 'download_url': download_url}})
+        else:
+            return jsonify({'code': 200, 'msg': '歌曲已保存，但暂无播放链接（可能受版权限制）', 'data': {'id': new_id, 'download_url': None}})
 
     except Exception as e:
         app.logger.error(f"下载任务异常: {e}")
-        import traceback
-        traceback.print_exc()
         return jsonify({'code': 500, 'msg': f'保存失败: {str(e)}'}), 500
         
 
