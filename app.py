@@ -910,30 +910,24 @@ def music_list():
 
 @app.route('/api/music/play/<int:music_id>', methods=['GET'])
 def music_play(music_id):
-    """在线播放歌曲（返回音频流）"""
     try:
         conn = get_db_connection()
         if not conn:
             return jsonify({'code': 500, 'msg': '数据库连接失败'}), 500
-        
         cur = conn.cursor()
-        # 从数据库获取文件路径
-        cur.execute("SELECT file_path, song_name FROM music_downloads WHERE id = %s", (music_id,))
+        # 只取 download_url
+        cur.execute("SELECT download_url FROM music_downloads WHERE id = %s", (music_id,))
         row = cur.fetchone()
         cur.close()
         conn.close()
 
         if not row or not row[0]:
-            return jsonify({'code': 404, 'msg': '文件不存在'}), 404
+            return jsonify({'code': 404, 'msg': '歌曲不存在'}), 404
 
-        file_path = row[0]
-        
-        # 检查物理文件是否存在
-        if not os.path.exists(file_path):
-            return jsonify({'code': 404, 'msg': '物理文件已丢失'}), 404
-
-        # 返回音频流
-        return send_file(file_path, mimetype='audio/mpeg')
+        download_url = row[0]
+        # 直接重定向到咪咕的下载链接（最简单）
+        from flask import redirect
+        return redirect(download_url)
     except Exception as e:
         return jsonify({'code': 500, 'msg': str(e)}), 500
         
