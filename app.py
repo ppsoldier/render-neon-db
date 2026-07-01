@@ -981,16 +981,20 @@ def music_search():
 def music_download_task():
     try:
         data = request.get_json()
-        content_id = data.get('content_id')
-        copyright_id = data.get('copyright_id')
-        song_name = data.get('song_name')
+        app.logger.info(f"下载任务请求数据: {data}")
+
+        # 兼容多种字段名
+        content_id = data.get('content_id') or data.get('contentId')
+        copyright_id = data.get('copyright_id') or data.get('copyrightId')
+        song_name = data.get('song_name') or data.get('songName')
         singer = data.get('singer', '')
-        download_url = data.get('download_url')  # 前端直接传
+        download_url = data.get('download_url') or data.get('downloadUrl')
 
         if not content_id or not copyright_id or not song_name or not download_url:
+            app.logger.warning(f"缺少参数: content_id={content_id}, copyright_id={copyright_id}, song_name={song_name}, download_url={download_url}")
             return jsonify({'code': 400, 'msg': '缺少必要参数'}), 400
 
-        # 直接保存到数据库，不再调用 fetch_migu_download_url
+        # 保存到数据库
         conn = get_db_connection()
         if not conn:
             return jsonify({'code': 500, 'msg': '数据库连接失败'}), 500
@@ -1024,7 +1028,9 @@ def music_download_task():
         })
 
     except Exception as e:
-        print(f"下载任务异常: {e}")
+        app.logger.error(f"下载任务异常: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'code': 500, 'msg': f'保存失败: {str(e)}'}), 500
         
 
