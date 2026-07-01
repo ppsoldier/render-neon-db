@@ -902,6 +902,9 @@ def fetch_migu_download_url(content_id, copyright_id):
 
 
 # ---------- 搜索路由 ----------
+import json
+import logging
+
 @app.route('/api/music/search', methods=['POST'])
 def music_search():
     try:
@@ -920,37 +923,51 @@ def music_search():
             return jsonify({'code': 500, 'msg': '搜索服务异常'}), 500
 
         result = response.json()
+        # 打印到 Railway 日志以便调试
+        app.logger.info(f"咪咕搜索返回: {json.dumps(result, ensure_ascii=False)[:500]}")
 
-        # 解析结果
+        # 尝试多种可能的数据路径
+        items = result.get('data', [])
+        if not items:
+            items = result.get('result', {}).get('data', [])
+        if not items:
+            items = result if isinstance(result, list) else []
+
         songs = []
-        items = result.get('data', [])  # 根据实际数据结构调整
         for item in items:
-            # 提取基本信息
-            content_id = item.get('contentId')
-            copyright_id = item.get('copyrightId')
-            song_name = item.get('songName')
-            singer = item.get('singerName') or '未知歌手'
+            try:
+                content_id = item.get('contentId', '')
+                copyright_id = item.get('copyrightId', '')
+                song_name = item.get('songName', '')
+                singer = item.get('singerName', '') or item.get('artist', '')
 
-            # 提取第一个可用的播放 URL（从 audioFormats 中取）
-            audio_formats = item.get('audioFormats', [])
-            download_url = None
-            for fmt in audio_formats:
-                if fmt.get('url'):
-                    download_url = fmt['url']
-                    break
+                # 提取下载链接
+                download_url = None
+                audio_formats = item.get('audioFormats', [])
+                for fmt in audio_formats:
+                    if fmt.get('url'):
+                        download_url = fmt['url']
+                        break
+                if not download_url:
+                    download_url = item.get('playUrl') or item.get('url')
 
-            songs.append({
-                'contentId': content_id,
-                'copyrightId': copyright_id,
-                'songName': song_name,
-                'singer': singer,
-                'downloadUrl': download_url  # 新增字段
-            })
+                if content_id and copyright_id and song_name:
+                    songs.append({
+                        'contentId': content_id,
+                        'copyrightId': copyright_id,
+                        'songName': song_name,
+                        'singer': singer,
+                        'downloadUrl': download_url
+                    })
+            except Exception as e:
+                app.logger.warning(f"解析歌曲项失败: {e}")
 
         return jsonify({'code': 200, 'data': songs})
 
     except Exception as e:
-        print(f"搜索异常: {e}")
+        app.logger.error(f"搜索异常: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'code': 500, 'msg': f'搜索失败: {str(e)}'}), 500
 
 
