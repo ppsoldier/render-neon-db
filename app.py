@@ -902,9 +902,6 @@ def fetch_migu_download_url(content_id, copyright_id):
 
 
 # ---------- 搜索路由 ----------
-import json
-import logging
-
 @app.route('/api/music/search', methods=['POST'])
 def music_search():
     try:
@@ -923,15 +920,22 @@ def music_search():
             return jsonify({'code': 500, 'msg': '搜索服务异常'}), 500
 
         result = response.json()
-        # 打印到 Railway 日志以便调试
-        app.logger.info(f"咪咕搜索返回: {json.dumps(result, ensure_ascii=False)[:500]}")
+        # 打印返回类型和内容到日志（便于调试）
+        app.logger.info(f"咪咕搜索返回类型: {type(result)}, 内容: {json.dumps(result, ensure_ascii=False)[:500]}")
 
-        # 尝试多种可能的数据路径
-        items = result.get('data', [])
+        # 处理不同的返回结构
+        items = []
+        if isinstance(result, list):
+            items = result
+        elif isinstance(result, dict):
+            items = result.get('data', [])
+            if not items:
+                items = result.get('result', {}).get('data', [])
+            if not items:
+                items = result.get('songs', [])
+
         if not items:
-            items = result.get('result', {}).get('data', [])
-        if not items:
-            items = result if isinstance(result, list) else []
+            return jsonify({'code': 200, 'data': []})
 
         songs = []
         for item in items:
@@ -941,7 +945,7 @@ def music_search():
                 song_name = item.get('songName', '')
                 singer = item.get('singerName', '') or item.get('artist', '')
 
-                # 提取下载链接
+                # 提取下载链接（优先 audioFormats，其次 playUrl）
                 download_url = None
                 audio_formats = item.get('audioFormats', [])
                 for fmt in audio_formats:
@@ -969,6 +973,7 @@ def music_search():
         import traceback
         traceback.print_exc()
         return jsonify({'code': 500, 'msg': f'搜索失败: {str(e)}'}), 500
+        
 
 
 # ---------- 下载任务路由 ----------
