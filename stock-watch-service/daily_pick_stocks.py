@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import (
     STOCK_FILTER, SCORE_WEIGHTS, TECHNICAL_PARAMS,
     OUTPUT_DIR, DATA_CACHE_DIR, LOG_LEVEL, PERFORMANCE,
-    NEWS_CONFIG, FACTOR_FILTER, LLM_CONFIG,
+    NEWS_CONFIG, FACTOR_FILTER, LLM_CONFIG_SILICON, LLM_CONFIG_DASHSCOPE,
     USE_CACHE, REQUEST_TIMEOUT, MAX_STOCK_PAGES  # 新增
 )
 from market_analyzer import MarketAnalyzer
@@ -1219,7 +1219,7 @@ def get_selected_stocks(use_cache: bool = True,
     return final_df, concepts_df, industries_df, sentiment, market_result
 
     llm_text = None
-    if return_llm and LLM_CONFIG.get("enable_llm", False):
+    if return_llm and LLM_CONFIG_SILICON.get("enable_llm", False):
         llm_text = call_llm_analysis(final_df, sentiment)
     return final_df, concepts_df, industries_df, sentiment, market_result, llm_text
 
