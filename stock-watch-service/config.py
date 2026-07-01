@@ -122,17 +122,30 @@ RISK_CONTROL = {
     "max_daily_loss": -3.0,          # 每日最大亏损比例（%）
 }
 
-# ========== LLM 分析引擎配置 ==========
-LLM_CONFIG = {
-    "enable_llm": True,            # 是否启用 LLM 分析（需要配置 api_key）
-    "enable_fallback": True,        # LLM 不可用时自动降级为规则评分
+# ========== 硅基流动 LLM 配置 ==========
+LLM_CONFIG_SILICON = {
+    "enable_llm": True,
+    "enable_fallback": True,
     "api_key": "sk-xvtfcqzorcnsrymgpstmxclhjqjbvqawmiegiuezoqjwzcjr",
     "base_url": "https://api.siliconflow.cn/v1",
     "model": "deepseek-ai/DeepSeek-V3",
     "temperature": 0.3,
     "max_tokens": 2048,
-    "max_llm_stocks": 30,
+    "max_llm_stocks": 10,
 }
+
+# ========== 通义千问 LLM 配置 ==========
+LLM_CONFIG_DASHSCOPE = {
+    "enable_llm": True,
+    "enable_fallback": True,
+    "api_key": "sk-ws-H.RXLMIMH.oPhw.MEQCIGO_Vvg-RXLj4DxRU4-Qnxgyu6iLAFdBSlQVkVx1z82FAiBgdEHkEKNnaP-OpAGVKu353-9OAEmIauv3fjT2jocl3Q",  # 替换
+    "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "model": "qwen-turbo",  # 或 qwen-max
+    "temperature": 0.3,
+    "max_tokens": 2048,
+    "max_llm_stocks": 10,
+}
+LLM_CONFIG = LLM_CONFIG_SILICON
 
 # ========== 性能优化配置 ==========
 PERFORMANCE = {
