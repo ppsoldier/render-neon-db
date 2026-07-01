@@ -915,8 +915,10 @@ def music_play(music_id):
         conn = get_db_connection()
         if not conn:
             return jsonify({'code': 500, 'msg': '数据库连接失败'}), 500
+        
         cur = conn.cursor()
-        cur.execute("SELECT file_path FROM music_downloads WHERE id = %s", (music_id,))
+        # 从数据库获取文件路径
+        cur.execute("SELECT file_path, song_name FROM music_downloads WHERE id = %s", (music_id,))
         row = cur.fetchone()
         cur.close()
         conn.close()
@@ -925,12 +927,16 @@ def music_play(music_id):
             return jsonify({'code': 404, 'msg': '文件不存在'}), 404
 
         file_path = row[0]
+        
+        # 检查物理文件是否存在
         if not os.path.exists(file_path):
             return jsonify({'code': 404, 'msg': '物理文件已丢失'}), 404
 
+        # 返回音频流
         return send_file(file_path, mimetype='audio/mpeg')
     except Exception as e:
         return jsonify({'code': 500, 'msg': str(e)}), 500
+        
 
 
 @app.route('/api/music/download/<int:music_id>', methods=['GET'])
