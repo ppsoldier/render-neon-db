@@ -903,7 +903,7 @@ def fetch_migu_download_url(content_id, copyright_id):
 def music_search():
     """
     从云数据库 music_downloads 表搜索歌曲
-    不再调用咪咕 API
+    返回每条记录的 id（主键）供前端播放使用
     """
     try:
         data = request.get_json()
@@ -916,7 +916,6 @@ def music_search():
             return jsonify({'code': 500, 'msg': '数据库连接失败'}), 500
 
         cur = conn.cursor()
-        # 模糊匹配歌曲名或歌手
         like_pattern = f'%{keyword}%'
         cur.execute("""
             SELECT id, song_name, artist, content_id, copyright_id, download_url
@@ -932,19 +931,18 @@ def music_search():
         songs = []
         for row in rows:
             songs.append({
+                'id': row[0],                  # 数据库主键，用于播放
                 'contentId': row[3] or '',
                 'copyrightId': row[4] or '',
                 'songName': row[1] or '',
                 'singer': row[2] or '未知歌手',
-                'downloadUrl': row[5] or ''  # 可能为空
+                'downloadUrl': row[5] or ''
             })
 
         return jsonify({'code': 200, 'data': songs})
 
     except Exception as e:
         app.logger.error(f"搜索异常: {e}")
-        import traceback
-        traceback.print_exc()
         return jsonify({'code': 500, 'msg': f'搜索失败: {str(e)}'}), 500
         
 
