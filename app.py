@@ -945,6 +945,10 @@ def music_search():
 # ---------- 下载任务路由 ----------
 @app.route('/api/music/download_task', methods=['POST'])
 def music_download_task():
+    """
+    仅保存歌曲信息和下载链接到云数据库，不下载文件
+    前端传参：content_id, copyright_id, song_name, singer（可选）
+    """
     try:
         data = request.get_json()
         content_id = data.get('content_id')
@@ -955,63 +959,51 @@ def music_download_task():
         if not content_id or not copyright_id or not song_name:
             return jsonify({'code': 400, 'msg': '缺少必要参数'}), 400
 
-        # 1. 获取下载链接
+        # 1. 获取下载链接（可能因版权限制失败）
         download_url = fetch_migu_download_url(content_id, copyright_id)
         if not download_url:
             return jsonify({'code': 500, 'msg': '获取下载链接失败，可能是版权限制'}), 500
 
-        # 2. 下载文件到本地（Railway 使用 /tmp）
-        safe_name = re.sub(r'[\\/*?:"<>|]', '', song_name)
-        if singer:
-            safe_singer = re.sub(r'[\\/*?:"<>|]', '', singer)
-            filename = f"{safe_name} - {safe_singer}.mp3"
-        else:
-            filename = f"{safe_name}.mp3"
-        file_path = os.path.join(MUSIC_DIR, filename)
-
-        # 如果文件已存在，直接返回成功
-        if os.path.exists(file_path):
-            file_size = os.path.getsize(file_path)
-        else:
-            # 下载文件
-            resp = requests.get(download_url, timeout=30)
-            if resp.status_code != 200:
-                return jsonify({'code': 500, 'msg': '下载音频文件失败'}), 500
-            with open(file_path, 'wb') as f:
-                f.write(resp.content)
-            file_size = os.path.getsize(file_path)
-
-        # 3. 保存/更新数据库
+        # 2. 保存到数据库（不下载文件）
         conn = get_db_connection()
-        if conn:
-            cur = conn.cursor()
-            # 检查是否已存在相同歌曲（以 content_id 和 copyright_id 为唯一）
-            cur.execute("SELECT id FROM music_downloads WHERE content_id = %s AND copyright_id = %s", (content_id, copyright_id))
-            existing = cur.fetchone()
-            if existing:
-                # 更新 file_path 和 download_url（如果变更）
-                cur.execute("""
-                    UPDATE music_downloads 
-                    SET download_url = %s, file_path = %s, file_size = %s, download_date = %s
-                    WHERE id = %s
-                """, (download_url, file_path, file_size, datetime.now(), existing[0]))
-                new_id = existing[0]
-            else:
-                cur.execute("""
-                    INSERT INTO music_downloads 
-                    (song_name, artist, content_id, copyright_id, download_url, file_path, file_size, download_date, status)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """, (song_name, singer, content_id, copyright_id, download_url, file_path, file_size, datetime.now(), 'downloaded'))
-                new_id = cur.lastrowid
-            conn.commit()
-            cur.close()
-            conn.close()
+        if not conn:
+            return jsonify({'code': 500, 'msg': '数据库连接失败'}), 500
 
-        return jsonify({'code': 200, 'msg': '下载完成', 'data': {'id': new_id, 'file_path': file_path}})
+        cur = conn.cursor()
+        # 检查是否已存在（以 content_id 和 copyright_id 为唯一标识）
+        cur.execute("SELECT id FROM music_downloads WHERE content_id = %s AND copyright_id = %s", (content_id, copyright_id))
+        existing = cur.fetchone()
+        if existing:
+            # 更新 download_url 和下载时间
+            cur.execute("""
+                UPDATE music_downloads 
+                SET download_url = %s, download_date = %s
+                WHERE id = %s
+            """, (download_url, datetime.now(), existing[0]))
+            new_id = existing[0]
+        else:
+            # 插入新记录（file_path 置空，status 标记为 'linked' 表示只存储链接）
+            cur.execute("""
+                INSERT INTO music_downloads 
+                (song_name, artist, content_id, copyright_id, download_url, file_path, file_size, download_date, status)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (song_name, singer, content_id, copyright_id, download_url, '', 0, datetime.now(), 'linked'))
+            new_id = cur.lastrowid
+
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        return jsonify({
+            'code': 200,
+            'msg': '歌曲已保存到云库',
+            'data': {'id': new_id, 'download_url': download_url}
+        })
 
     except Exception as e:
         print(f"下载任务异常: {e}")
-        return jsonify({'code': 500, 'msg': f'下载失败: {str(e)}'}), 500
+        return jsonify({'code': 500, 'msg': f'保存失败: {str(e)}'}), 500
+        
 
 
 # ---------- 播放路由（直接重定向到咪咕链接） ----------
