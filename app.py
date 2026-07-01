@@ -962,18 +962,65 @@ def music_download_file(music_id):
 
 @app.route('/api/music/search', methods=['POST'])
 def music_search():
-    """搜索歌曲（咪咕音乐）"""
-    data = request.get_json()
-    keyword = data.get('keyword', '').strip()
-    if not keyword:
-        return jsonify({'code': 400, 'msg': '请输入搜索关键词'})
-
-    # 这里集成你的咪咕搜索逻辑（可复用之前的 Spider 类）
+    """
+    搜索歌曲（咪咕音乐）
+    请求体: {"keyword": "泡沫"}
+    返回: {"code": 200, "data": [{"contentId": "...", "copyrightId": "...", "songName": "...", "singer": "..."}]}
+    """
     try:
-        # 临时返回空，后续可扩展
-        return jsonify({'code': 200, 'data': [], 'msg': '搜索功能开发中'})
+        data = request.get_json()
+        keyword = data.get('keyword', '').strip()
+        if not keyword:
+            return jsonify({'code': 400, 'msg': '请输入搜索关键词'})
+
+        # 咪咕音乐搜索 API
+        url = 'https://app.u.nf.migu.cn/pc/resource/song/item/search/v1.0'
+        params = {
+            'text': keyword,
+            'pageNo': '1',
+            'pageSize': '20',
+        }
+
+        # 构造请求头（必须包含时间戳和必要的标识）
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36 Edg/144.0.0.0',
+            'Referer': 'https://music.migu.cn/',
+            'Origin': 'https://music.migu.cn',
+            'timestamp': str(int(time.time() * 1000)),
+            'appId': 'h5',
+            'channel': '014X031',
+            'subchannel': '014X031',
+            'platform': 'H5',
+        }
+
+        response = requests.get(url, params=params, headers=headers, timeout=10)
+        if response.status_code != 200:
+            return jsonify({'code': 500, 'msg': '搜索服务异常'}), 500
+
+        result = response.json()
+
+        # 使用 jsonpath 提取关键字段（兼容多级结构）
+        content_ids = jsonpath.jsonpath(result, '$..contentId') or []
+        copy_ids = jsonpath.jsonpath(result, '$..copyrightId') or []
+        song_names = jsonpath.jsonpath(result, '$..songName') or []
+        singers = jsonpath.jsonpath(result, '$..singerName') or []
+
+        # 限制最多返回 10 首
+        max_results = min(10, len(content_ids))
+        songs = []
+        for i in range(max_results):
+            songs.append({
+                'contentId': content_ids[i],
+                'copyrightId': copy_ids[i],
+                'songName': song_names[i],
+                'singer': singers[i] if i < len(singers) else '未知歌手'
+            })
+
+        return jsonify({'code': 200, 'data': songs})
+
     except Exception as e:
-        return jsonify({'code': 500, 'msg': str(e)}), 500
+        print(f"搜索异常: {e}")
+        return jsonify({'code': 500, 'msg': f'搜索失败: {str(e)}'}), 500
 
 
 @app.route('/api/music/download_task', methods=['POST'])
