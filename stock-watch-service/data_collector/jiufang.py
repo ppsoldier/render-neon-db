@@ -41,35 +41,70 @@ def _gen_stock_sign(listed_sector: str, sort_field: str, sort_type: str,
 def _gen_sector_sign(timestamp: str) -> str:
     return hashlib.md5(f"{SIGN_SALT}{timestamp}".encode()).hexdigest()
 
-def call_llm_analysis(stock_data: pd.DataFrame, sentiment: dict) -> Optional[str]:
+def call_llm_analysis(stock_data: pd.DataFrame, sentiment: dict, config: dict = None, perspective: str = "综合") -> Optional[str]:
     """
     调用 LLM 对选股结果进行分析
-    stock_data: 精选股票 DataFrame
-    sentiment: 市场情绪字典
+    Args:
+        stock_data: 精选股票 DataFrame
+        sentiment: 市场情绪字典
+        config: LLM 配置字典
+        perspective: 分析视角，可选 "综合"、"技术面"、"基本面"
+    Returns:
+        分析文本或 None
     """
-    if not LLM_CONFIG.get("enable_llm", False):
-        return None
+    if config is None:
+        config = LLM_CONFIG
 
-    if stock_data.empty:
+    if not config.get("enable_llm", False) or stock_data.empty:
         return None
-
-    # 调试：打印列名
-    # logger.info(f"LLM 分析接收到的列名: {stock_data.columns.tolist()}")
 
     try:
         import requests as req
 
         # 准备股票数据文本
         stock_text_lines = []
-        for _, row in stock_data.head(LLM_CONFIG.get("max_llm_stocks", 10)).iterrows():
+        for _, row in stock_data.head(config.get("max_llm_stocks", 10)).iterrows():
+            # 安全获取各字段
+            name = row.get('name', '')
+            code = row.get('code', '')
+            price = row.get('price', 0)
+            change = row.get('change_pct', 0)
+            volume_ratio = row.get('volume_ratio', 0)
+            main_inflow = row.get('main_inflow', 0)
+            rsi = row.get('rsi', 0)
+            total_score = row.get('total_score', 0)
+
             stock_text_lines.append(
-                f"- {row['name']}({row['code']}): 现价{row['price']:.2f}, "
-                f"涨跌幅{row['change_pct']:.2f}%, 量比{row.get('volume_ratio', 0):.2f}, "
-                f"主力净流入{row.get('main_inflow', 0):.2f}亿, "
-                f"RSI{row.get('rsi', 0):.1f}, 综合评分{row.get('total_score', 0):.0f}"  # 这里使用 .get()
+                f"- {name}({code}): 现价{price:.2f}, "
+                f"涨跌幅{change:.2f}%, 量比{volume_ratio:.2f}, "
+                f"主力净流入{main_inflow:.2f}亿, "
+                f"RSI{rsi:.1f}, 综合评分{total_score:.0f}"
             )
 
-        prompt = f"""你是一位专业的A股量化分析师。请基于以下今日选股数据，给出简要分析：
+        # ----- 根据视角定制 Prompt -----
+        if perspective == "技术面":
+            analysis_instruction = """
+请重点从**技术分析**角度进行解读：
+1. 关注量价关系、RSI超买超卖、MACD、均线排列等指标。
+2. 判断短期趋势强度、回调风险或突破机会。
+3. 技术面评分较高的股票有哪些特征？
+"""
+        elif perspective == "基本面":
+            analysis_instruction = """
+请重点从**基本面**角度进行解读：
+1. 关注财务评级（fin_rating）、营收利润增长、估值水平（PE、PB等）。
+2. 判断行业景气度、竞争格局、业绩确定性。
+3. 基本面评分较高的股票有哪些共同点？
+"""
+        else:  # 综合
+            analysis_instruction = """
+请从**技术面与基本面相结合**的角度进行解读：
+1. 综合考量量价、指标、财务、行业等因素。
+2. 指出哪些股票技术面与基本面形成共振。
+3. 给出平衡的操作建议。
+"""
+
+        prompt = f"""你是一位专业的A股量化分析师。请基于以下今日选股数据，从指定视角进行分析。
 
 【选股数据】（共{len(stock_data)}只）
 {chr(10).join(stock_text_lines)}
@@ -79,48 +114,50 @@ def call_llm_analysis(stock_data: pd.DataFrame, sentiment: dict) -> Optional[str
 热点概念：{sentiment.get('top_concept', 'N/A')}
 热点行业：{sentiment.get('top_industry', 'N/A')}
 
+{analysis_instruction}
+
 请按以下格式输出分析报告：
 ### 今日市场概况
 （简要描述市场情绪和热点方向，50字以内）
 
 ### 重点个股点评
-（对评分最高的3只股票逐一分析，每只30字以内）
+（对评分最高的3只股票逐一分析，每只30字以内，突出所选视角的特点）
 
 ### 风险提示
-（结合技术指标和市场情绪，提示可能的风险，30字以内）
+（结合所选视角，提示可能的风险，30字以内）
 
 ### 操作建议
 （给出总体操作建议，20字以内）"""
 
+        # 调用 API
         headers = {
-            "Authorization": f"Bearer {LLM_CONFIG['api_key']}",
+            "Authorization": f"Bearer {config['api_key']}",
             "Content-Type": "application/json"
         }
         payload = {
-            "model": LLM_CONFIG['model'],
+            "model": config['model'],
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": LLM_CONFIG.get('temperature', 0.3),
-            "max_tokens": LLM_CONFIG.get('max_tokens', 1024)
+            "temperature": config.get('temperature', 0.3),
+            "max_tokens": config.get('max_tokens', 1024)
         }
 
         response = req.post(
-            f"{LLM_CONFIG['base_url']}/chat/completions",
+            f"{config['base_url']}/chat/completions",
             json=payload,
             headers=headers,
-            timeout=30
+            timeout=config.get('timeout', 30)
         )
 
         if response.status_code == 200:
             result = response.json()
             return result['choices'][0]['message']['content']
         else:
-            logger.warning(f"LLM API 调用失败: {response.status_code}")
+            logger.warning(f"LLM API 调用失败 ({config.get('model', 'unknown')})，状态码: {response.status_code}")
             return None
 
     except Exception as e:
-        logger.error(f"LLM 分析异常: {e}")
+        logger.error(f"LLM 分析异常 ({config.get('model', 'unknown')}): {e}")
         return None
-
 
 class JiuFangCollector:
     """九方智投数据采集器（多线程加速版）"""
