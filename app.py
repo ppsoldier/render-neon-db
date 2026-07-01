@@ -838,6 +838,229 @@ def test_remind():
 
 
 
+# ========== 音乐模块 ==========
+import os
+import psycopg2
+from flask import jsonify, request, send_file, send_from_directory
+import requests
+import re
+import json
+from datetime import datetime
+
+# 音乐文件存储目录（Railway 使用 /tmp）
+MUSIC_DIR = '/tmp/music_downloads' if os.environ.get('RAILWAY') else './music_downloads'
+os.makedirs(MUSIC_DIR, exist_ok=True)
+
+
+# ---------- 辅助函数 ----------
+def get_db_connection():
+    """获取数据库连接"""
+    try:
+        conn = psycopg2.connect(
+            host=DB_CONFIG['host'],
+            user=DB_CONFIG['user'],
+            password=DB_CONFIG['password'],
+            database=DB_CONFIG['database'],
+            port=DB_CONFIG['port'],
+            sslmode='require'
+        )
+        return conn
+    except Exception as e:
+        print(f"数据库连接失败: {e}")
+        return None
+
+
+# ---------- API 路由 ----------
+
+@app.route('/api/music/list', methods=['GET'])
+def music_list():
+    """获取已下载歌曲列表"""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({'code': 500, 'msg': '数据库连接失败'}), 500
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, song_name, artist, file_path, file_size, download_date
+            FROM music_downloads
+            WHERE download_url IS NOT NULL AND download_url != ''
+            ORDER BY id DESC
+        """)
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        data = []
+        for row in rows:
+            # 检查物理文件是否存在
+            file_exists = os.path.exists(row[3]) if row[3] else False
+            data.append({
+                'id': row[0],
+                'name': row[1],
+                'artist': row[2] or '未知歌手',
+                'file_path': row[3],
+                'file_size': row[4],
+                'download_date': str(row[5]) if row[5] else '',
+                'exists': file_exists
+            })
+        return jsonify({'code': 200, 'data': data})
+    except Exception as e:
+        return jsonify({'code': 500, 'msg': str(e)}), 500
+
+
+@app.route('/api/music/play/<int:music_id>', methods=['GET'])
+def music_play(music_id):
+    """在线播放歌曲（返回音频流）"""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({'code': 500, 'msg': '数据库连接失败'}), 500
+        cur = conn.cursor()
+        cur.execute("SELECT file_path FROM music_downloads WHERE id = %s", (music_id,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+
+        if not row or not row[0]:
+            return jsonify({'code': 404, 'msg': '文件不存在'}), 404
+
+        file_path = row[0]
+        if not os.path.exists(file_path):
+            return jsonify({'code': 404, 'msg': '物理文件已丢失'}), 404
+
+        return send_file(file_path, mimetype='audio/mpeg')
+    except Exception as e:
+        return jsonify({'code': 500, 'msg': str(e)}), 500
+
+
+@app.route('/api/music/download/<int:music_id>', methods=['GET'])
+def music_download_file(music_id):
+    """下载歌曲文件到本地"""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({'code': 500, 'msg': '数据库连接失败'}), 500
+        cur = conn.cursor()
+        cur.execute("SELECT file_path, song_name FROM music_downloads WHERE id = %s", (music_id,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+
+        if not row or not row[0]:
+            return jsonify({'code': 404, 'msg': '文件不存在'}), 404
+
+        file_path = row[0]
+        if not os.path.exists(file_path):
+            return jsonify({'code': 404, 'msg': '物理文件已丢失'}), 404
+
+        # 下载时使用歌曲名作为文件名
+        download_name = f"{row[1]}.mp3" if row[1] else os.path.basename(file_path)
+        return send_file(file_path, as_attachment=True, download_name=download_name)
+    except Exception as e:
+        return jsonify({'code': 500, 'msg': str(e)}), 500
+
+
+@app.route('/api/music/search', methods=['POST'])
+def music_search():
+    """搜索歌曲（咪咕音乐）"""
+    data = request.get_json()
+    keyword = data.get('keyword', '').strip()
+    if not keyword:
+        return jsonify({'code': 400, 'msg': '请输入搜索关键词'})
+
+    # 这里集成你的咪咕搜索逻辑（可复用之前的 Spider 类）
+    try:
+        # 临时返回空，后续可扩展
+        return jsonify({'code': 200, 'data': [], 'msg': '搜索功能开发中'})
+    except Exception as e:
+        return jsonify({'code': 500, 'msg': str(e)}), 500
+
+
+@app.route('/api/music/download_task', methods=['POST'])
+def music_download_task():
+    """提交下载任务（将歌曲信息保存到数据库）"""
+    data = request.get_json()
+    song_name = data.get('song_name')
+    artist = data.get('artist', '')
+    download_url = data.get('download_url')
+    content_id = data.get('content_id', '')
+    copyright_id = data.get('copyright_id', '')
+
+    if not song_name or not download_url:
+        return jsonify({'code': 400, 'msg': '缺少必要参数'})
+
+    # 生成文件路径（存储到 MUSIC_DIR）
+    safe_name = re.sub(r'[\\/*?:"<>|]', '', song_name)
+    safe_artist = re.sub(r'[\\/*?:"<>|]', '', artist) if artist else ''
+    filename = f"{safe_name} - {safe_artist}.mp3" if safe_artist else f"{safe_name}.mp3"
+    file_path = os.path.join(MUSIC_DIR, filename)
+
+    # 下载文件
+    try:
+        resp = requests.get(download_url, timeout=30)
+        if resp.status_code != 200:
+            return jsonify({'code': 500, 'msg': '下载文件失败'}), 500
+        with open(file_path, 'wb') as f:
+            f.write(resp.content)
+        file_size = os.path.getsize(file_path)
+    except Exception as e:
+        return jsonify({'code': 500, 'msg': f'下载异常: {str(e)}'}), 500
+
+    # 保存到数据库
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({'code': 500, 'msg': '数据库连接失败'}), 500
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO music_downloads 
+            (song_name, artist, content_id, copyright_id, download_url, file_path, file_size, download_date, status)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (song_name, artist, content_id, copyright_id, download_url, file_path, file_size, datetime.now(), 'downloaded'))
+        conn.commit()
+        new_id = cur.lastrowid
+        cur.close()
+        conn.close()
+        return jsonify({'code': 200, 'msg': '下载完成', 'data': {'id': new_id, 'file_path': file_path}})
+    except Exception as e:
+        return jsonify({'code': 500, 'msg': f'数据库保存失败: {str(e)}'}), 500
+
+
+@app.route('/api/music/delete/<int:music_id>', methods=['DELETE'])
+def music_delete(music_id):
+    """删除歌曲记录和物理文件"""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({'code': 500, 'msg': '数据库连接失败'}), 500
+        cur = conn.cursor()
+        # 先获取文件路径
+        cur.execute("SELECT file_path FROM music_downloads WHERE id = %s", (music_id,))
+        row = cur.fetchone()
+        if not row:
+            cur.close()
+            conn.close()
+            return jsonify({'code': 404, 'msg': '记录不存在'}), 404
+        file_path = row[0]
+
+        # 删除物理文件
+        if file_path and os.path.exists(file_path):
+            os.remove(file_path)
+
+        # 删除数据库记录
+        cur.execute("DELETE FROM music_downloads WHERE id = %s", (music_id,))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return jsonify({'code': 200, 'msg': '删除成功'})
+    except Exception as e:
+        return jsonify({'code': 500, 'msg': str(e)}), 500
+        
+
+
+
+
+
 
 # # ========== B站视频下载模块（完全模仿脚本逻辑）==========
 # import re
