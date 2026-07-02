@@ -130,8 +130,12 @@ LLM_CONFIG_SILICON = {
     "base_url": "https://api.siliconflow.cn/v1",
     "model": "deepseek-ai/DeepSeek-V3",
     "temperature": 0.3,
-    "max_tokens": 2048,
+    "max_tokens": 1024,
     "max_llm_stocks": 10,
+    # 新增兜底模型白名单，只允许免费Qwen，删除GLM、V4系列付费模型
+    "fallback_models": [
+        "Qwen/Qwen2.5-7B-Instruct"
+    ]
 }
 
 # ========== 通义千问 LLM 配置 ==========
