@@ -564,10 +564,42 @@ async def search_stock(keyword: str = Query(..., description="搜索关键词"))
 # ========== 选股结果接口 ==========
 @app.get("/api/stock/picks")
 async def get_stock_picks():
+    """获取选股结果（如果当天没有，自动获取最近一天）"""
     try:
-        today = datetime.now().strftime('%Y-%m-%d')
         engine = get_sync_engine()
+        today = datetime.now().strftime('%Y-%m-%d')
+        
         with engine.connect() as conn:
+            # 1. 检查当天是否有数据
+            result = conn.execute(
+                text(f"SELECT COUNT(*) FROM {TABLE_SELECTED} WHERE date = :date"),
+                {"date": today}
+            )
+            count = result.fetchone()[0]
+            
+            data_date = today
+            is_fallback = False
+            
+            # 2. 如果当天没有数据，获取最近一天
+            if count == 0:
+                result = conn.execute(
+                    text(f"SELECT DISTINCT date FROM {TABLE_SELECTED} ORDER BY date DESC LIMIT 1")
+                )
+                row = result.fetchone()
+                if not row:
+                    return {
+                        "code": 200,
+                        "data": [],
+                        "has_data": False,
+                        "msg": "暂无选股数据",
+                        "data_date": None,
+                        "is_fallback": False
+                    }
+                data_date = str(row[0])
+                is_fallback = True
+                logger.info(f"当天无选股数据，使用 {data_date} 的数据")
+            
+            # 3. 查询数据
             result = conn.execute(
                 text(f"""
                     SELECT code, name, price, change_pct, total_score, advice, fin_rating, date
@@ -575,11 +607,20 @@ async def get_stock_picks():
                     WHERE date = :date
                     ORDER BY total_score DESC
                 """),
-                {"date": today}
+                {"date": data_date}
             )
             rows = result.fetchall()
+        
         if not rows:
-            return {"code": 200, "data": [], "has_data": False, "msg": "今日尚无选股数据"}
+            return {
+                "code": 200,
+                "data": [],
+                "has_data": False,
+                "msg": f"{data_date} 无选股数据",
+                "data_date": data_date,
+                "is_fallback": is_fallback
+            }
+        
         picks = []
         for row in rows:
             picks.append({
@@ -592,10 +633,19 @@ async def get_stock_picks():
                 "fin_rating": row[6] or '',
                 "date": str(row[7]) if row[7] else ''
             })
-        return {"code": 200, "data": picks, "has_data": True}
+        
+        return {
+            "code": 200,
+            "data": picks,
+            "has_data": True,
+            "data_date": data_date,
+            "is_fallback": is_fallback
+        }
+        
     except Exception as e:
         logger.error(f"获取选股结果错误: {e}")
         return {"code": 500, "message": str(e), "data": []}
+        
 
 @app.get("/api/stock/market")
 async def get_market_data():
