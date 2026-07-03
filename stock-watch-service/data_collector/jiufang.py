@@ -53,7 +53,7 @@ def call_llm_analysis(stock_data: pd.DataFrame, sentiment: dict, config: dict = 
         分析文本或 None
     """
     if config is None:
-        config = LLM_CONFIG
+        config = LLM_CONFIG_SILICON
 
     if not config.get("enable_llm", False) or stock_data.empty:
         return None
