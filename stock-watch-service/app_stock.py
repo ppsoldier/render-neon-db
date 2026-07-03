@@ -649,10 +649,54 @@ async def get_stock_picks():
 
 @app.get("/api/stock/market")
 async def get_market_data():
+    """获取市场分析数据（如果当天没有，自动获取最近一天）"""
     try:
-        today = datetime.now().strftime('%Y-%m-%d')
         engine = get_sync_engine()
+        today = datetime.now().strftime('%Y-%m-%d')
+        
         with engine.connect() as conn:
+            # 1. 检查当天是否有数据
+            result = conn.execute(
+                text(f"SELECT COUNT(*) FROM {TABLE_MARKET} WHERE date = :date"),
+                {"date": today}
+            )
+            count = result.fetchone()[0]
+            
+            data_date = today
+            is_fallback = False
+            
+            # 2. 如果当天没有数据，获取最近一天
+            if count == 0:
+                result = conn.execute(
+                    text(f"SELECT DISTINCT date FROM {TABLE_MARKET} ORDER BY date DESC LIMIT 1")
+                )
+                row = result.fetchone()
+                if not row:
+                    return {
+                        "code": 200,
+                        "data": {
+                            "market_state": "震荡市",
+                            "market_score": 50,
+                            "position_ratio": 0.5,
+                            "advice": "控制仓位，高抛低吸",
+                            "trend_strength": 0,
+                            "volatility": 0,
+                            "ma_arrangement": "震荡",
+                            "limit_up_count": 0,
+                            "limit_down_count": 0,
+                            "up_count": 0,
+                            "down_count": 0,
+                            "advance_percent": 0
+                        },
+                        "data_date": None,
+                        "is_fallback": False,
+                        "msg": "暂无市场数据"
+                    }
+                data_date = str(row[0])
+                is_fallback = True
+                logger.info(f"当天无市场数据，使用 {data_date} 的数据")
+            
+            # 3. 查询数据
             result = conn.execute(
                 text(f"""
                     SELECT market_state, market_score, position_ratio, advice, 
@@ -661,9 +705,10 @@ async def get_market_data():
                     FROM {TABLE_MARKET}
                     WHERE date = :date
                 """),
-                {"date": today}
+                {"date": data_date}
             )
             row = result.fetchone()
+        
         if not row:
             return {
                 "code": 200,
@@ -681,8 +726,11 @@ async def get_market_data():
                     "down_count": 0,
                     "advance_percent": 0
                 },
+                "data_date": data_date,
+                "is_fallback": is_fallback,
                 "msg": "暂无市场数据"
             }
+        
         market_data = {
             "market_state": row[0] or "震荡市",
             "market_score": row[1] if row[1] is not None else 50,
@@ -697,17 +745,55 @@ async def get_market_data():
             "down_count": row[10] or 0,
             "advance_percent": float(row[11]) if row[11] else 0
         }
-        return {"code": 200, "data": market_data}
+        
+        return {
+            "code": 200,
+            "data": market_data,
+            "data_date": data_date,
+            "is_fallback": is_fallback
+        }
+        
     except Exception as e:
         logger.error(f"获取市场数据错误: {e}")
         return {"code": 500, "message": str(e), "data": None}
 
+
 @app.get("/api/stock/sentiment")
 async def get_sentiment_data():
+    """获取市场情绪数据（如果当天没有，自动获取最近一天）"""
     try:
-        today = datetime.now().strftime('%Y-%m-%d')
         engine = get_sync_engine()
+        today = datetime.now().strftime('%Y-%m-%d')
+        
         with engine.connect() as conn:
+            # 1. 检查当天是否有概念数据
+            result = conn.execute(
+                text(f"SELECT COUNT(*) FROM {TABLE_CONCEPTS} WHERE date = :date"),
+                {"date": today}
+            )
+            count = result.fetchone()[0]
+            
+            data_date = today
+            is_fallback = False
+            
+            # 2. 如果当天没有数据，获取最近一天
+            if count == 0:
+                result = conn.execute(
+                    text(f"SELECT DISTINCT date FROM {TABLE_CONCEPTS} ORDER BY date DESC LIMIT 1")
+                )
+                row = result.fetchone()
+                if not row:
+                    return {
+                        "code": 200,
+                        "data": {"concepts": [], "industries": []},
+                        "data_date": None,
+                        "is_fallback": False
+                    }
+                data_date = str(row[0])
+                is_fallback = True
+                logger.info(f"当天无情绪数据，使用 {data_date} 的数据")
+            
+            # 3. 获取热点概念
             concepts_result = conn.execute(
                 text(f"""
                     SELECT concept_name, change_pct, leading_stock
@@ -716,7 +802,7 @@ async def get_sentiment_data():
                     ORDER BY change_pct DESC
                     LIMIT 5
                 """),
-                {"date": today}
+                {"date": data_date}
             )
             concepts = []
             for row in concepts_result.fetchall():
@@ -725,7 +811,8 @@ async def get_sentiment_data():
                     "change_pct": float(row[1]) if row[1] else 0,
                     "leading_stock": row[2] or ''
                 })
-        with engine.connect() as conn:
+            
+            # 4. 获取热点行业
             industries_result = conn.execute(
                 text(f"""
                     SELECT industry_name, change_pct, leading_stock
@@ -734,7 +821,7 @@ async def get_sentiment_data():
                     ORDER BY change_pct DESC
                     LIMIT 5
                 """),
-                {"date": today}
+                {"date": data_date}
             )
             industries = []
             for row in industries_result.fetchall():
@@ -743,10 +830,19 @@ async def get_sentiment_data():
                     "change_pct": float(row[1]) if row[1] else 0,
                     "leading_stock": row[2] or ''
                 })
-        return {"code": 200, "data": {"concepts": concepts, "industries": industries}}
+        
+        return {
+            "code": 200,
+            "data": {"concepts": concepts, "industries": industries},
+            "data_date": data_date,
+            "is_fallback": is_fallback
+        }
+        
     except Exception as e:
         logger.error(f"获取情绪数据错误: {e}")
         return {"code": 500, "message": str(e), "data": {"concepts": [], "industries": []}}
+
+
 
 # ========== 自选股管理接口 ==========
 @app.get("/api/watchlist")
@@ -1143,9 +1239,42 @@ async def refresh_holdings_prices(user_id: str):
 
 @app.get("/api/stock/picks/history")
 async def get_stock_picks_history(date: str = Query(..., description="日期 YYYY-MM-DD")):
+    """获取指定日期的历史选股结果（如果当天没有，自动获取最近一天）"""
     try:
         engine = get_sync_engine()
+        
         with engine.connect() as conn:
+            # 1. 检查指定日期是否有数据
+            result = conn.execute(
+                text(f"SELECT COUNT(*) FROM {TABLE_SELECTED} WHERE date = :date"),
+                {"date": date}
+            )
+            count = result.fetchone()[0]
+            
+            query_date = date
+            is_fallback = False
+            
+            # 2. 如果指定日期没有数据，获取该日期之前最近一天有数据的日期
+            if count == 0:
+                result = conn.execute(
+                    text(f"SELECT DISTINCT date FROM {TABLE_SELECTED} WHERE date <= :date ORDER BY date DESC LIMIT 1"),
+                    {"date": date}
+                )
+                row = result.fetchone()
+                if not row:
+                    return {
+                        "code": 200,
+                        "data": [],
+                        "has_data": False,
+                        "msg": f"{date} 及之前无选股数据",
+                        "data_date": date,
+                        "is_fallback": False
+                    }
+                query_date = str(row[0])
+                is_fallback = True
+                logger.info(f"{date} 无选股数据，使用 {query_date} 的数据")
+            
+            # 3. 查询数据
             result = conn.execute(
                 text(f"""
                     SELECT code, name, price, change_pct, total_score, advice, fin_rating, date
@@ -1153,11 +1282,20 @@ async def get_stock_picks_history(date: str = Query(..., description="日期 YYY
                     WHERE date = :date
                     ORDER BY total_score DESC
                 """),
-                {"date": date}
+                {"date": query_date}
             )
             rows = result.fetchall()
+        
         if not rows:
-            return {"code": 200, "data": [], "has_data": False, "msg": f"{date} 无选股数据"}
+            return {
+                "code": 200,
+                "data": [],
+                "has_data": False,
+                "msg": f"{query_date} 无选股数据",
+                "data_date": query_date,
+                "is_fallback": is_fallback
+            }
+        
         picks = []
         for row in rows:
             picks.append({
@@ -1170,10 +1308,21 @@ async def get_stock_picks_history(date: str = Query(..., description="日期 YYY
                 "fin_rating": row[6] or '',
                 "date": str(row[7]) if row[7] else ''
             })
-        return {"code": 200, "data": picks, "has_data": True}
+        
+        return {
+            "code": 200,
+            "data": picks,
+            "has_data": True,
+            "data_date": query_date,
+            "is_fallback": is_fallback
+        }
+        
     except Exception as e:
         logger.error(f"获取历史选股结果错误: {e}")
         return {"code": 500, "message": str(e), "data": []}
+
+
+
 
 # ========== 研报模块 ==========
 def get_stock_report(page: int = 1, page_size: int = 20):
